@@ -1,7 +1,7 @@
 program Qualifiziert;
 uses Crt, Dos;
 type
-  TFarbe = Crt.Byte;
+  TFarbe = System.Byte;
 var
   Std, Min, Sek, Hs: Word;
   WriteLn: Integer;

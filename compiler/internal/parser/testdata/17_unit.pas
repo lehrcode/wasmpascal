@@ -5,7 +5,7 @@ interface
 uses Crt;
 
 const
-  Pi2 = 2 * Pi;
+  Pi2 = 6.283185307179586;
 
 type
   TPunkt = record

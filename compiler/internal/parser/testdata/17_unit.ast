@@ -1,7 +1,7 @@
 (unit geometrie
   (interface
     (uses crt)
-    (const pi2 (* 2 pi))
+    (const pi2 6.283185307179586)
     (type tpunkt (record (field (x y) real)))
     (var (zaehler) integer)
     (function abstand (params (const (a b) tpunkt)) (result real))

@@ -62,26 +62,35 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 	main := &Func{Name: "main", Display: name, Pos: l.pos(prog.Pos())}
 	l.m.Main = main
 	l.m.Funcs = append(l.m.Funcs, main)
-	var bodies []*ast.ProcDecl
+	// Units in der Reihenfolge ihrer Initialisierung, System zuerst
+	units := info.Units
 	if system != nil {
-		l.rtlMode = true
-		l.declare(info.SystemIntf, nil, "")
-		l.declare(info.SystemImpl, nil, "")
-		l.rtlMode = false
-		bodies = append(bodies, procDecls(system.Impl)...)
+		units = append([]*check.UnitInfo{{Name: "System", AST: system, Intf: info.SystemIntf, Impl: info.SystemImpl, RTL: true}}, units...)
 	}
+	var bodies []*ast.ProcDecl
+	var inits []*Func
+	for _, u := range units {
+		l.rtlMode = u.RTL
+		l.declare(u.Intf, nil, u.Name)
+		l.declare(u.Impl, nil, u.Name)
+		bodies = append(bodies, procDecls(u.AST.Impl)...)
+		if u.AST.Init != nil {
+			f := &Func{Name: u.Name + ".init", Display: u.Name, Pos: l.pos(u.AST.Init.Pos()), RTL: u.RTL}
+			l.m.Funcs = append(l.m.Funcs, f)
+			l.body(f, nil, u.AST.Init.Stmts)
+			inits = append(inits, f)
+		}
+	}
+	l.rtlMode = false
 	l.declare(info.Root, nil, "")
 	bodies = append(bodies, procDecls(prog.Block.Decls)...)
 
-	// Hauptprogramm: zuerst die Initialisierung der System-Unit, am Ende _Done
-	var init []ast.Stmt
-	if system != nil && system.Init != nil {
-		init = system.Init.Stmts
-	}
-	l.body(main, nil, append(init, prog.Block.Body.Stmts...), len(init))
+	// Hauptprogramm: erst die Initialisierungen, am Ende _Done (im exit-Block)
+	l.mainInits = inits
+	l.body(main, nil, prog.Block.Body.Stmts)
 	for _, d := range bodies {
 		p := info.Procs[d]
-		l.body(l.funcs[p], p, d.Block.Body.Stmts, 0)
+		l.body(l.funcs[p], p, d.Block.Body.Stmts)
 	}
 	return l.m, nil
 }
@@ -97,7 +106,10 @@ type lowerer struct {
 	files   map[string]int
 	copyIns map[*Func][]copyIn
 	hosts   map[int]*Host
-	rtlMode bool // es werden Routinen der System-Unit angelegt
+	rtlMode bool // es werden Routinen einer Laufzeit-Unit angelegt
+	// mainInits sind die Initialisierungen der Units, die das Hauptprogramm
+	// zu Beginn aufruft.
+	mainInits []*Func
 }
 
 // copyIn ist ein Wertparameter vom Aggregattyp: Der Aufgerufene kopiert ihn
@@ -405,9 +417,8 @@ type fnState struct {
 	tmp       int
 }
 
-// body übersetzt einen Rumpf; die ersten rtlStmts Anweisungen gehören zur
-// System-Unit (deren Initialisierung im Hauptprogramm).
-func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt, rtlStmts int) {
+// body übersetzt einen Rumpf.
+func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt) {
 	s := &fnState{l: l, fn: f, proc: p, withs: map[ast.Expr]*Var{}, at: f.Pos, rtl: f.RTL}
 	f.Entry = f.NewBlock()
 	s.cur = f.Entry
@@ -419,6 +430,11 @@ func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt, rtlStmts int) {
 		s.cur = saved
 	}
 	s.exit.Term = Return{}
+	if f == l.m.Main {
+		for _, init := range l.mainInits {
+			s.emit(Call{Fn: init, Pos: f.Pos})
+		}
+	}
 	for _, ci := range l.copyIns[f] {
 		if st, ok := ci.dst.Type.(*types.String); ok {
 			s.callRtl("_StrAssign", nil, Addr{Var: ci.dst}, Get{Var: ci.src}, IntConst{V: int32(st.Max)})
@@ -426,8 +442,7 @@ func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt, rtlStmts int) {
 			s.emit(Copy{Dst: Addr{Var: ci.dst}, Src: Get{Var: ci.src}, N: IntConst{V: int32(ci.dst.Type.Size())}})
 		}
 	}
-	for i, st := range stmts {
-		s.rtl = f.RTL || i < rtlStmts
+	for _, st := range stmts {
 		s.stmt(st)
 	}
 	s.jump(s.exit)

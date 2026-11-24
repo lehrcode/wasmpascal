@@ -48,6 +48,9 @@ const (
 	ErrThenExpected       = 57
 	ErrToDowntoExpected   = 58
 	ErrImplExpected       = 73
+	ErrCircularUnit       = 68
+	ErrUnitNameMismatch   = 69
+	ErrUnitExpected       = 84
 	ErrConstOutOfRange    = 76
 	ErrSemicolonExpected  = 85
 	ErrColonExpected      = 86
@@ -125,6 +128,9 @@ var messages = map[int]string{
 	ErrThenExpected:      "THEN expected",
 	ErrToDowntoExpected:  "TO or DOWNTO expected",
 	ErrImplExpected:      "IMPLEMENTATION expected",
+	ErrCircularUnit:      "Circular unit reference",
+	ErrUnitNameMismatch:  "Unit name mismatch",
+	ErrUnitExpected:      "UNIT expected",
 	ErrSemicolonExpected: `";" expected`,
 	ErrColonExpected:     `":" expected`,
 	ErrCommaExpected:     `"," expected`,

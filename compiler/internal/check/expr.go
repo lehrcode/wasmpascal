@@ -304,6 +304,9 @@ func (c *checker) qualified(e *ast.SelectorExpr) (types.Symbol, bool) {
 	}
 	c.info.Uses[id] = u
 	s, found := u.Scope.Syms[e.Sel.Name]
+	if !found && u.Name() == "system" && c.info.SystemIntf != nil {
+		s, found = c.info.SystemIntf.Syms[e.Sel.Name]
+	}
 	if !found {
 		c.fail(e.Sel.Pos(), source.ErrUnknownIdent, "%s", e.Sel.Text)
 	}

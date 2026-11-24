@@ -72,3 +72,31 @@ func TestCompileReportsSyntaxErrors(t *testing.T) {
 		t.Errorf("Check = %v", err)
 	}
 }
+
+func TestUnitsInIncludePaths(t *testing.T) {
+	src := fstest.MapFS{
+		"prog/p.pas":     {Data: []byte("program P;\nuses Hilfe;\nbegin\n  WriteLn(Doppelt(21))\nend.\n")},
+		"lib/HILFE.PAS":  {Data: []byte("unit Hilfe;\ninterface\nfunction Doppelt(x: Integer): Integer;\nimplementation\nfunction Doppelt;\nbegin\n  Doppelt := 2 * x\nend;\nend.\n")},
+		"lib2/hilfe.pas": {Data: []byte("unit Hilfe;\ninterface\nimplementation\nend.\n")},
+	}
+	ctx := context.Background()
+	var d *Diagnostic
+	if _, err := Compile(ctx, "prog/p.pas", Options{FS: src}); !errors.As(err, &d) || d.Error() != "prog/p.pas(2,6): Error 15: File not found (Hilfe.pas)" {
+		t.Errorf("ohne -I: %v", err)
+	}
+	// Der erste Suchpfad gewinnt; Groß-/Kleinschreibung des Dateinamens ist egal.
+	if _, err := Compile(ctx, "prog/p.pas", Options{FS: src, IncludePaths: []string{"lib", "lib2"}}); err != nil {
+		t.Errorf("mit -I lib: %v", err)
+	}
+	if _, err := Compile(ctx, "prog/p.pas", Options{FS: src, IncludePaths: []string{"lib2", "lib"}}); !errors.As(err, &d) || d.Code != source.ErrUnknownIdent {
+		t.Errorf("mit -I lib2: %v", err)
+	}
+	// Check einer Unit, die Crt benutzt
+	if err := Check(ctx, "lib/HILFE.PAS", Options{FS: src}); err != nil {
+		t.Errorf("Check der Unit: %v", err)
+	}
+	unit := fstest.MapFS{"u.pas": {Data: []byte("unit U;\ninterface\nuses Crt;\nprocedure Rot;\nimplementation\nuses Dos;\nprocedure Rot;\nbegin\n  TextColor(Red)\nend;\nend.\n")}}
+	if err := Check(ctx, "u.pas", Options{FS: unit}); err != nil {
+		t.Errorf("Check mit Crt/Dos: %v", err)
+	}
+}

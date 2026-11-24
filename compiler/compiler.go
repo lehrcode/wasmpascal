@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/check"
@@ -134,7 +135,11 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if err != nil {
 		return nil, err
 	}
-	info, err := check.Check(file, check.Config{System: system})
+	units, embedded, err := loadUnits(ctx, file, loader, path.Dir(mainFile), opts)
+	if err != nil {
+		return nil, diagnostic(err)
+	}
+	info, err := check.Check(file, check.Config{System: system, Units: units, Embedded: embedded})
 	if err != nil {
 		return nil, diagnostic(err)
 	}
@@ -163,6 +168,73 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 		return nil, err
 	}
 	return &Result{Wasm: codegen.Generate(m, codegen.Options{ForceFrame: opts.forceFrame, NoLines: opts.NoLines})}, nil
+}
+
+// loadUnits sucht und parst alle Units, die von file aus per uses erreichbar
+// sind: zuerst im Verzeichnis des Programms, dann in den IncludePaths, zuletzt
+// unter den eingebetteten Laufzeit-Units (Crt, Dos). Dateinamen sind der
+// Unit-Name mit .pas; Groß-/Kleinschreibung ist egal.
+func loadUnits(ctx context.Context, file ast.File, loader *source.Loader, dir string, opts Options) (map[string]*ast.Unit, map[*ast.Unit]bool, error) {
+	units := map[string]*ast.Unit{}
+	embedded := map[*ast.Unit]bool{}
+	rtlLoader := source.NewLoader(rtl.FS, nil)
+	var queue []*ast.Ident
+	addUses := func(f ast.File) {
+		switch f := f.(type) {
+		case *ast.Program:
+			queue = append(queue, f.Uses...)
+		case *ast.Unit:
+			queue = append(queue, f.IntfUses...)
+			queue = append(queue, f.ImplUses...)
+		}
+	}
+	addUses(file)
+	if u, ok := file.(*ast.Unit); ok {
+		units[u.Name.Name] = u
+	}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if _, done := units[id.Name]; done || id.Name == "system" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		name := id.Text + ".pas"
+		l, found, isRTL := loader, "", false
+		if f, err := loader.Resolve(name, dir); err == nil {
+			found = f
+		} else if f, err := rtlLoader.Resolve(name, "."); err == nil {
+			l, found, isRTL = rtlLoader, f, true
+		} else {
+			return nil, nil, source.Errorf(id.Pos(), source.ErrFileNotFound, "%s", name)
+		}
+		lx, err := lexer.New(l, found, source.NewDefines(opts.Defines...))
+		if err != nil {
+			return nil, nil, err
+		}
+		f, err := parser.Parse(lx)
+		if err != nil {
+			return nil, nil, err
+		}
+		u, ok := f.(*ast.Unit)
+		if !ok {
+			return nil, nil, source.Errorf(f.Pos(), source.ErrUnitExpected, "")
+		}
+		if u.Name.Name != id.Name {
+			return nil, nil, source.Errorf(u.Name.Pos(), source.ErrUnitNameMismatch, "%s", u.Name.Text)
+		}
+		units[id.Name] = u
+		if isRTL {
+			embedded[u] = true
+		}
+		addUses(u)
+	}
+	if u, ok := file.(*ast.Unit); ok {
+		delete(units, u.Name.Name)
+	}
+	return units, embedded, nil
 }
 
 // parseSystem liest die System-Unit aus rtl.FS. Fehler darin sind Fehler des

@@ -68,6 +68,17 @@ type Info struct {
 	// SystemIntf und SystemImpl sind die Scopes der System-Unit (rtl/system.pas),
 	// falls sie mitgeprüft wurde.
 	SystemIntf, SystemImpl *types.Scope
+	// Units sind die übrigen benutzten Units in der Reihenfolge ihrer
+	// Initialisierung.
+	Units []*UnitInfo
+}
+
+// UnitInfo beschreibt eine geprüfte Unit.
+type UnitInfo struct {
+	Name       string // Schreibweise der Deklaration
+	AST        *ast.Unit
+	Intf, Impl *types.Scope
+	RTL        bool // eingebettete Laufzeit-Unit (Crt, Dos)
 }
 
 // Config steuert die Prüfung.
@@ -75,6 +86,11 @@ type Config struct {
 	// System ist die System-Unit. Sie wird vor dem Programm geprüft, ihr
 	// Interface umschließt den Programm-Scope.
 	System *ast.Unit
+	// Units sind alle weiteren Units, die per uses erreichbar sind, nach
+	// normalisiertem Namen.
+	Units map[string]*ast.Unit
+	// Embedded kennzeichnet Units aus rtl.FS (Laufzeit, ohne Positionspflege).
+	Embedded map[*ast.Unit]bool
 }
 
 // Check prüft ein Programm oder eine Unit.
@@ -106,11 +122,28 @@ func Check(file ast.File, conf Config) (info *Info, err error) {
 		c.info.SystemIntf, c.info.SystemImpl = c.unit(conf.System, outer)
 		outer = c.info.SystemIntf
 	}
+	c.units = map[string]*unitState{}
+	for name, u := range conf.Units {
+		c.units[name] = &unitState{info: &UnitInfo{Name: u.Name.Text, AST: u, RTL: conf.Embedded[u]}}
+	}
+	var roots []*ast.Ident
 	switch f := file.(type) {
 	case *ast.Program:
 		c.program(f, outer)
+		roots = f.Uses
 	case *ast.Unit:
-		c.info.Root, c.info.Impl = c.unit(f, outer)
+		st := &unitState{info: &UnitInfo{Name: f.Name.Text, AST: f}}
+		c.units[f.Name.Name] = st
+		c.checkImpl(st)
+		c.info.Root, c.info.Impl = st.info.Intf, st.info.Impl
+		roots = append(append([]*ast.Ident{}, f.IntfUses...), f.ImplUses...)
+	}
+	// Implementation-Teile in der Reihenfolge der Initialisierung
+	for _, st := range c.initOrder(roots) {
+		c.checkImpl(st)
+		if st.info.AST != file {
+			c.info.Units = append(c.info.Units, st.info)
+		}
 	}
 	return c.info, nil
 }
@@ -136,6 +169,13 @@ type checker struct {
 	enclosed map[*types.Proc]bool // Funktionen, deren Rumpf gerade geprüft wird
 
 	unitIntf, unitImpl *types.Scope // Scopes der Unit, die gerade geprüft wird
+	units              map[string]*unitState
+}
+
+// unitState ist der Prüfstand einer Unit.
+type unitState struct {
+	info  *UnitInfo
+	state int // 0 neu, 1 Interface in Arbeit, 2 Interface fertig, 3 fertig
 }
 
 type pendingPointer struct {
@@ -212,16 +252,92 @@ func (c *checker) unit(u *ast.Unit, outer *types.Scope) (intf, impl *types.Scope
 	return intf, impl
 }
 
-// uses löst Unit-Namen auf. Stand Etappe 3 gibt es nur die System-Unit;
-// Mehrdatei-Programme folgen in Etappe 7.
+// uses bindet Units ein: Ihr Interface wird (falls nötig) geprüft, ihr Name
+// deklariert und ihr Interface-Scope importiert.
 func (c *checker) uses(ids []*ast.Ident) {
 	for _, id := range ids {
 		if id.Name == "system" {
 			c.info.Uses[id] = c.info.Universe.Syms["system"]
 			continue
 		}
-		c.fail(id.Pos(), source.ErrFileNotFound, "%s.pas", id.Text)
+		st, ok := c.units[id.Name]
+		if !ok {
+			c.fail(id.Pos(), source.ErrFileNotFound, "%s.pas", id.Text)
+		}
+		c.intf(st, id)
+		c.declare(id, types.NewUnit(id.Text, st.info.Intf))
+		c.scope.Imports = append(c.scope.Imports, st.info.Intf)
 	}
+}
+
+// intf prüft den Interface-Teil einer Unit. Ist er gerade in Arbeit, liegt ein
+// Zyklus in den uses-Listen der Interfaces vor (Error 68).
+func (c *checker) intf(st *unitState, at *ast.Ident) {
+	switch st.state {
+	case 1:
+		c.fail(at.Pos(), source.ErrCircularUnit, "%s", at.Text)
+	case 2, 3:
+		return
+	}
+	st.state = 1
+	saved := c.scope
+	c.scope = c.info.Universe
+	if c.info.SystemIntf != nil {
+		c.scope = c.info.SystemIntf
+	}
+	st.info.Intf = c.openScope(types.UnitScope, nil)
+	c.info.Scopes[st.info.AST] = st.info.Intf
+	c.uses(st.info.AST.IntfUses)
+	c.decls(st.info.AST.Intf, true)
+	c.scope = saved
+	st.state = 2
+}
+
+// checkImpl prüft den Implementation-Teil und die Initialisierung einer Unit.
+// Hier sind gegenseitige uses erlaubt, weil alle Interfaces schon feststehen.
+func (c *checker) checkImpl(st *unitState) {
+	if st.state == 3 {
+		return
+	}
+	c.intf(st, st.info.AST.Name)
+	st.state = 3
+	saved := c.scope
+	c.scope = st.info.Intf
+	impl := c.openScope(types.UnitScope, nil)
+	st.info.Impl = impl
+	c.unitIntf, c.unitImpl = st.info.Intf, impl
+	c.uses(st.info.AST.ImplUses)
+	c.decls(st.info.AST.Impl, false)
+	c.checkForwards(st.info.Intf)
+	c.checkForwards(impl)
+	if st.info.AST.Init != nil {
+		c.compound(st.info.AST.Init)
+	}
+	c.unitIntf, c.unitImpl = nil, nil
+	c.scope = saved
+}
+
+// initOrder bestimmt die Reihenfolge der Initialisierung: Tiefensuche über
+// die uses-Listen (erst Interface, dann Implementation), Units nach den
+// Units, die sie benutzen.
+func (c *checker) initOrder(roots []*ast.Ident) []*unitState {
+	var order []*unitState
+	seen := map[*unitState]bool{}
+	var visit func(ids []*ast.Ident)
+	visit = func(ids []*ast.Ident) {
+		for _, id := range ids {
+			st := c.units[id.Name]
+			if st == nil || seen[st] {
+				continue
+			}
+			seen[st] = true
+			visit(st.info.AST.IntfUses)
+			visit(st.info.AST.ImplUses)
+			order = append(order, st)
+		}
+	}
+	visit(roots)
+	return order
 }
 
 func (c *checker) block(b *ast.Block) {

@@ -1,6 +1,6 @@
 (program qualifiziert
   (uses crt dos)
-  (type tfarbe crt.byte)
+  (type tfarbe system.byte)
   (var (std min sek hs) word)
   (var (writeln) integer)
   (begin

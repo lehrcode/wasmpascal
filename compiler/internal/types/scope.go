@@ -163,6 +163,10 @@ type Scope struct {
 	Proc   *Proc // Besitzer bei ProcScope
 	Syms   map[string]Symbol
 	Order  []Symbol
+	// Imports sind die Interfaces der per uses eingebundenen Units, in der
+	// Reihenfolge der uses-Liste. Sie werden nach Syms durchsucht, die zuletzt
+	// genannte Unit zuerst (sie überdeckt frühere).
+	Imports []*Scope
 }
 
 // NewScope erzeugt einen leeren Scope.
@@ -181,11 +185,20 @@ func (s *Scope) Insert(sym Symbol) Symbol {
 	return nil
 }
 
-// Lookup sucht name in s und den umschließenden Scopes.
+// Lookup sucht name in s und den umschließenden Scopes samt deren Importen.
+// Unit-Namen aus importierten Interfaces sind nicht sichtbar (uses wirkt
+// nicht transitiv).
 func (s *Scope) Lookup(name string) (Symbol, *Scope) {
 	for sc := s; sc != nil; sc = sc.Parent {
 		if sym, ok := sc.Syms[name]; ok {
 			return sym, sc
+		}
+		for i := len(sc.Imports) - 1; i >= 0; i-- {
+			if sym, ok := sc.Imports[i].Syms[name]; ok {
+				if _, isUnit := sym.(*Unit); !isUnit {
+					return sym, sc.Imports[i]
+				}
+			}
 		}
 	}
 	return nil, nil

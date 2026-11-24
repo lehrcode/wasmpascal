@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,15 +18,21 @@ import (
 	"github.com/lehrcode/wasmpascal/runner"
 )
 
-// TestForceFrame übersetzt die Testprogramme der Etappen 4 bis 6 so, dass
+// TestForceFrame übersetzt die Testprogramme der Etappen 4 bis 7 so, dass
 // alle Variablen im Frame auf dem Schatten-Stack statt in WASM-Locals liegen,
 // und erwartet dieselbe Ausgabe. Das sichert die Planregel ab, dass sich jede
 // Variable auslagern lässt (Voraussetzung für Etappe 8).
 func TestForceFrame(t *testing.T) {
 	var files []string
-	for _, dir := range []string{"etappe4", "etappe5", "etappe6"} {
-		f, _ := filepath.Glob(filepath.Join("..", "testdata", dir, "*.pas"))
-		files = append(files, f...)
+	for _, dir := range []string{"etappe4", "etappe5", "etappe6", "etappe7"} {
+		_ = filepath.WalkDir(filepath.Join("..", "testdata", dir), func(p string, d fs.DirEntry, err error) error {
+			if err == nil && strings.HasSuffix(p, ".pas") {
+				if _, err := os.Stat(strings.TrimSuffix(p, ".pas") + ".out"); err == nil {
+					files = append(files, p)
+				}
+			}
+			return err
+		})
 	}
 	if len(files) == 0 {
 		t.Fatal("keine Testprogramme")

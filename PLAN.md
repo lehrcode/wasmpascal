@@ -322,11 +322,12 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - **Fertig, wenn:** Alle Hilfsfunktionen aus Etappe 4 durch Pascal-Code ersetzt sind und ein Testprogramm Textdateien schreibt, liest und anhängt.
 - *Erledigt (Nov 24, 2026).* Die vorläufigen Go-Hostfunktionen sind entfernt; `Write`/`Read`, Formatierung, `Str`/`Val`, Text-, typisierte und untypisierte Dateien, `IOResult`/`{$I-}`, Verzeichnisse, Mathematik, `Random`, `ParamStr` und `Halt` sind Pascal in `rtl/system.pas`. In Go/WASM bleiben Speicher (`memory.grow`, `memory.copy`), `Sqrt`/`Trunc`/`Round`/`Int` und die WASI-Aufrufe als Intrinsics (`compiler/internal/abi`). Tests: 12 Programme in `testdata/etappe6/` mit von Hand hergeleiteten Ausgaben (Abnahme: `textdatei.pas`), alle auch mit erzwungener Frame-Ablage; jeder Testfall bekommt ein eigenes Verzeichnis.
 
-### Etappe 7: Units
+### Etappe 7: Units ✅
 
 - Mehrdatei-Programme: `uses` sucht `name.pas` im Programmverzeichnis und in `-I`-Pfaden; Abhängigkeitsreihenfolge, zyklische `uses` im Interface als Fehler, Initialisierungsteile in richtiger Reihenfolge.
 - `System` implizit, `Crt` und `Dos` aus `rtl/` per `go:embed`.
 - **Fertig, wenn:** Ein Programm mit drei eigenen Units und gegenseitigen `uses` im Implementation-Teil läuft.
+- *Erledigt (Nov 24, 2026).* Der Compiler sucht und parst alle erreichbaren Units, der Checker prüft erst die Interfaces in Abhängigkeitsreihenfolge (Zyklus: Error 68), dann die Implementation-Teile; Scopes importieren die Interfaces der benutzten Units. Die Initialisierungen sind eigene Funktionen, aufgerufen in Abhängigkeitsreihenfolge (Tiefensuche über die `uses`-Listen). `rtl/crt.pas` (ANSI-Teil; `Delay`/`ReadKey` in Etappe 8) und `rtl/dos.pas` (`GetDate`/`GetTime`) sind eingebettet. Abnahme: `testdata/etappe7/dreiunits/haupt.pas` (Protokoll → Werkzeug → Zaehler → Protokoll); dazu Verdecken/Qualifizieren, Fehlerfälle 3/15/68/69/84, Crt, Dos, `-I`-Pfade.
 
 ### Etappe 8: Scheduler und `Crt`
 

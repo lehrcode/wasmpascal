@@ -67,12 +67,12 @@ Parser-Golden-Tests: `compiler/internal/parser/testdata/*.pas` → `*.ast`, neu 
 Symbol-Golden-Tests der Typprüfung: `compiler/internal/check/testdata/*.pas` → `*.sym`, neu schreiben mit
 `go test ./compiler/internal/check -update`.
 
-## Pipeline (Stand Etappe 6)
+## Pipeline (Stand Etappe 7)
 
 `source` → `lexer` → `parser` (AST) → `check` (Typprüfung, `check.Info`) → `ir.Lower` (CFG) → `codegen.Generate`
 (Ablage, Frames, Static Links, strukturierter Kontrollfluss) → `wasm` (Encoder). Die System-Unit
 `rtl/system.pas` (eingebettet über `rtl.FS`) wird immer mitgeprüft und mitübersetzt; sie enthält die gesamte
-Laufzeit in Pascal. Routinen mit `_` am Anfang ruft der Compiler direkt auf; WASI erreicht die Laufzeit über
+Laufzeit in Pascal; `crt.pas` und `dos.pas` liegen daneben und werden per `uses` gefunden (nach Programmverzeichnis und `-I`). Routinen mit `_` am Anfang ruft der Compiler direkt auf; WASI erreicht die Laufzeit über
 Intrinsics aus `compiler/internal/abi`. Laufzeitroutinen (`Func.RTL`) pflegen die Fehlerstelle nicht.
 Laufzeitfehler: exportierte Globale `__rt_*` plus Custom Section `wasmpascal.lines`, ausgewertet in
 `runner/rterror.go`.
