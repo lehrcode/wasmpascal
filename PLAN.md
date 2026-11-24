@@ -144,6 +144,7 @@ func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err erro
 
 ```
 cmd/pascal/         CLI: pascal build | run | check; nur über die öffentliche API
+cmd/pascaljs/       Compiler für den Browser (GOOS=js): JS-Funktion pascalCompile
 compiler/           Öffentliche API: Compile, Check, Options, Result, Diagnostic
   internal/
     source/         Dateien, Positionen, {$I}-Includes, bedingte Kompilierung
@@ -159,7 +160,7 @@ compiler/           Öffentliche API: Compile, Check, Options, Result, Diagnosti
     abi/            Ziele wasi und gojs
 rtl/                Laufzeit in Pascal: system.pas, crt.pas, dos.pas; rtl.go exportiert rtl.FS (go:embed)
 runner/             Öffentliche API: Run, Options; wazero-Host, Dateisystem
-web/                Browser-Demo: index.html, Loader, xterm.js-Anbindung
+web/                Browser-Demo: index.html, Loader, xterm.js-Anbindung, Node-Werkzeuge
 testdata/           Pascal-Testprogramme mit erwarteter Ausgabe (*.pas + *.out)
 ```
 
@@ -345,11 +346,12 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - **Fertig, wenn:** Das Zahlenraten unverändert mit `pascal build -target gojs` im Browser mit `wasm_exec.js` läuft.
 - *Erledigt (Nov 24, 2026).* `rtl/system.pas` hat eine unterste Schicht (`SysWrite`, `SysRead`, `SysOpen`, …, `_Clock`, `SysArgs`, `_SuspendAction`) je Ziel per `{$IFDEF GOJS}`; alles darüber ist gemeinsam. Unter gojs: Ausgabe über `runtime.wasmWrite`, Uhren über `nanotime1`/`walltime`, `Delay` und Zeitscheiben über `scheduleTimeoutEvent`, `Halt` über `wasmExit` (jetzt unter beiden Zielen ein Anhaltepunkt), Eingabe zeilenweise über eine mit `_makeFuncWrapper` erzeugte Callback-Funktion und `go.wasmPascalReadLine`, gelesen in der neuen Routine `_GoResumeAction` vor dem Fortsetzen; `memory.grow` meldet `resetMemoryDataView`. Der Codegenerator erzeugt die Exporte `run`, `resume`, `getsp`, `mem`. `web/`: `wasm_exec.js` (Go 1.27.4), `loader.js` (Browser und Node, Traps → Pascal-Meldung über `__rt_*` und `wasmpascal.lines`, mehrere Programme gleichzeitig, Abbruch über `AbortSignal`), `run.html` (xterm.js 5.5.0 mit Zeileneditor), `node-run.js`. Tests: `TestProgramsGoJS` führt alle Testprogramme ohne Dateizugriff (74) mit Node aus und vergleicht mit denselben `.out`-Dateien; Abnahme im Browser mit headless Chromium (`zahlen.pas`, Laufzeitfehler). Nach Rückfrage bettet das Modul nur noch Dateinamen ohne Verzeichnis ein (keine Hostpfade im `.wasm`).
 
-### Etappe 10: Compiler als WASM und Browser-Demo
+### Etappe 10: Compiler als WASM und Browser-Demo ✅
 
 - `compiler` mit `GOOS=js GOARCH=wasm` bauen, eine JS-Funktion `pascalCompile(sources) → wasm | error` exportieren.
 - `web/`: Editor-Textfeld, xterm.js-Terminal, Kompilieren und Ausführen im Browser.
 - **Fertig, wenn:** Die Demo-Seite lokal über einen statischen Server das Zahlenraten kompiliert und startet.
+- *Erledigt (Nov 24, 2026).* `cmd/pascaljs` (nur `GOOS=js GOARCH=wasm`) legt `pascalCompile(sources, options)` an: Quelltexte als Objekt Dateiname → String oder `Uint8Array` (oder ein einzelner String), Optionen `main`, `defines`, `stack`; Ergebnis `{wasm}` (Ziel gojs) oder `{error, file, line, column, code}`. `web/index.html`: Editor, Beispiele (`web/beispiele/`), xterm.js-Terminal, Strg+Enter, Sprung zur Fehlerstelle, Stopp; das Terminal mit Zeileneditor liegt jetzt in `web/terminal.js` (auch für `run.html`). `web/node-compile.js` übersetzt mit demselben WASM-Compiler in Node. Tests: `TestWebCompiler` baut den Browser-Compiler, übersetzt alle Testprogramme damit in Node und verlangt byte-gleiche Module und dieselben Compilermeldungen wie der native Compiler; `TestWebExamples` übersetzt die Beispiele. Abnahme mit headless Chromium: Zahlenraten auf der Seite übersetzt (etwa 0,2 s) und durchgespielt, Compilerfehler mit markierter Fehlerstelle.
 
 ## Arbeitsregeln für Claude Code
 

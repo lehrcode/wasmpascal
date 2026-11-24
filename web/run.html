@@ -103,130 +103,35 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
 <script src="wasm_exec.js"></script>
 <script src="loader.js"></script>
+<script src="terminal.js"></script>
 <script>
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-// Farben wie in der DOS-Konsole: Schwarz ist wirklich schwarz.
-const term = new Terminal({
-	convertEol: true,
-	cursorBlink: true,
-	fontSize: 15,
-	theme: { background: "#000000", black: "#000000" },
-});
-const fit = new FitAddon.FitAddon();
-term.loadAddon(fit);
-term.open($("terminal"));
-fit.fit();
-window.addEventListener("resize", () => fit.fit());
+const terminal = WasmPascalTerminal.create($("terminal"));
 
 let wasm = null;     // Bytes des gewählten Programms
 let name = "program";
-let running = null;  // AbortController des laufenden Programms
-
-// Zeileneditor: Eingaben werden geechot und mit Enter an das Programm
-// übergeben (ReadLn wie in der DOS-Konsole). Strg+D am Zeilenanfang = Ende
-// der Eingabe, Strg+C bricht ab.
-const lines = [];    // fertige Zeilen, die das Programm noch nicht gelesen hat
-let waiting = null;  // Resolver eines wartenden readLine
-let current = "";    // angefangene Zeile
-
-function deliver(line) {
-	if (waiting) {
-		const w = waiting;
-		waiting = null;
-		w(line);
-	} else {
-		lines.push(line);
-	}
-}
-
-term.onData((data) => {
-	if (!running) {
-		return;
-	}
-	if (data.startsWith("\x1b")) {
-		return; // Cursortasten usw.
-	}
-	for (const ch of data) {
-		if (ch === "\r") {
-			term.write("\r\n");
-			deliver(current + "\n");
-			current = "";
-		} else if (ch === "\x7f" || ch === "\b") {
-			const cps = Array.from(current);
-			if (cps.length > 0) {
-				cps.pop();
-				current = cps.join("");
-				term.write("\b \b");
-			}
-		} else if (ch === "\x03") {
-			stop();
-			return;
-		} else if (ch === "\x04") {
-			if (current === "") {
-				deliver(null);
-			}
-		} else if (ch >= " ") {
-			current += ch;
-			term.write(ch);
-		}
-	}
-});
-
-function readLine() {
-	if (lines.length > 0) {
-		return Promise.resolve(lines.shift());
-	}
-	return new Promise((resolve) => { waiting = resolve; });
-}
 
 function setStatus(text) {
 	$("status").textContent = text;
 }
 
-function stop() {
-	if (running) {
-		running.abort();
-	}
-}
-
 async function start() {
-	if (!wasm || running) {
+	if (!wasm || terminal.running) {
 		return;
 	}
 	const args = $("args").value.trim();
-	running = new AbortController();
-	lines.length = 0;
-	waiting = null;
-	current = "";
-	term.reset();
-	term.focus();
 	$("start").disabled = true;
 	$("stop").disabled = false;
 	setStatus(name + " läuft …");
 	try {
-		const result = await WasmPascal.run(wasm, {
-			args: [name, ...(args ? args.split(/\s+/) : [])],
-			write: (fd, bytes) => term.write(bytes),
-			readLine,
-			signal: running.signal,
-		});
-		if (result.aborted) {
-			term.write("\r\n^C\r\n");
-			setStatus(name + " abgebrochen");
-		} else {
-			setStatus(name + " beendet, Exit-Code " + result.exitCode);
-		}
+		const result = await terminal.run(wasm, { name, args: args ? args.split(/\s+/) : [] });
+		setStatus(result.aborted ? name + " abgebrochen" : name + " beendet, Exit-Code " + result.exitCode);
 	} catch (err) {
 		console.error(err);
 		setStatus("Fehler: " + err.message);
 	} finally {
-		if (waiting) {
-			waiting(null);
-			waiting = null;
-		}
-		running = null;
 		$("start").disabled = false;
 		$("stop").disabled = true;
 	}
@@ -236,7 +141,7 @@ $("form").addEventListener("submit", (ev) => {
 	ev.preventDefault();
 	start();
 });
-$("stop").addEventListener("click", stop);
+$("stop").addEventListener("click", () => terminal.stop());
 $("file").addEventListener("change", async () => {
 	const f = $("file").files[0];
 	if (!f) {

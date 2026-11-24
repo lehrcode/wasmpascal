@@ -67,7 +67,7 @@ Parser-Golden-Tests: `compiler/internal/parser/testdata/*.pas` → `*.ast`, neu 
 Symbol-Golden-Tests der Typprüfung: `compiler/internal/check/testdata/*.pas` → `*.sym`, neu schreiben mit
 `go test ./compiler/internal/check -update`.
 
-## Pipeline (Stand Etappe 9)
+## Pipeline (Stand Etappe 10)
 
 `source` → `lexer` → `parser` (AST) → `check` (Typprüfung, `check.Info`) → `ir.Lower` (CFG) → `analysis` (anhaltefähige Funktionen) →
 `codegen.Generate` (Ablage, Frames, Static Links; strukturierter Kontrollfluss oder Dispatch-Schleife für
@@ -81,3 +81,6 @@ Laufzeitfehler: exportierte Globale `__rt_*` plus Custom Section `wasmpascal.lin
 Ziele: Nur die unterste Schicht von `rtl/system.pas` (`Sys*`, `_Clock`, `SysArgs`, `_SuspendAction`) unterscheidet
 sich, per `{$IFDEF GOJS}`; ohne Symbol gilt WASI. `gojs` läuft mit `web/wasm_exec.js` (Go 1.27.4) und `web/loader.js`;
 `TestProgramsGoJS` führt die Testprogramme mit Node aus (`web/node-run.js`, übersprungen ohne `node`).
+
+Browser: `cmd/pascaljs` (nur `GOOS=js GOARCH=wasm`) legt `pascalCompile` an; `web/index.html` ist die Demo
+(Bau und Start in `web/README.md`). `TestWebCompiler` verlangt byte-gleiche Module wie der native Compiler.

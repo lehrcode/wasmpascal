@@ -1,27 +1,55 @@
 # web/
 
-Laufzeitumgebung für Programme mit dem Ziel `gojs`.
+Browser-Demo und Laufzeitumgebung für Programme mit dem Ziel `gojs`.
 
 | Datei | Zweck |
 | --- | --- |
-| `wasm_exec.js` | unverändert aus Go 1.27.4 (`$(go env GOROOT)/lib/wasm/wasm_exec.js`) |
+| `index.html` | Demo: Editor, Beispiele, Übersetzen im Browser (`compiler.wasm`), Terminal |
+| `run.html` | führt ein fertiges `.wasm` (Ziel gojs) aus |
+| `beispiele/` | Beispielprogramme der Demo |
+| `wasm_exec.js` | unverändert aus Go 1.27.4 (`$(go env GOROOT)/lib/wasm/wasm_exec.js`); trägt Compiler und Programme |
 | `loader.js` | `WasmPascal.run(wasm, {args, write, readLine, signal})` für Browser und Node.js; übersetzt Traps in `Runtime error NNN at datei.pas(zeile) in Prozedur` |
-| `run.html` | Testseite mit xterm.js und Zeileneditor |
+| `terminal.js` | xterm.js-Terminal mit Zeileneditor für `index.html` und `run.html` |
+| `node-compile.js` | `node web/node-compile.js compiler.wasm [-o verz] datei.pas …` übersetzt mit dem Browser-Compiler |
 | `node-run.js` | `node web/node-run.js prog.wasm [Argumente …]`, stdin/stdout wie unter WASI |
 
-## Im Browser ausprobieren
+## Demo starten
+
+Den Compiler für den Browser bauen (etwa 4,7 MB):
 
 ```bash
-go run ./cmd/pascal build -target gojs -o web/zahlen.wasm testdata/etappe8/zahlen.pas
+GOOS=js GOARCH=wasm go build -ldflags=-s -trimpath -o web/compiler.wasm ./cmd/pascaljs
 ```
+
+Einen beliebigen statischen Server im Verzeichnis `web/` starten:
 
 ```bash
 python3 -m http.server -d web 8080
 ```
 
-Dann `http://localhost:8080/run.html?prog=zahlen.wasm&args=-fest` öffnen. Ohne
-Server lässt sich `run.html` auch direkt öffnen und die `.wasm`-Datei über
-„Datei auswählen“ laden. xterm.js kommt vom CDN (jsDelivr).
+Dann `http://localhost:8080/` öffnen, ein Beispiel wählen und mit
+„Übersetzen und starten“ (Strg+Enter) ausführen. xterm.js kommt vom CDN
+(jsDelivr). Ein Klick auf eine Compilermeldung markiert die Fehlerstelle.
+
+Ein schon übersetztes Programm läuft mit `run.html`:
+
+```bash
+go run ./cmd/pascal build -target gojs -o web/zahlen.wasm testdata/etappe8/zahlen.pas
+```
+
+`http://localhost:8080/run.html?prog=zahlen.wasm&args=-fest` öffnen; ohne
+Server lässt sich `run.html` auch direkt öffnen und die Datei auswählen.
+
+## pascalCompile
+
+```js
+const r = pascalCompile({ "zahlen.pas": text, "werkzeug.pas": unit }, { main: "zahlen.pas" });
+if (r.error) { /* r.error, r.file, r.line, r.column, r.code */ }
+else { await WasmPascal.run(r.wasm, { args: ["zahlen"], write, readLine }); }
+```
+
+Quelltexte sind Strings oder `Uint8Array`; weitere Optionen: `defines`
+(Array), `stack` (Byte). Einzelheiten im Kommentar von `cmd/pascaljs/main.go`.
 
 ## Schnittstelle zum Programm
 

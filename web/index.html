@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WasmPascal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>
+	:root {
+		--bg: #f4f4f1;
+		--fg: #1d1d1b;
+		--muted: #66665f;
+		--line: #d4d4cc;
+		--panel: #ffffff;
+		--accent: #1f5fae;
+		--error: #b3261e;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--bg: #16181b;
+			--fg: #e6e6e1;
+			--muted: #9a9a92;
+			--line: #33363b;
+			--panel: #1e2125;
+			--accent: #7fb0ec;
+			--error: #f2867d;
+		}
+	}
+	* { box-sizing: border-box; }
+	html, body { height: 100%; }
+	body {
+		margin: 0;
+		background: var(--bg);
+		color: var(--fg);
+		font: 15px/1.4 system-ui, sans-serif;
+	}
+	main {
+		display: grid;
+		grid-template-rows: auto auto 1fr auto;
+		height: 100%;
+		max-width: 1400px;
+		margin: 0 auto;
+		padding: 12px 16px;
+		gap: 10px;
+	}
+	header {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 4px 12px;
+	}
+	h1 {
+		font-size: 20px;
+		margin: 0;
+	}
+	header p {
+		margin: 0;
+		color: var(--muted);
+		font-size: 13px;
+	}
+	.toolbar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		align-items: center;
+	}
+	select, input[type=text] {
+		padding: 6px 8px;
+		border: 1px solid var(--line);
+		border-radius: 4px;
+		background: var(--panel);
+		color: inherit;
+		font: inherit;
+	}
+	input[type=text] {
+		flex: 1 1 160px;
+		min-width: 0;
+	}
+	button {
+		padding: 6px 14px;
+		border: 1px solid var(--accent);
+		border-radius: 4px;
+		background: var(--accent);
+		color: var(--bg);
+		font: inherit;
+		cursor: pointer;
+	}
+	button:disabled {
+		opacity: .45;
+		cursor: default;
+	}
+	button.secondary {
+		background: transparent;
+		color: var(--accent);
+	}
+	.panes {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		gap: 10px;
+		min-height: 0;
+	}
+	@media (max-width: 800px) {
+		.panes {
+			grid-template-columns: minmax(0, 1fr);
+			grid-template-rows: minmax(260px, 1fr) minmax(260px, 1fr);
+		}
+	}
+	.editor {
+		display: grid;
+		grid-template-rows: 1fr auto;
+		min-height: 0;
+		gap: 6px;
+	}
+	textarea {
+		width: 100%;
+		height: 100%;
+		min-height: 200px;
+		resize: none;
+		padding: 8px 10px;
+		border: 1px solid var(--line);
+		border-radius: 4px;
+		background: var(--panel);
+		color: inherit;
+		font: 14px/1.45 ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+		tab-size: 2;
+		white-space: pre;
+		overflow: auto;
+	}
+	#error {
+		margin: 0;
+		padding: 6px 10px;
+		border-left: 3px solid var(--error);
+		color: var(--error);
+		font: 13px/1.4 ui-monospace, monospace;
+		cursor: pointer;
+		white-space: pre-wrap;
+	}
+	#error[hidden] { display: none; }
+	#terminal {
+		background: #000000;
+		padding: 6px;
+		border-radius: 4px;
+		min-height: 200px;
+		overflow: hidden;
+	}
+	#status {
+		margin: 0;
+		color: var(--muted);
+		font-size: 13px;
+		min-height: 1.4em;
+	}
+	code {
+		font-family: ui-monospace, monospace;
+	}
+</style>
+</head>
+<body>
+<main>
+	<header>
+		<h1>WasmPascal</h1>
+		<p>Turbo Pascal 4.0 nach WebAssembly, übersetzt und ausgeführt im Browser</p>
+	</header>
+	<div class="toolbar">
+		<select id="example" aria-label="Beispiel">
+			<option value="">Beispiel laden …</option>
+			<option value="zahlen.pas">Zahlenraten</option>
+			<option value="hallo.pas">Hallo</option>
+			<option value="primzahlsieb.pas">Primzahlsieb</option>
+		</select>
+		<input type="text" id="args" placeholder="Argumente (ParamStr)" aria-label="Argumente">
+		<button type="button" id="start" disabled title="Strg+Enter">Übersetzen und starten</button>
+		<button type="button" id="stop" class="secondary" disabled>Stopp</button>
+	</div>
+	<div class="panes">
+		<div class="editor">
+			<textarea id="source" spellcheck="false" autocomplete="off" aria-label="Quelltext"></textarea>
+			<p id="error" hidden title="Zur Fehlerstelle springen"></p>
+		</div>
+		<div id="terminal"></div>
+	</div>
+	<p id="status">Compiler wird geladen …</p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script src="wasm_exec.js"></script>
+<script src="loader.js"></script>
+<script src="terminal.js"></script>
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const terminal = WasmPascalTerminal.create($("terminal"));
+const source = $("source");
+const storeKey = "wasmpascal.source";
+
+let fileName = "zahlen.pas"; // Name des Programms in Meldungen
+let compilerReady = false;
+let lastError = null;
+
+function setStatus(text) {
+	$("status").textContent = text;
+}
+
+function updateButtons() {
+	$("start").disabled = !compilerReady || terminal.running;
+	$("stop").disabled = !terminal.running;
+}
+
+// gespeicherten Stand nur als Bequemlichkeit: ohne Speicher geht es auch
+function save() {
+	try {
+		localStorage.setItem(storeKey, JSON.stringify({ name: fileName, text: source.value }));
+	} catch (e) {
+		// kein Speicher verfügbar
+	}
+}
+
+function restore() {
+	try {
+		const s = JSON.parse(localStorage.getItem(storeKey) || "null");
+		if (s && typeof s.text === "string" && s.text.trim() !== "") {
+			fileName = s.name || "programm.pas";
+			source.value = s.text;
+			return true;
+		}
+	} catch (e) {
+		// kein Speicher verfügbar
+	}
+	return false;
+}
+
+async function loadExample(name) {
+	const resp = await fetch("beispiele/" + name);
+	if (!resp.ok) {
+		throw new Error(name + ": " + resp.status + " " + resp.statusText);
+	}
+	source.value = await resp.text();
+	fileName = name;
+	showError(null);
+	save();
+}
+
+function showError(err) {
+	lastError = err;
+	$("error").hidden = !err;
+	$("error").textContent = err ? err.error : "";
+}
+
+// markiert die Fehlerstelle (Zeile, Spalte) im Editor
+function jumpToError() {
+	if (!lastError || !lastError.line) {
+		return;
+	}
+	const lines = source.value.split("\n");
+	let pos = 0;
+	for (let i = 0; i < lastError.line - 1 && i < lines.length; i++) {
+		pos += lines[i].length + 1;
+	}
+	const line = lines[lastError.line - 1] || "";
+	const col = Math.min(Math.max((lastError.column || 1) - 1, 0), line.length);
+	source.focus();
+	source.setSelectionRange(pos + col, pos + line.length);
+	const lineHeight = parseFloat(getComputedStyle(source).lineHeight) || 20;
+	source.scrollTop = Math.max(0, (lastError.line - 3) * lineHeight);
+}
+
+async function compileAndRun() {
+	if (!compilerReady || terminal.running) {
+		return;
+	}
+	const t0 = performance.now();
+	const r = pascalCompile({ [fileName]: source.value }, { main: fileName });
+	const ms = Math.round(performance.now() - t0);
+	if (r.error) {
+		showError(r);
+		jumpToError();
+		setStatus("Übersetzung fehlgeschlagen");
+		return;
+	}
+	showError(null);
+	const name = fileName.replace(/\.pas$/i, "");
+	const args = $("args").value.trim();
+	setStatus("Übersetzt in " + ms + " ms (" + r.wasm.length + " Byte); " + name + " läuft …");
+	updateButtonsSoon();
+	try {
+		const result = await terminal.run(r.wasm, { name, args: args ? args.split(/\s+/) : [] });
+		setStatus(result.aborted ? name + " abgebrochen" : name + " beendet, Exit-Code " + result.exitCode);
+	} catch (err) {
+		console.error(err);
+		setStatus("Fehler: " + err.message);
+	} finally {
+		updateButtons();
+	}
+}
+
+// terminal.running wird erst im Aufruf von run gesetzt
+function updateButtonsSoon() {
+	queueMicrotask(updateButtons);
+}
+
+$("start").addEventListener("click", compileAndRun);
+$("stop").addEventListener("click", () => terminal.stop());
+$("error").addEventListener("click", jumpToError);
+$("example").addEventListener("change", async () => {
+	const name = $("example").value;
+	$("example").value = "";
+	if (!name) {
+		return;
+	}
+	try {
+		await loadExample(name);
+	} catch (err) {
+		setStatus(err.message);
+	}
+});
+
+source.addEventListener("input", save);
+source.addEventListener("keydown", (ev) => {
+	if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+		ev.preventDefault();
+		compileAndRun();
+	} else if (ev.key === "Tab" && !ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
+		ev.preventDefault();
+		source.setRangeText("  ", source.selectionStart, source.selectionEnd, "end");
+		save();
+	}
+});
+
+// Compiler laden: cmd/pascaljs, gebaut mit GOOS=js GOARCH=wasm
+(async () => {
+	if (!restore()) {
+		loadExample("zahlen.pas").catch((err) => setStatus(err.message));
+	}
+	try {
+		const go = new Go();
+		const resp = fetch("compiler.wasm");
+		let result;
+		try {
+			result = await WebAssembly.instantiateStreaming(resp, go.importObject);
+		} catch (e) {
+			// z. B. falscher Content-Type des Servers
+			const r = await (await fetch("compiler.wasm")).arrayBuffer();
+			result = await WebAssembly.instantiate(r, go.importObject);
+		}
+		go.run(result.instance); // legt pascalCompile an und wartet dann
+		if (typeof pascalCompile !== "function") {
+			throw new Error("pascalCompile fehlt");
+		}
+		compilerReady = true;
+		updateButtons();
+		setStatus("Bereit. Strg+Enter übersetzt und startet.");
+	} catch (err) {
+		console.error(err);
+		setStatus("Compiler nicht geladen (compiler.wasm): " + err.message);
+	}
+})();
+</script>
+</body>
+</html>
