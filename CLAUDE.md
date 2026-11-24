@@ -67,7 +67,7 @@ Parser-Golden-Tests: `compiler/internal/parser/testdata/*.pas` → `*.ast`, neu 
 Symbol-Golden-Tests der Typprüfung: `compiler/internal/check/testdata/*.pas` → `*.sym`, neu schreiben mit
 `go test ./compiler/internal/check -update`.
 
-## Pipeline (Stand Etappe 8)
+## Pipeline (Stand Etappe 9)
 
 `source` → `lexer` → `parser` (AST) → `check` (Typprüfung, `check.Info`) → `ir.Lower` (CFG) → `analysis` (anhaltefähige Funktionen) →
 `codegen.Generate` (Ablage, Frames, Static Links; strukturierter Kontrollfluss oder Dispatch-Schleife für
@@ -76,4 +76,8 @@ anhaltefähige Funktionen und `goto`, siehe `codegen/dispatch.go`) → `wasm` (E
 Laufzeit in Pascal; `crt.pas` und `dos.pas` liegen daneben und werden per `uses` gefunden (nach Programmverzeichnis und `-I`). Routinen mit `_` am Anfang ruft der Compiler direkt auf; WASI erreicht die Laufzeit über
 Intrinsics aus `compiler/internal/abi`. Laufzeitroutinen (`Func.RTL`) pflegen die Fehlerstelle nicht.
 Laufzeitfehler: exportierte Globale `__rt_*` plus Custom Section `wasmpascal.lines`, ausgewertet in
-`runner/rterror.go`.
+`runner/rterror.go` bzw. `web/loader.js`.
+
+Ziele: Nur die unterste Schicht von `rtl/system.pas` (`Sys*`, `_Clock`, `SysArgs`, `_SuspendAction`) unterscheidet
+sich, per `{$IFDEF GOJS}`; ohne Symbol gilt WASI. `gojs` läuft mit `web/wasm_exec.js` (Go 1.27.4) und `web/loader.js`;
+`TestProgramsGoJS` führt die Testprogramme mit Node aus (`web/node-run.js`, übersprungen ohne `node`).

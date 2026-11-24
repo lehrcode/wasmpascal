@@ -406,6 +406,13 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 		count(1, 1)
 		c.intExpr(args[0])
 		return none
+	case BGoSetSP:
+		count(1, 1)
+		c.intExpr(args[0])
+		return none
+	case BGoArgc, BGoArgv:
+		count(0, 0)
+		return val(types.LongInt)
 	case BSuspend:
 		count(2, 2)
 		c.intExpr(args[0])
@@ -437,7 +444,7 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 		return TypeAndValue{Mode: Constant, Type: types.Word, Val: types.IntVal(0)}
 	}
 	if b.ID >= BWasiBase {
-		w := abi.WASI[b.ID-BWasiBase]
+		w := abi.Intrinsics[b.ID-BWasiBase]
 		count(len(w.Params), len(w.Params))
 		for _, a := range args {
 			c.intExpr(a)

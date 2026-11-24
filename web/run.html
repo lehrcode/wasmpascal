@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WasmPascal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>
+	:root {
+		--bg: #f4f4f1;
+		--fg: #1d1d1b;
+		--muted: #66665f;
+		--line: #d4d4cc;
+		--accent: #1f5fae;
+		--term: #000000;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--bg: #16181b;
+			--fg: #e6e6e1;
+			--muted: #9a9a92;
+			--line: #33363b;
+			--accent: #7fb0ec;
+		}
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		background: var(--bg);
+		color: var(--fg);
+		font: 15px/1.4 system-ui, sans-serif;
+	}
+	main {
+		max-width: 960px;
+		margin: 0 auto;
+		padding: 16px;
+	}
+	h1 {
+		font-size: 20px;
+		margin: 0 0 12px;
+	}
+	form {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		align-items: center;
+		margin-bottom: 12px;
+	}
+	input[type=text] {
+		flex: 1 1 200px;
+		min-width: 0;
+		padding: 6px 8px;
+		border: 1px solid var(--line);
+		border-radius: 4px;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+	}
+	button {
+		padding: 6px 14px;
+		border: 1px solid var(--accent);
+		border-radius: 4px;
+		background: var(--accent);
+		color: var(--bg);
+		font: inherit;
+		cursor: pointer;
+	}
+	button:disabled {
+		opacity: .45;
+		cursor: default;
+	}
+	button.secondary {
+		background: transparent;
+		color: var(--accent);
+	}
+	#status {
+		color: var(--muted);
+		font-size: 13px;
+		margin: 8px 0 0;
+		min-height: 1.4em;
+	}
+	#terminal {
+		background: var(--term);
+		padding: 8px;
+		border-radius: 4px;
+		height: 70vh;
+	}
+</style>
+</head>
+<body>
+<main>
+	<h1>WasmPascal</h1>
+	<form id="form">
+		<input type="file" id="file" accept=".wasm">
+		<input type="text" id="args" placeholder="Argumente (ParamStr)" aria-label="Argumente">
+		<button type="submit" id="start" disabled>Start</button>
+		<button type="button" id="stop" class="secondary" disabled>Stopp</button>
+	</form>
+	<div id="terminal"></div>
+	<p id="status">Programm wählen (mit <code>pascal build -target gojs</code> übersetzt) oder <code>?prog=datei.wasm</code> angeben.</p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script src="wasm_exec.js"></script>
+<script src="loader.js"></script>
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+// Farben wie in der DOS-Konsole: Schwarz ist wirklich schwarz.
+const term = new Terminal({
+	convertEol: true,
+	cursorBlink: true,
+	fontSize: 15,
+	theme: { background: "#000000", black: "#000000" },
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open($("terminal"));
+fit.fit();
+window.addEventListener("resize", () => fit.fit());
+
+let wasm = null;     // Bytes des gewählten Programms
+let name = "program";
+let running = null;  // AbortController des laufenden Programms
+
+// Zeileneditor: Eingaben werden geechot und mit Enter an das Programm
+// übergeben (ReadLn wie in der DOS-Konsole). Strg+D am Zeilenanfang = Ende
+// der Eingabe, Strg+C bricht ab.
+const lines = [];    // fertige Zeilen, die das Programm noch nicht gelesen hat
+let waiting = null;  // Resolver eines wartenden readLine
+let current = "";    // angefangene Zeile
+
+function deliver(line) {
+	if (waiting) {
+		const w = waiting;
+		waiting = null;
+		w(line);
+	} else {
+		lines.push(line);
+	}
+}
+
+term.onData((data) => {
+	if (!running) {
+		return;
+	}
+	if (data.startsWith("\x1b")) {
+		return; // Cursortasten usw.
+	}
+	for (const ch of data) {
+		if (ch === "\r") {
+			term.write("\r\n");
+			deliver(current + "\n");
+			current = "";
+		} else if (ch === "\x7f" || ch === "\b") {
+			const cps = Array.from(current);
+			if (cps.length > 0) {
+				cps.pop();
+				current = cps.join("");
+				term.write("\b \b");
+			}
+		} else if (ch === "\x03") {
+			stop();
+			return;
+		} else if (ch === "\x04") {
+			if (current === "") {
+				deliver(null);
+			}
+		} else if (ch >= " ") {
+			current += ch;
+			term.write(ch);
+		}
+	}
+});
+
+function readLine() {
+	if (lines.length > 0) {
+		return Promise.resolve(lines.shift());
+	}
+	return new Promise((resolve) => { waiting = resolve; });
+}
+
+function setStatus(text) {
+	$("status").textContent = text;
+}
+
+function stop() {
+	if (running) {
+		running.abort();
+	}
+}
+
+async function start() {
+	if (!wasm || running) {
+		return;
+	}
+	const args = $("args").value.trim();
+	running = new AbortController();
+	lines.length = 0;
+	waiting = null;
+	current = "";
+	term.reset();
+	term.focus();
+	$("start").disabled = true;
+	$("stop").disabled = false;
+	setStatus(name + " läuft …");
+	try {
+		const result = await WasmPascal.run(wasm, {
+			args: [name, ...(args ? args.split(/\s+/) : [])],
+			write: (fd, bytes) => term.write(bytes),
+			readLine,
+			signal: running.signal,
+		});
+		if (result.aborted) {
+			term.write("\r\n^C\r\n");
+			setStatus(name + " abgebrochen");
+		} else {
+			setStatus(name + " beendet, Exit-Code " + result.exitCode);
+		}
+	} catch (err) {
+		console.error(err);
+		setStatus("Fehler: " + err.message);
+	} finally {
+		if (waiting) {
+			waiting(null);
+			waiting = null;
+		}
+		running = null;
+		$("start").disabled = false;
+		$("stop").disabled = true;
+	}
+}
+
+$("form").addEventListener("submit", (ev) => {
+	ev.preventDefault();
+	start();
+});
+$("stop").addEventListener("click", stop);
+$("file").addEventListener("change", async () => {
+	const f = $("file").files[0];
+	if (!f) {
+		return;
+	}
+	wasm = new Uint8Array(await f.arrayBuffer());
+	name = f.name.replace(/\.wasm$/i, "");
+	$("start").disabled = false;
+	setStatus(f.name + " geladen");
+});
+
+// ?prog=datei.wasm&args=a+b lädt und startet ein Programm vom Server.
+(async () => {
+	const params = new URLSearchParams(location.search);
+	const prog = params.get("prog");
+	if (!prog) {
+		return;
+	}
+	$("args").value = params.get("args") || "";
+	try {
+		const resp = await fetch(prog);
+		if (!resp.ok) {
+			throw new Error(resp.status + " " + resp.statusText);
+		}
+		wasm = new Uint8Array(await resp.arrayBuffer());
+		name = prog.replace(/^.*\//, "").replace(/\.wasm$/i, "");
+		$("start").disabled = false;
+		start();
+	} catch (err) {
+		setStatus(prog + ": " + err.message);
+	}
+})();
+</script>
+</body>
+</html>

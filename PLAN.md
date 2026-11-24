@@ -62,7 +62,7 @@ Eine Pipeline mit einem einzigen Backend: Quelltext → Lexer → Parser → AST
 **Zwei Ziel-ABIs mit gemeinsamer Laufzeit:**
 
 - `wasi`: WASI Preview 1 (`fd_write`, `fd_read`, `poll_oneoff`, `clock_time_get`, `random_get`, `path_open` usw.). Läuft in wazero, wasmtime und Node.
-- `gojs`: dieselbe Import- und Exportschnittstelle wie `GOOS=js GOARCH=wasm` (Importmodul `gojs`, Exporte `run`, `resume`, `getsp`, `mem`). Läuft mit `wasm_exec.js` im Browser. Die Go-Version, deren `wasm_exec.js` wir unterstützen, wird festgelegt und die Datei mitgeliefert.
+- `gojs`: dieselbe Import- und Exportschnittstelle wie `GOOS=js GOARCH=wasm` (Importmodul `gojs`, Exporte `run`, `resume`, `getsp`, `mem`). Läuft mit `wasm_exec.js` im Browser. Die Go-Version, deren `wasm_exec.js` wir unterstützen, wird festgelegt und die Datei mitgeliefert (festgelegt: Go 1.27.4, `web/wasm_exec.js`).
 
 Nur die unterste Schicht der Laufzeit (I/O, Zeit, Zufall, Anhalten/Fortsetzen) unterscheidet sich zwischen den beiden Zielen.
 
@@ -338,11 +338,12 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - **Fertig, wenn:** Ein kleines Zahlenraten `zahlen.pas` (selbst geschrieben: farbige Ausgabe, `ClrScr`, Eingaben mit `ReadLn`, eine kurze Animation mit `Delay`, „Weiter mit Enter“ über `ReadKey`) im Terminal korrekt läuft. Außerdem besteht ein Testprogramm mit goto (Sprung aus verschachtelten Schleifen und zurück nach oben).
 - *Erledigt (Nov 24, 2026).* `analysis` markiert anhaltefähige Funktionen über den Aufrufgraph der IR (Anhaltepunkt: Intrinsic `_Suspend`). Anhaltefähige Funktionen und Funktionen mit `goto` werden als Dispatch-Schleife (`loop` + `br_table`) übersetzt, gesplittet vor jedem Anhaltepunkt und jedem Aufruf einer anhaltefähigen Funktion; Abwickeln sichert das Segment im Frame, Fortsetzen springt dorthin zurück. Der WASI-Treiber `_start` wickelt bei jedem Anhalten wirklich ab und setzt fort. `rtl/crt.pas` hat jetzt `Delay` und `ReadKey`; die CLI fängt Strg+C ab. Tests: `testdata/etappe8/` mit `zahlen.pas` (Abnahme, reproduzierbar mit `-fest`), Anhalten tief in einer Rekursion mit inneren Prozeduren, Zeitscheiben und `goto` samt irreduziblem Sprung; alle Programme auch mit erzwungener Frame-Ablage.
 
-### Etappe 9: Ziel `gojs`
+### Etappe 9: Ziel `gojs` ✅
 
 - Importe aus Modul `gojs` mit Go-Stack-Layout (`sp`), Exporte `run`, `resume`, `getsp`, `mem`; Ausgabe über `runtime.wasmWrite`, Zeit, Timer, Zufall, Exit; Eingabe-Callback (mit einfachem Zeileneditor im Loader: Echo, Backspace, Enter) über `syscall/js`-Importe.
 - `wasm_exec.js` der festgelegten Go-Version wird mitgeliefert. Ein kleiner Zusatz zum Loader übersetzt WASM-Traps über die Zeilentabelle in die Pascal-Fehlermeldung.
 - **Fertig, wenn:** Das Zahlenraten unverändert mit `pascal build -target gojs` im Browser mit `wasm_exec.js` läuft.
+- *Erledigt (Nov 24, 2026).* `rtl/system.pas` hat eine unterste Schicht (`SysWrite`, `SysRead`, `SysOpen`, …, `_Clock`, `SysArgs`, `_SuspendAction`) je Ziel per `{$IFDEF GOJS}`; alles darüber ist gemeinsam. Unter gojs: Ausgabe über `runtime.wasmWrite`, Uhren über `nanotime1`/`walltime`, `Delay` und Zeitscheiben über `scheduleTimeoutEvent`, `Halt` über `wasmExit` (jetzt unter beiden Zielen ein Anhaltepunkt), Eingabe zeilenweise über eine mit `_makeFuncWrapper` erzeugte Callback-Funktion und `go.wasmPascalReadLine`, gelesen in der neuen Routine `_GoResumeAction` vor dem Fortsetzen; `memory.grow` meldet `resetMemoryDataView`. Der Codegenerator erzeugt die Exporte `run`, `resume`, `getsp`, `mem`. `web/`: `wasm_exec.js` (Go 1.27.4), `loader.js` (Browser und Node, Traps → Pascal-Meldung über `__rt_*` und `wasmpascal.lines`, mehrere Programme gleichzeitig, Abbruch über `AbortSignal`), `run.html` (xterm.js 5.5.0 mit Zeileneditor), `node-run.js`. Tests: `TestProgramsGoJS` führt alle Testprogramme ohne Dateizugriff (74) mit Node aus und vergleicht mit denselben `.out`-Dateien; Abnahme im Browser mit headless Chromium (`zahlen.pas`, Laufzeitfehler).
 
 ### Etappe 10: Compiler als WASM und Browser-Demo
 

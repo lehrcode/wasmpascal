@@ -31,7 +31,8 @@ func TestCLI(t *testing.T) {
 		{[]string{"build", missing}, 1, "Error 15"},
 		{[]string{"run", missing, "a", "b"}, 1, "Error 15"},
 		{[]string{"check", prog}, 0, ""},
-		{[]string{"build", "-target", "gojs", "-o", filepath.Join(dir, "p.wasm"), prog}, 1, "gojs"},
+		{[]string{"build", "-target", "gojs", "-o", filepath.Join(dir, "p.wasm"), prog}, 0, ""},
+		{[]string{"run", "-target", "gojs", prog}, 2, "-target"},
 		{[]string{"run", "-I", dir, "-D", "X", "-stack", "65536", "-nolines", prog}, 0, ""},
 	}
 	for _, tt := range tests {

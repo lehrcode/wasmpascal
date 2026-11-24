@@ -1,3 +1,4 @@
 *.wasm
 /pascal
 /pascal.exe
+web/*.wasm

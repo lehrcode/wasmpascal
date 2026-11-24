@@ -18,6 +18,9 @@ type Options struct {
 	ForceFrame bool
 	// NoLines lässt Name Section und wasmpascal.lines weg.
 	NoLines bool
+	// GoJS erzeugt die Schnittstelle von GOOS=js (Exporte run, resume, getsp,
+	// mem) statt _start für WASI.
+	GoJS bool
 }
 
 // Globale des Moduls. Die Laufzeitfehler-Globalen werden exportiert; der
@@ -34,7 +37,14 @@ const (
 	globalReason = 6 // Grund des Anhaltens
 	globalArg    = 7 // Argument des Anhaltens
 	globalResume = 8 // Ergebnis des Hosts beim Fortsetzen
+
+	// gojs (ir.GlobalGoSP usw.)
+	globalGoSP = 9  // Go-Stackzeiger für wasm_exec.js (Export getsp)
+	globalArgc = 10 // Argumente von run(argc, argv)
+	globalArgv = 11
 )
+
+var hostGlobals = map[int]uint32{ir.GlobalGoSP: globalGoSP, ir.GlobalArgc: globalArgc, ir.GlobalArgv: globalArgv}
 
 // GlobalExports sind die Namen der exportierten Globalen.
 var GlobalExports = [...]string{"", "__rt_code", "__rt_file", "__rt_line", "__rt_func",
@@ -77,7 +87,8 @@ func Generate(m *ir.Module, opts Options) []byte {
 	i32 := func(v int64) wasm.Global {
 		return wasm.Global{Type: wasm.I32, Mutable: true, Init: wasm.AppendS32([]byte{wasm.OpI32Const}, int32(v))}
 	}
-	mod.Globals = []wasm.Global{i32(g.stackTop), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0)}
+	mod.Globals = []wasm.Global{i32(g.stackTop), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0),
+		i32(0), i32(0), i32(0)}
 	if len(m.Data) > 0 {
 		mod.Data = []wasm.Data{{Offset: ir.DataBase, Bytes: m.Data}}
 	}
@@ -90,14 +101,18 @@ func Generate(m *ir.Module, opts Options) []byte {
 	for _, f := range m.Funcs {
 		mod.Funcs = append(mod.Funcs, g.function(f))
 	}
-	start := g.funcIndex[m.Main]
-	if m.SuspendAction != nil {
-		start = uint32(len(mod.Imports) + len(mod.Funcs))
-		mod.Funcs = append(mod.Funcs, g.driver())
-	}
-	mod.Exports = []wasm.Export{
-		{Name: "memory", Kind: wasm.ExportMemory, Index: 0},
-		{Name: "_start", Kind: wasm.ExportFunc, Index: start},
+	if opts.GoJS {
+		g.gojsExports()
+	} else {
+		start := g.funcIndex[m.Main]
+		if m.SuspendAction != nil {
+			start = uint32(len(mod.Imports) + len(mod.Funcs))
+			mod.Funcs = append(mod.Funcs, g.driver())
+		}
+		mod.Exports = []wasm.Export{
+			{Name: "memory", Kind: wasm.ExportMemory, Index: 0},
+			{Name: "_start", Kind: wasm.ExportFunc, Index: start},
+		}
 	}
 	for i := globalCode; i <= globalResume; i++ {
 		mod.Exports = append(mod.Exports, wasm.Export{Name: GlobalExports[i], Kind: wasm.ExportGlobal, Index: uint32(i)})
@@ -478,6 +493,8 @@ func (fg *funcGen) expr(e ir.Expr) {
 		c.I32Const(int32(fg.g.stackTop))
 	case ir.MemSize:
 		c.Op(wasm.OpMemorySize, 0)
+	case ir.HostGlobal:
+		c.Index(wasm.OpGlobalGet, hostGlobals[e.G])
 	case ir.SetCmp:
 		// Gleichheit: (A xor B) == 0; Teilmenge: (A andnot B) == 0, je 2 × 16 Byte
 		op := wasm.SimdV128Xor
@@ -545,6 +562,9 @@ func (fg *funcGen) instr(in ir.Instr) {
 			c.SIMD(op)
 			c.SIMDMem(wasm.SimdV128Store, 0, half)
 		}
+	case ir.SetHostGlobal:
+		fg.expr(in.Val)
+		c.Index(wasm.OpGlobalSet, hostGlobals[in.G])
 	case ir.Grow:
 		fg.set(in.Dst, func() {
 			fg.expr(in.Pages)

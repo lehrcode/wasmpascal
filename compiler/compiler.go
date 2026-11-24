@@ -32,8 +32,9 @@ type Target int
 const (
 	// TargetWASI erzeugt ein Modul für WASI Preview 1 (wazero, wasmtime, Node).
 	TargetWASI Target = iota
-	// TargetGoJS erzeugt ein Modul mit der Schnittstelle von GOOS=js GOARCH=wasm,
-	// lauffähig mit wasm_exec.js im Browser.
+	// TargetGoJS erzeugt ein Modul mit der Schnittstelle von GOOS=js GOARCH=wasm
+	// (Exporte run, resume, getsp, mem), lauffähig mit wasm_exec.js und
+	// web/loader.js im Browser oder in Node.js. Dateien gibt es dort nicht.
 	TargetGoJS
 )
 
@@ -122,6 +123,8 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if opts.StackSize < 0 {
 		return nil, fmt.Errorf("compiler: negative Stackgröße %d", opts.StackSize)
 	}
+	// Das Ziel ist als bedingtes Symbol WASI bzw. GOJS definiert.
+	opts.Defines = append(append([]string{}, opts.Defines...), targetSymbol(opts.Target))
 	loader := source.NewLoader(opts.FS, opts.IncludePaths)
 	lx, err := lexer.New(loader, mainFile, source.NewDefines(opts.Defines...))
 	if err != nil {
@@ -131,7 +134,7 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if err != nil {
 		return nil, diagnostic(err)
 	}
-	system, err := parseSystem()
+	system, err := parseSystem(opts.Defines)
 	if err != nil {
 		return nil, err
 	}
@@ -150,9 +153,6 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if !ok {
 		return nil, &Diagnostic{File: mainFile, Code: source.ErrSyntax, Msg: "Syntax error (program expected, found a unit)"}
 	}
-	if opts.Target == TargetGoJS {
-		return nil, errors.New("compiler: Ziel gojs folgt in Etappe 9")
-	}
 	stack := int64(opts.StackSize)
 	if stack == 0 {
 		stack = int64(lx.StackSize())
@@ -167,7 +167,8 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Result{Wasm: codegen.Generate(m, codegen.Options{ForceFrame: opts.forceFrame, NoLines: opts.NoLines})}, nil
+	return &Result{Wasm: codegen.Generate(m, codegen.Options{ForceFrame: opts.forceFrame, NoLines: opts.NoLines,
+		GoJS: opts.Target == TargetGoJS})}, nil
 }
 
 // loadUnits sucht und parst alle Units, die von file aus per uses erreichbar
@@ -237,10 +238,17 @@ func loadUnits(ctx context.Context, file ast.File, loader *source.Loader, dir st
 	return units, embedded, nil
 }
 
+func targetSymbol(t Target) string {
+	if t == TargetGoJS {
+		return "GOJS"
+	}
+	return "WASI"
+}
+
 // parseSystem liest die System-Unit aus rtl.FS. Fehler darin sind Fehler des
 // Compilers selbst und werden als interne Fehler gemeldet.
-func parseSystem() (*ast.Unit, error) {
-	lx, err := lexer.New(source.NewLoader(rtl.FS, nil), "system.pas", source.NewDefines())
+func parseSystem(defines []string) (*ast.Unit, error) {
+	lx, err := lexer.New(source.NewLoader(rtl.FS, nil), "system.pas", source.NewDefines(defines...))
 	if err != nil {
 		return nil, fmt.Errorf("compiler: rtl/system.pas: %w", err)
 	}

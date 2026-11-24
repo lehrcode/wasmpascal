@@ -190,6 +190,27 @@ type HeapBase struct{}
 // MemSize ist die aktuelle Speichergröße in Seiten zu 64 KB.
 type MemSize struct{}
 
+// Globale des Moduls, die die Laufzeit direkt liest oder setzt (gojs).
+const (
+	GlobalGoSP = iota // Go-Stackzeiger für Importe aus wasm_exec.js (Export getsp)
+	GlobalArgc        // Argumente von run(argc, argv)
+	GlobalArgv
+)
+
+// HostGlobal liest ein Global aus der Liste oben.
+type HostGlobal struct{ G int }
+
+func (HostGlobal) VT() ValType      { return I32 }
+func (h HostGlobal) String() string { return fmt.Sprintf("hostglobal%d", h.G) }
+
+// SetHostGlobal setzt ein Global aus der Liste oben.
+type SetHostGlobal struct {
+	G   int
+	Val Expr
+}
+
+func (s SetHostGlobal) String() string { return fmt.Sprintf("hostglobal%d := %s", s.G, s.Val) }
+
 // SetCmpOp vergleicht zwei Mengen.
 type SetCmpOp int
 
@@ -528,7 +549,8 @@ type Module struct {
 	Data      []byte // Inhalt des Datensegments ab DataBase
 	StackSize int64
 	Hosts     []*Host // benutzte Importe in Reihenfolge der ersten Verwendung
-	// SuspendAction führt unter WASI die Aktion eines Anhaltepunkts aus
-	// (rtl: _SuspendAction); nil ohne System-Unit.
-	SuspendAction *Func
+	// SuspendAction führt die Aktion eines Anhaltepunkts aus (rtl:
+	// _SuspendAction); nil ohne System-Unit. ResumeAction (gojs, rtl:
+	// _GoResumeAction) läuft vor dem Fortsetzen und liefert dessen Ergebnis.
+	SuspendAction, ResumeAction *Func
 }

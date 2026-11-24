@@ -100,7 +100,7 @@ func TestNoLines(t *testing.T) {
 // TestFileRecSizes prüft, dass die Größen der Datei-Records im Compiler zu
 // TFileRec und TTextRec in rtl/system.pas passen.
 func TestFileRecSizes(t *testing.T) {
-	system, err := parseSystem()
+	system, err := parseSystem([]string{"WASI"})
 	if err != nil {
 		t.Fatal(err)
 	}

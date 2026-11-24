@@ -16,6 +16,11 @@ Pascal-Testprogramme für den Test-Harness (`harness_test.go` im Wurzelverzeichn
 - Jeder Testfall bekommt ein eigenes leeres Verzeichnis als Wurzel `/` für
   Dateizugriffe.
 
+Zusätzlich führt `TestProgramsGoJS` jeden Testfall mit dem Ziel `gojs` in
+Node.js aus (`web/node-run.js`) und erwartet dieselbe Ausgabe. Programme mit
+`Assign`, `MkDir`, `ChDir`, `RmDir`, `Erase` oder `Rename` entfallen dort,
+weil es unter `gojs` keine Dateien gibt. Ohne `node` wird der Test übersprungen.
+
 Neuer Testfall: `name.pas` schreiben, eine leere `name.out` (oder `name.err`)
 anlegen und `go test . -run TestPrograms -update` ausführen. Danach den Inhalt
 der erzeugten Datei prüfen. `-update` ersetzt eine `.err` durch eine `.out`

@@ -98,9 +98,12 @@ const (
 	BHeapBase
 	BRunError
 	BSuspend
+	BGoSetSP
+	BGoArgc
+	BGoArgv
 	bUnsupported
 
-	// BWasiBase + i ist abi.WASI[i].
+	// BWasiBase + i ist abi.Intrinsics[i].
 	BWasiBase types.BuiltinID = 1000
 )
 
@@ -134,6 +137,7 @@ var builtinProcs = []struct {
 	{"Ptr", BPtr, true}, {"Addr", BAddr, true}, {"Ofs", BOfs, true}, {"Seg", BSeg, true},
 	{"_MemGrow", BMemGrow, true}, {"_MemSize", BMemSize, true}, {"_HeapBase", BHeapBase, true},
 	{"_RunError", BRunError, false}, {"_Suspend", BSuspend, true},
+	{"_GoSetSP", BGoSetSP, false}, {"_GoArgc", BGoArgc, true}, {"_GoArgv", BGoArgv, true},
 }
 
 // unsupported sind Bezeichner der System-Unit von TP 4.0, die es wegen des
@@ -166,7 +170,7 @@ func newUniverse() *types.Scope {
 	for _, b := range builtinProcs {
 		u.Insert(types.NewBuiltin(b.name, b.id, b.isFunc))
 	}
-	for i, w := range abi.WASI {
+	for i, w := range abi.Intrinsics {
 		u.Insert(types.NewBuiltin(w.Name, BWasiBase+types.BuiltinID(i), w.Result))
 	}
 	for _, name := range unsupported {

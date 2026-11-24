@@ -32,7 +32,7 @@ func (l *lowerer) wasiHost(i int) *Host {
 	if h, ok := l.hosts[i]; ok {
 		return h
 	}
-	w := abi.WASI[i]
+	w := abi.Intrinsics[i]
 	h := &Host{Module: w.Module, Name: w.Import}
 	for _, p := range w.Params {
 		if p == abi.I32 {
@@ -108,7 +108,7 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 	arg := func(i int) Expr { return s.expr(args[i]) }
 	if b.ID >= check.BWasiBase {
 		i := int(b.ID - check.BWasiBase)
-		w := abi.WASI[i]
+		w := abi.Intrinsics[i]
 		var in []Expr
 		for j, a := range args {
 			x := s.expr(a)
@@ -316,6 +316,13 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 	case check.BContinue:
 		s.jump(s.continues[len(s.continues)-1])
 		return nil
+	case check.BGoSetSP:
+		s.emit(SetHostGlobal{G: GlobalGoSP, Val: arg(0)})
+		return nil
+	case check.BGoArgc:
+		return HostGlobal{G: GlobalArgc}
+	case check.BGoArgv:
+		return HostGlobal{G: GlobalArgv}
 	case check.BSuspend:
 		r := s.temp(types.LongInt)
 		s.emit(Suspend{Reason: arg(0), Arg: arg(1), Dst: r})

@@ -10,6 +10,11 @@
     _MemGrow(n)     memory.grow, liefert -1 bei Fehlschlag
     _RunError(n)    Laufzeitfehler n an der Stelle des Aufrufers
     _FdWrite usw.   WASI-Aufrufe (compiler/internal/abi), Ergebnis: errno
+    _GoWasmWrite    Importe aus wasm_exec.js fuer das Ziel gojs (Go-Stack sp)
+    _Suspend(g, a)  Anhaltepunkt des Schedulers
+
+  Nur die "unterste Schicht" unterscheidet sich zwischen den Zielen; sie ist
+  per bedingter Uebersetzung (Symbole WASI bzw. GOJS) getrennt.
 
   Laufzeitroutinen setzen die vorgemerkte Quelltextstelle nicht; Fehler darin
   nennen die Anweisung des Anwenderprogramms. }
@@ -22,6 +27,9 @@ var
   RandSeed: LongInt;
   FileMode: Byte;
   ExitCode: Integer;
+
+{ Uhr in Nanosekunden: Id 0 = Echtzeit seit 1. 1. 1970 (UTC), 1 = monoton. }
+function _Clock(Id: LongInt): Real;
 
 implementation
 
@@ -80,6 +88,7 @@ const
   SuspendYield = 1;   { Zeitscheibe bei Ausgaben abgelaufen }
   SuspendDelay = 2;   { Delay, Argument in Millisekunden }
   SuspendInput = 3;   { Eingabe gebraucht }
+  SuspendHalt = 4;    { Programmende, Argument: Exit-Code }
   YieldMs = 30;
 
 var
@@ -90,6 +99,7 @@ var
   end;
   IoCount: LongInt;
   ArgCount, ArgPtrs, ArgBuf: LongInt;
+  ArgStride: LongInt;    { Abstand der argv-Eintraege: 4 (WASI) bzw. 8 (gojs) }
   LastYield: Real;       { Zeitpunkt des letzten Anhaltens in ms }
   HeapPtr: LongInt;      { erste Adresse oberhalb aller vergebenen Bloecke }
   HeapEnd: LongInt;      { Ende des vorhandenen Speichers }
@@ -107,6 +117,9 @@ begin
     Size := 1;
   _Round8 := (Size + 7) and not 7
 end;
+
+{ meldet dem Host vergroesserten Speicher (unterste Schicht) }
+procedure MemGrown; forward;
 
 function _GetMem(Size: LongInt): Pointer;
 var
@@ -148,6 +161,7 @@ begin
     Need := (HeapPtr + Size - HeapEnd + PageSize - 1) div PageSize;
     if _MemGrow(Need) < 0 then
       Exit;
+    MemGrown;
     HeapEnd := HeapEnd + Need * PageSize
   end;
   _GetMem := Pointer(HeapPtr);
@@ -804,6 +818,485 @@ begin
   _ValReal := M
 end;
 
+{ ======================================================= unterste Schicht
+  Nur dieser Teil unterscheidet sich zwischen den Zielen. Ergebnisse sind
+  WASI-Fehlernummern (0 = Erfolg); Pfade sind schon aufgeloest. }
+
+const
+  ENOTCAPABLE = 76;
+
+{$IFNDEF GOJS}   { WASI (auch ohne Zielsymbol) }
+
+function SysWrite(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
+begin
+  IoVec.Buf := Buf;
+  IoVec.Len := Len;
+  SysWrite := _FdWrite(Fd, LongInt(@IoVec), 1, LongInt(@IoCount));
+  Done := IoCount
+end;
+
+function SysRead(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
+begin
+  IoVec.Buf := Buf;
+  IoVec.Len := Len;
+  SysRead := _FdRead(Fd, LongInt(@IoVec), 1, LongInt(@IoCount));
+  Done := IoCount
+end;
+
+{ Unter WASI liest fd_read blockierend; es liegt nie etwas bereit. }
+function InputPending: Boolean;
+begin
+  InputPending := False
+end;
+
+function SysClose(Fd: LongInt): LongInt;
+begin
+  SysClose := _FdClose(Fd)
+end;
+
+function SysSeek(Fd, Offset, Whence: LongInt; var NewOffset: LongInt): LongInt;
+var
+  R: array[0..1] of LongInt;
+begin
+  SysSeek := _FdSeek(Fd, Offset, Whence, LongInt(@R));
+  NewOffset := R[0]
+end;
+
+function SysSize(Fd: LongInt; var Size: LongInt): LongInt;
+var
+  Stat: array[0..15] of LongInt;
+begin
+  SysSize := _FdFilestatGet(Fd, LongInt(@Stat));
+  Size := Stat[8]   { size liegt bei Offset 32 }
+end;
+
+function SysSetSize(Fd, Size: LongInt): LongInt;
+begin
+  SysSetSize := _FdFilestatSetSize(Fd, Size)
+end;
+
+function SysOpen(var P: string; OFlags, Rights, FdFlags: LongInt; var Fd: LongInt): LongInt;
+var
+  R: LongInt;
+begin
+  SysOpen := _PathOpen(RootFd, 1, LongInt(@P[1]), Length(P), OFlags, Rights, Rights, FdFlags, LongInt(@R));
+  Fd := R
+end;
+
+function SysUnlink(var P: string): LongInt;
+begin
+  SysUnlink := _PathUnlinkFile(RootFd, LongInt(@P[1]), Length(P))
+end;
+
+function SysRename(var P, Q: string): LongInt;
+begin
+  SysRename := _PathRename(RootFd, LongInt(@P[1]), Length(P), RootFd, LongInt(@Q[1]), Length(Q))
+end;
+
+function SysMkDir(var P: string): LongInt;
+begin
+  SysMkDir := _PathCreateDirectory(RootFd, LongInt(@P[1]), Length(P))
+end;
+
+function SysRmDir(var P: string): LongInt;
+begin
+  SysRmDir := _PathRemoveDirectory(RootFd, LongInt(@P[1]), Length(P))
+end;
+
+procedure MemGrown;
+begin
+end;
+
+function _Clock(Id: LongInt): Real;
+var
+  T: array[0..1] of LongInt;
+  Lo: Real;
+begin
+  _Clock := 0;
+  if _ClockTimeGet(Id, 1, LongInt(@T)) = 0 then
+  begin
+    Lo := T[0];
+    if Lo < 0 then
+      Lo := Lo + 4294967296.0;
+    _Clock := T[1] * 4294967296.0 + Lo
+  end
+end;
+
+procedure SysArgs;
+var
+  Sizes: array[0..1] of LongInt;
+begin
+  ArgStride := 4;
+  if _ArgsSizesGet(LongInt(@Sizes[0]), LongInt(@Sizes[1])) <> 0 then
+    Exit;
+  ArgCount := Sizes[0];
+  ArgPtrs := LongInt(_GetMem(ArgCount * 4 + 4));
+  ArgBuf := LongInt(_GetMem(Sizes[1] + 1));
+  if _ArgsGet(ArgPtrs, ArgBuf) <> 0 then
+    ArgCount := 0
+end;
+
+{ Fuehrt die Aktion eines Anhaltepunkts aus (der Treiber in _start ruft sie
+  zwischen Abwickeln und Fortsetzen). Eingaben liest WASI danach
+  blockierend; Delay wartet ueber poll_oneoff. }
+function _SuspendAction(Reason, Arg: LongInt): LongInt;
+var
+  Sub: array[0..11] of LongInt;   { subscription, 48 Byte }
+  Ev: array[0..7] of LongInt;     { event, 32 Byte }
+  N: LongInt;
+  T: Real;
+begin
+  _SuspendAction := 0;
+  if Reason = SuspendHalt then
+    _ProcExit(Arg);
+  if (Reason = SuspendDelay) and (Arg > 0) then
+  begin
+    FillChar(Sub, SizeOf(Sub), 0);
+    Sub[4] := 1;                      { clock_id: monotonic }
+    T := Arg * 1E6;                   { Nanosekunden }
+    Sub[7] := Trunc(T / 4294967296.0);
+    T := T - Sub[7] * 4294967296.0;
+    if T >= 2147483648.0 then
+      T := T - 4294967296.0;
+    Sub[6] := Trunc(T);
+    if _PollOneoff(LongInt(@Sub), LongInt(@Ev), 1, LongInt(@N)) <> 0 then;
+  end
+end;
+
+{$ENDIF}
+
+{$IFDEF GOJS}
+
+{ Ziel gojs: Schnittstelle von GOOS=js GOARCH=wasm zu wasm_exec.js. Jeder
+  Import nimmt den Go-Stackzeiger sp (Adresse von GoSP, Export getsp);
+  Argumente und Ergebnisse liegen ab sp+8 in 8-Byte-Faechern. JS-Werte sind
+  8-Byte-Referenzen (NaN-Boxing, siehe wasm_exec.js). Eingaben liefert der
+  Loader (web/loader.js) zeilenweise: Das Programm ruft
+  go.wasmPascalReadLine(f) am Go-Objekt auf; der Loader ruft die
+  Callback-Funktion f spaeter (nie innerhalb dieses Aufrufs) mit dem
+  naechsten Stueck Eingabe auf, ein leerer String bedeutet Dateiende. }
+
+type
+  TRef = record
+    Lo, Hi: LongInt
+  end;
+
+const
+  GoObjRef: TRef = (Lo: 6; Hi: $7FF80001);    { das Go-Objekt aus wasm_exec.js }
+  NullRef: TRef = (Lo: 2; Hi: $7FF80000);     { null }
+
+var
+  GoSP: array[0..23] of LongInt;
+  CallArgs: TRef;
+  InputFn: TRef;
+  HasInputFn: Boolean;
+  PendingTimeout: LongInt;
+  WaitingInput: Boolean;
+  LineBuf: PChar;                 { Eingabezeile auf dem Heap }
+  LineCap, LineLen, LinePos: LongInt;
+  NameBuf: string;
+
+function SP: LongInt;
+begin
+  SP := LongInt(@GoSP)
+end;
+
+procedure GoSet(Off, V: LongInt);
+begin
+  GoSP[Off div 4] := V;
+  GoSP[Off div 4 + 1] := 0
+end;
+
+procedure GoPutRef(Off: LongInt; const R: TRef);
+begin
+  GoSP[Off div 4] := R.Lo;
+  GoSP[Off div 4 + 1] := R.Hi
+end;
+
+function GoGetRef(Off: LongInt): TRef;
+begin
+  Result.Lo := GoSP[Off div 4];
+  Result.Hi := GoSP[Off div 4 + 1]
+end;
+
+{ legt einen Go-String (Zeiger, Laenge) ab; der Text liegt in NameBuf }
+procedure GoString(Off: LongInt; const S: string);
+begin
+  NameBuf := S;
+  GoSet(Off, LongInt(@NameBuf[1]));
+  GoSet(Off + 8, Length(NameBuf))
+end;
+
+{ ruft V.Name(A) auf; liefert False, wenn JS eine Ausnahme warf }
+function GoCall(const V: TRef; const Name: string; const A: TRef; var R: TRef): Boolean;
+begin
+  CallArgs := A;
+  GoPutRef(8, V);
+  GoString(16, Name);
+  GoSet(32, LongInt(@CallArgs));
+  GoSet(40, 1);
+  GoSet(48, 1);
+  GoSet(64, 0);
+  _GoValueCall(SP);
+  R := GoGetRef(56);
+  GoCall := (GoSP[16] and 255) <> 0
+end;
+
+function GoGet(const V: TRef; const Name: string): TRef;
+begin
+  GoPutRef(8, V);
+  GoString(16, Name);
+  _GoValueGet(SP);
+  GoGet := GoGetRef(32)
+end;
+
+procedure GoFinalize(const R: TRef);
+begin
+  if (R.Hi and $FFFFFFF8) = $7FF80000 then
+  begin
+    GoSet(8, R.Lo);
+    _GoFinalizeRef(SP)
+  end
+end;
+
+function SysWrite(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
+begin
+  Done := 0;
+  if (Fd <> 1) and (Fd <> 2) then
+  begin
+    SysWrite := 8;   { EBADF }
+    Exit
+  end;
+  GoSet(8, Fd);
+  GoSet(16, Buf);
+  GoSet(24, Len);
+  _GoWasmWrite(SP);
+  Done := Len;
+  SysWrite := 0
+end;
+
+function SysRead(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
+var
+  N: LongInt;
+begin
+  Done := 0;
+  if Fd <> 0 then
+  begin
+    SysRead := ENOTCAPABLE;
+    Exit
+  end;
+  N := LineLen - LinePos;
+  if N > Len then
+    N := Len;
+  if N > 0 then
+    Move(PChar(Ptr(0, LongInt(LineBuf) + LinePos))^, PChar(Ptr(0, Buf))^, N);
+  LinePos := LinePos + N;
+  Done := N;
+  SysRead := 0
+end;
+
+function InputPending: Boolean;
+begin
+  InputPending := LinePos < LineLen
+end;
+
+function SysClose(Fd: LongInt): LongInt;
+begin
+  SysClose := 0
+end;
+
+{ Dateien gibt es im Browser nicht. }
+function SysSeek(Fd, Offset, Whence: LongInt; var NewOffset: LongInt): LongInt;
+begin
+  NewOffset := 0;
+  SysSeek := ENOTCAPABLE
+end;
+
+function SysSize(Fd: LongInt; var Size: LongInt): LongInt;
+begin
+  Size := 0;
+  SysSize := ENOTCAPABLE
+end;
+
+function SysSetSize(Fd, Size: LongInt): LongInt;
+begin
+  SysSetSize := ENOTCAPABLE
+end;
+
+function SysOpen(var P: string; OFlags, Rights, FdFlags: LongInt; var Fd: LongInt): LongInt;
+begin
+  Fd := -1;
+  SysOpen := ENOTCAPABLE
+end;
+
+function SysUnlink(var P: string): LongInt;
+begin
+  SysUnlink := ENOTCAPABLE
+end;
+
+function SysRename(var P, Q: string): LongInt;
+begin
+  SysRename := ENOTCAPABLE
+end;
+
+function SysMkDir(var P: string): LongInt;
+begin
+  SysMkDir := ENOTCAPABLE
+end;
+
+function SysRmDir(var P: string): LongInt;
+begin
+  SysRmDir := ENOTCAPABLE
+end;
+
+{ wasm_exec.js haelt eine DataView auf den Speicher, die nach memory.grow
+  erneuert werden muss. }
+procedure MemGrown;
+begin
+  _GoResetMemory(SP)
+end;
+
+function Int64At(Off: LongInt): Real;
+var
+  Lo: Real;
+begin
+  Lo := GoSP[Off div 4];
+  if Lo < 0 then
+    Lo := Lo + 4294967296.0;
+  Int64At := GoSP[Off div 4 + 1] * 4294967296.0 + Lo
+end;
+
+function _Clock(Id: LongInt): Real;
+begin
+  if Id = 1 then
+  begin
+    _GoNanotime(SP);
+    _Clock := Int64At(8)
+  end
+  else
+  begin
+    _GoWalltime(SP);
+    _Clock := Int64At(8) * 1E9 + GoSP[4]
+  end
+end;
+
+procedure SysArgs;
+begin
+  ArgStride := 8;
+  ArgCount := _GoArgc;
+  ArgPtrs := _GoArgv
+end;
+
+procedure ScheduleTimeout(Ms: LongInt);
+begin
+  GoSet(8, Ms);
+  _GoScheduleTimeout(SP);
+  PendingTimeout := GoSP[4]   { id bei sp+16 }
+end;
+
+{ Fordert beim Loader eine Eingabezeile an. Ohne Loader-Funktion gilt die
+  Eingabe als beendet, und das Programm wird sofort fortgesetzt. }
+procedure RequestInput;
+var
+  R, Num: TRef;
+begin
+  if not HasInputFn then
+  begin
+    Num.Lo := 0;
+    Num.Hi := $3FF00000;   { die Zahl 1.0 als Kennung der Callback-Funktion }
+    if GoCall(GoObjRef, '_makeFuncWrapper', Num, InputFn) then
+      HasInputFn := True
+  end;
+  if HasInputFn and GoCall(GoObjRef, 'wasmPascalReadLine', InputFn, R) then
+    WaitingInput := True
+  else
+  begin
+    LineLen := 0;
+    LinePos := 0;
+    ScheduleTimeout(0)
+  end
+end;
+
+{ Liest die Zeile aus go._pendingEvent.args[0] in den Zeilenpuffer. }
+procedure ReadPendingEvent;
+var
+  Ev, Args, Str, Bytes: TRef;
+  N: LongInt;
+begin
+  Ev := GoGet(GoObjRef, '_pendingEvent');
+  Args := GoGet(Ev, 'args');
+  GoPutRef(8, Args);
+  GoSet(16, 0);
+  _GoValueIndex(SP);
+  Str := GoGetRef(24);
+  GoPutRef(8, Str);
+  _GoValuePrepareString(SP);
+  Bytes := GoGetRef(16);
+  N := GoSP[6];
+  if N > LineCap then
+  begin
+    if LineCap > 0 then
+      _FreeMem(LineBuf, LineCap);
+    LineCap := N;
+    LineBuf := _GetMem(LineCap)
+  end;
+  GoPutRef(8, Bytes);
+  GoSet(16, LongInt(LineBuf));
+  GoSet(24, N);
+  GoSet(32, N);
+  if N > 0 then
+    _GoValueLoadString(SP);
+  LineLen := N;
+  LinePos := 0;
+  { go._pendingEvent := null }
+  GoPutRef(8, GoObjRef);
+  GoString(16, '_pendingEvent');
+  GoPutRef(32, NullRef);
+  _GoValueSet(SP);
+  GoFinalize(Ev);
+  GoFinalize(Args);
+  GoFinalize(Str);
+  GoFinalize(Bytes)
+end;
+
+{ Laeuft vor dem Fortsetzen (Export resume): Timer abmelden, damit
+  wasm_exec.js ihn nicht erneut ausloest, und eine gelieferte Zeile
+  uebernehmen. }
+function _GoResumeAction: LongInt;
+begin
+  if PendingTimeout <> 0 then
+  begin
+    GoSet(8, PendingTimeout);
+    _GoClearTimeout(SP);
+    PendingTimeout := 0
+  end;
+  if WaitingInput then
+  begin
+    WaitingInput := False;
+    ReadPendingEvent
+  end;
+  _GoResumeAction := 0
+end;
+
+{ Aktion eines Anhaltepunkts: Timer setzen, Eingabe anfordern oder beenden.
+  Danach kehren run bzw. resume zu wasm_exec.js zurueck. }
+function _SuspendAction(Reason, Arg: LongInt): LongInt;
+begin
+  _SuspendAction := 0;
+  case Reason of
+    SuspendDelay: ScheduleTimeout(Arg);
+    SuspendYield: ScheduleTimeout(0);
+    SuspendInput: RequestInput;
+    SuspendHalt:
+      begin
+        GoSet(8, Arg);
+        _GoWasmExit(SP)
+      end;
+  end
+end;
+
+{$ENDIF}
+
 { ------------------------------------------------------------- Dateien }
 
 function IoError(Errno, Default: LongInt): Integer;
@@ -865,7 +1358,7 @@ var
   Fd, Err: LongInt;
 begin
   P := _Path(Name);
-  Err := _PathOpen(RootFd, 1, LongInt(@P[1]), Length(P), OFlags, Rights, Rights, FdFlags, LongInt(@Fd));
+  Err := SysOpen(P, OFlags, Rights, FdFlags, Fd);
   if Err = 0 then
   begin
     Handle := Fd;
@@ -876,39 +1369,37 @@ begin
 end;
 
 function WriteBytes(Handle, Buf, Len: LongInt): Boolean;
+var
+  Done: LongInt;
 begin
   WriteBytes := True;
   while Len > 0 do
   begin
-    IoVec.Buf := Buf;
-    IoVec.Len := Len;
-    if (_FdWrite(Handle, LongInt(@IoVec), 1, LongInt(@IoCount)) <> 0) or (IoCount <= 0) then
+    if (SysWrite(Handle, Buf, Len, Done) <> 0) or (Done <= 0) then
     begin
       WriteBytes := False;
       Exit
     end;
-    Buf := Buf + IoCount;
-    Len := Len - IoCount
+    Buf := Buf + Done;
+    Len := Len - Done
   end
 end;
 
 function ReadBytes(Handle, Buf, Len: LongInt): LongInt;
 var
-  Got: LongInt;
+  Got, Done: LongInt;
 begin
   Got := 0;
   while Got < Len do
   begin
-    IoVec.Buf := Buf + Got;
-    IoVec.Len := Len - Got;
-    if _FdRead(Handle, LongInt(@IoVec), 1, LongInt(@IoCount)) <> 0 then
+    if SysRead(Handle, Buf + Got, Len - Got, Done) <> 0 then
     begin
       ReadBytes := -1;
       Exit
     end;
-    if IoCount = 0 then
+    if Done = 0 then
       Break;
-    Got := Got + IoCount
+    Got := Got + Done
   end;
   ReadBytes := Got
 end;
@@ -923,18 +1414,8 @@ end;
 
 { Monotone Uhr in Millisekunden. }
 function NowMs: Real;
-var
-  T: array[0..1] of LongInt;
-  Lo: Real;
 begin
-  NowMs := 0;
-  if _ClockTimeGet(1, 1, LongInt(@T)) = 0 then
-  begin
-    Lo := T[0];
-    if Lo < 0 then
-      Lo := Lo + 4294967296.0;
-    NowMs := (T[1] * 4294967296.0 + Lo) / 1E6
-  end
+  NowMs := _Clock(1) / 1E6
 end;
 
 procedure FlushText(var F: TTextRec); forward;
@@ -945,31 +1426,6 @@ begin
   FlushText(TTextRec(Output));
   if _Suspend(Reason, Arg) <> 0 then;
   LastYield := NowMs
-end;
-
-{ Fuehrt unter WASI die Aktion eines Anhaltepunkts aus (der Treiber in
-  _start ruft sie zwischen Abwickeln und Fortsetzen). Eingaben liest WASI
-  danach blockierend; Delay wartet ueber poll_oneoff. }
-function _SuspendAction(Reason, Arg: LongInt): LongInt;
-var
-  Sub: array[0..11] of LongInt;   { subscription, 48 Byte }
-  Ev: array[0..7] of LongInt;     { event, 32 Byte }
-  N: LongInt;
-  T: Real;
-begin
-  _SuspendAction := 0;
-  if (Reason = SuspendDelay) and (Arg > 0) then
-  begin
-    FillChar(Sub, SizeOf(Sub), 0);
-    Sub[4] := 1;                      { clock_id: monotonic }
-    T := Arg * 1E6;                   { Nanosekunden }
-    Sub[7] := Trunc(T / 4294967296.0);
-    T := T - Sub[7] * 4294967296.0;
-    if T >= 2147483648.0 then
-      T := T - 4294967296.0;
-    Sub[6] := Trunc(T);
-    if _PollOneoff(LongInt(@Sub), LongInt(@Ev), 1, LongInt(@N)) <> 0 then;
-  end
 end;
 
 procedure _Assign(var F: TFileRec; const Name: string);
@@ -1003,7 +1459,7 @@ procedure CloseText(var F: TTextRec);
 begin
   FlushText(F);
   if F.Handle > 2 then
-    if _FdClose(F.Handle) <> 0 then;
+    if SysClose(F.Handle) <> 0 then;
   F.Mode := fmClosed
 end;
 
@@ -1126,21 +1582,21 @@ end;
 
 { Liefert False am Dateiende; liest bei Bedarf nach. }
 function PeekChar(var F: TTextRec; var C: Char): Boolean;
+var
+  N: LongInt;
 begin
   if F.BufPos >= F.BufEnd then
   begin
-    if F.Handle = 0 then
+    if (F.Handle = 0) and not InputPending then
       Suspend(SuspendInput, 0);   { Anhaltepunkt: Eingabe gebraucht }
-    IoVec.Buf := LongInt(@F.Buffer);
-    IoVec.Len := BufSize;
-    if _FdRead(F.Handle, LongInt(@IoVec), 1, LongInt(@IoCount)) <> 0 then
+    if SysRead(F.Handle, LongInt(@F.Buffer), BufSize, N) <> 0 then
     begin
       if InOutRes = 0 then
         InOutRes := 100;
-      IoCount := 0
+      N := 0
     end;
     F.BufPos := 0;
-    F.BufEnd := IoCount
+    F.BufEnd := N
   end;
   if F.BufPos < F.BufEnd then
   begin
@@ -1306,7 +1762,7 @@ begin
     Exit
   end;
   if (F.Mode <> fmClosed) and (F.Handle > 2) then
-    if _FdClose(F.Handle) <> 0 then;
+    if SysClose(F.Handle) <> 0 then;
   Err := OpenPath(F.Name, OFlags, RightsWrite, 0, F.Handle);
   if Err <> 0 then
   begin
@@ -1333,7 +1789,7 @@ begin
   if CheckMode(F.Mode, fmInOut) then
   begin
     if F.Handle > 2 then
-      if _FdClose(F.Handle) <> 0 then;
+      if SysClose(F.Handle) <> 0 then;
     F.Mode := fmClosed
   end
 end;
@@ -1383,16 +1839,16 @@ end;
 
 function SeekTo(Handle, Offset, Whence: LongInt): LongInt;
 var
-  NewOffset: array[0..1] of LongInt;
+  NewOffset: LongInt;
 begin
-  if _FdSeek(Handle, Offset, Whence, LongInt(@NewOffset)) <> 0 then
+  if SysSeek(Handle, Offset, Whence, NewOffset) <> 0 then
   begin
     if InOutRes = 0 then
       InOutRes := 100;
     SeekTo := 0
   end
   else
-    SeekTo := NewOffset[0]
+    SeekTo := NewOffset
 end;
 
 procedure _Seek(var F: TFileRec; N: LongInt);
@@ -1410,15 +1866,15 @@ end;
 
 function _FileSize(var F: TFileRec): LongInt;
 var
-  Stat: array[0..15] of LongInt;
+  Size: LongInt;
 begin
   _FileSize := 0;
   if not CheckMode(F.Mode, fmInOut) then
     Exit;
-  if _FdFilestatGet(F.Handle, LongInt(@Stat)) <> 0 then
+  if SysSize(F.Handle, Size) <> 0 then
     InOutRes := 100
   else
-    _FileSize := Stat[8] div F.RecSize   { size liegt bei Offset 32 }
+    _FileSize := Size div F.RecSize
 end;
 
 function _EofFile(var F: TFileRec): Boolean;
@@ -1429,7 +1885,7 @@ end;
 procedure _Truncate(var F: TFileRec);
 begin
   if CheckMode(F.Mode, fmInOut) then
-    if _FdFilestatSetSize(F.Handle, SeekTo(F.Handle, 0, 1)) <> 0 then
+    if SysSetSize(F.Handle, SeekTo(F.Handle, 0, 1)) <> 0 then
       InOutRes := 101
 end;
 
@@ -1446,7 +1902,7 @@ begin
     Exit
   end;
   P := _Path(F.Name);
-  Err := _PathUnlinkFile(RootFd, LongInt(@P[1]), Length(P));
+  Err := SysUnlink(P);
   if Err <> 0 then
     InOutRes := IoError(Err, 5)
 end;
@@ -1465,7 +1921,7 @@ begin
   end;
   P := _Path(F.Name);
   Q := _Path(NewName);
-  Err := _PathRename(RootFd, LongInt(@P[1]), Length(P), RootFd, LongInt(@Q[1]), Length(Q));
+  Err := SysRename(P, Q);
   if Err <> 0 then
     InOutRes := IoError(Err, 5)
   else
@@ -1487,7 +1943,7 @@ begin
     InOutRes := 3;
     Exit
   end;
-  if _FdClose(Fd) <> 0 then;
+  if SysClose(Fd) <> 0 then;
   while (Length(P) > 0) and (P[Length(P)] = '/') do
     Delete(P, Length(P), 1);
   if P = '.' then
@@ -1503,7 +1959,7 @@ begin
   if InOutRes <> 0 then
     Exit;
   P := _Path(Dir);
-  Err := _PathCreateDirectory(RootFd, LongInt(@P[1]), Length(P));
+  Err := SysMkDir(P);
   if Err <> 0 then
     InOutRes := IoError(Err, 5)
 end;
@@ -1516,7 +1972,7 @@ begin
   if InOutRes <> 0 then
     Exit;
   P := _Path(Dir);
-  Err := _PathRemoveDirectory(RootFd, LongInt(@P[1]), Length(P));
+  Err := SysRmDir(P);
   if Err <> 0 then
     InOutRes := IoError(Err, 5)
 end;
@@ -1760,27 +2216,20 @@ end;
 
 procedure _Randomize;
 var
-  T: array[0..1] of LongInt;
+  T: Real;
 begin
-  if _ClockTimeGet(0, 1, LongInt(@T)) = 0 then
-    RandSeed := T[0] xor T[1]
+  T := _Clock(0);
+  T := T - Int(T / 4294967296.0) * 4294967296.0;
+  RandSeed := Trunc(T - 2147483648.0)
 end;
 
 { ------------------------------------------------------------ Parameter }
 
 procedure LoadArgs;
-var
-  Sizes: array[0..1] of LongInt;
 begin
-  if ArgPtrs <> 0 then
+  if ArgStride <> 0 then
     Exit;
-  if _ArgsSizesGet(LongInt(@Sizes[0]), LongInt(@Sizes[1])) <> 0 then
-    Exit;
-  ArgCount := Sizes[0];
-  ArgPtrs := LongInt(_GetMem(ArgCount * 4 + 4));
-  ArgBuf := LongInt(_GetMem(Sizes[1] + 1));
-  if _ArgsGet(ArgPtrs, ArgBuf) <> 0 then
-    ArgCount := 0
+  SysArgs
 end;
 
 function _ParamCount: Integer;
@@ -1800,7 +2249,7 @@ begin
   Result := '';
   if (I < 0) or (I >= ArgCount) then
     Exit;
-  P := PLongInt(Ptr(0, ArgPtrs + I * 4))^;
+  P := PLongInt(Ptr(0, ArgPtrs + I * ArgStride))^;
   N := 0;
   while (N < 255) and (PChar(Ptr(0, P + N))^ <> #0) do
   begin
@@ -1817,10 +2266,12 @@ begin
   FlushText(TTextRec(Output))
 end;
 
+{ Halt ist ein Anhaltepunkt: Die Laufzeit beendet das Programm in der
+  Aktion (WASI: proc_exit, gojs: wasmExit). }
 procedure _Halt(Code: LongInt);
 begin
   _Done;
-  _ProcExit(Code)
+  Suspend(SuspendHalt, Code)
 end;
 
 procedure InitText(var F: TTextRec; Handle, Mode: LongInt);
@@ -1839,6 +2290,16 @@ begin
   InOutRes := 0;
   CurDir := '';
   ArgPtrs := 0;
+  ArgStride := 0;
+  {$IFDEF GOJS}
+  _GoSetSP(SP);
+  HasInputFn := False;
+  PendingTimeout := 0;
+  WaitingInput := False;
+  LineCap := 0;
+  LineLen := 0;
+  LinePos := 0;
+  {$ENDIF}
   RandSeed := 0;
   FileMode := 2;
   ExitCode := 0;

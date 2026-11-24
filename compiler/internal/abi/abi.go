@@ -1,7 +1,7 @@
-// Package abi beschreibt die Ziel-ABIs. Stand Etappe 6 nur wasi: die
-// WASI-Funktionen, die die Laufzeit (rtl/system.pas) über Intrinsics des
-// Compilers aufruft. In Etappe 9 kommt gojs dazu; nur diese unterste Schicht
-// der Laufzeit unterscheidet sich zwischen den Zielen (PLAN.md).
+// Package abi beschreibt die Ziel-ABIs wasi und gojs: die Importe, die die
+// unterste Schicht der Laufzeit (rtl/system.pas, je Ziel per {$IFDEF WASI}
+// bzw. {$IFDEF GOJS}) über Intrinsics des Compilers aufruft. Nur diese
+// Schicht unterscheidet sich zwischen den Zielen (PLAN.md).
 package abi
 
 // ParamKind ist die WASM-Darstellung eines Arguments. In Pascal sind alle
@@ -46,3 +46,27 @@ var WASI = []Intrinsic{
 	{"_ProcExit", wasi, "proc_exit", []ParamKind{I32}, false},
 	{"_PollOneoff", wasi, "poll_oneoff", []ParamKind{I32, I32, I32, I32}, true},
 }
+
+// GoJS sind die Intrinsics für das Ziel gojs: Funktionen des Moduls "gojs"
+// aus wasm_exec.js. Jede nimmt den Go-Stackzeiger sp; Argumente und
+// Ergebnisse liegen ab sp+8 in 8-Byte-Fächern.
+var GoJS = []Intrinsic{
+	{"_GoWasmExit", "gojs", "runtime.wasmExit", []ParamKind{I32}, false},
+	{"_GoWasmWrite", "gojs", "runtime.wasmWrite", []ParamKind{I32}, false},
+	{"_GoResetMemory", "gojs", "runtime.resetMemoryDataView", []ParamKind{I32}, false},
+	{"_GoNanotime", "gojs", "runtime.nanotime1", []ParamKind{I32}, false},
+	{"_GoWalltime", "gojs", "runtime.walltime", []ParamKind{I32}, false},
+	{"_GoScheduleTimeout", "gojs", "runtime.scheduleTimeoutEvent", []ParamKind{I32}, false},
+	{"_GoClearTimeout", "gojs", "runtime.clearTimeoutEvent", []ParamKind{I32}, false},
+	{"_GoFinalizeRef", "gojs", "syscall/js.finalizeRef", []ParamKind{I32}, false},
+	{"_GoValueGet", "gojs", "syscall/js.valueGet", []ParamKind{I32}, false},
+	{"_GoValueSet", "gojs", "syscall/js.valueSet", []ParamKind{I32}, false},
+	{"_GoValueIndex", "gojs", "syscall/js.valueIndex", []ParamKind{I32}, false},
+	{"_GoValueCall", "gojs", "syscall/js.valueCall", []ParamKind{I32}, false},
+	{"_GoValuePrepareString", "gojs", "syscall/js.valuePrepareString", []ParamKind{I32}, false},
+	{"_GoValueLoadString", "gojs", "syscall/js.valueLoadString", []ParamKind{I32}, false},
+}
+
+// Intrinsics sind alle Intrinsics beider Ziele; ihr Index ergibt die
+// Nummer der Standardroutine im Compiler.
+var Intrinsics = append(append([]Intrinsic{}, WASI...), GoJS...)

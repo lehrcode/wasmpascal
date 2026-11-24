@@ -87,6 +87,9 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 
 	if system != nil {
 		l.m.SuspendAction = l.rtl("_SuspendAction")
+		if p, ok := info.SystemImpl.Syms["_goresumeaction"].(*types.Proc); ok {
+			l.m.ResumeAction = l.funcs[p]
+		}
 	}
 	// Hauptprogramm: erst die Initialisierungen, am Ende _Done (im exit-Block)
 	l.mainInits = inits

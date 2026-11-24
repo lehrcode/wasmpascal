@@ -241,3 +241,73 @@ func (g *generator) driver() *wasm.Func {
 	c.Op(wasm.OpEnd, wasm.OpEnd, wasm.OpEnd)
 	return &wasm.Func{Type: g.mod.TypeIndex(wasm.FuncType{}), Code: c.B}
 }
+
+// gojsExports erzeugt die Schnittstelle von GOOS=js GOARCH=wasm für
+// wasm_exec.js: run(argc, argv) startet das Programm, resume() setzt es nach
+// einem Timer oder einer Eingabe fort, getsp() liefert den Go-Stackzeiger der
+// Laufzeit, mem ist der Speicher. Beide kehren zurück, wenn das Programm
+// anhält; die Laufzeit (_SuspendAction) hat dann einen Timer gesetzt, eine
+// Eingabe angefordert oder das Programm mit wasmExit beendet.
+func (g *generator) gojsExports() {
+	m, mod := g.m, g.mod
+	// Nach dem Lauf: angehalten → Aktion; fertig → wie Halt(0)
+	after := func(c *wasm.Code) {
+		c.Index(wasm.OpGlobalGet, globalState)
+		c.I32Const(stateUnwinding)
+		c.Op(wasm.OpI32Eq)
+		c.Block(wasm.OpIf, wasm.BlockEmpty)
+		c.I32Const(stateNormal)
+		c.Index(wasm.OpGlobalSet, globalState)
+		c.Index(wasm.OpGlobalGet, globalReason)
+		c.Index(wasm.OpGlobalGet, globalArg)
+		c.Index(wasm.OpCall, g.funcIndex[m.SuspendAction])
+		c.Op(wasm.OpDrop)
+		c.Op(wasm.OpElse)
+		c.I32Const(suspendHalt)
+		c.I32Const(0)
+		c.Index(wasm.OpCall, g.funcIndex[m.SuspendAction])
+		c.Op(wasm.OpDrop)
+		c.Op(wasm.OpEnd)
+	}
+	var run wasm.Code
+	run.Index(wasm.OpLocalGet, 0)
+	run.Index(wasm.OpGlobalSet, globalArgc)
+	run.Index(wasm.OpLocalGet, 1)
+	run.Index(wasm.OpGlobalSet, globalArgv)
+	run.Index(wasm.OpCall, g.funcIndex[m.Main])
+	after(&run)
+	run.Op(wasm.OpEnd)
+
+	var resume wasm.Code
+	if m.ResumeAction != nil {
+		resume.Index(wasm.OpCall, g.funcIndex[m.ResumeAction])
+		resume.Index(wasm.OpGlobalSet, globalResume)
+	}
+	resume.I32Const(stateRewinding)
+	resume.Index(wasm.OpGlobalSet, globalState)
+	resume.I32Const(int32(g.stackTop))
+	resume.Index(wasm.OpGlobalSet, globalSP)
+	resume.Index(wasm.OpCall, g.funcIndex[m.Main])
+	after(&resume)
+	resume.Op(wasm.OpEnd)
+
+	var getsp wasm.Code
+	getsp.Index(wasm.OpGlobalGet, globalGoSP)
+	getsp.Op(wasm.OpEnd)
+
+	base := uint32(len(mod.Imports) + len(mod.Funcs))
+	mod.Funcs = append(mod.Funcs,
+		&wasm.Func{Type: mod.TypeIndex(wasm.FuncType{Params: []wasm.ValType{wasm.I32, wasm.I32}}), Code: run.B},
+		&wasm.Func{Type: mod.TypeIndex(wasm.FuncType{}), Code: resume.B},
+		&wasm.Func{Type: mod.TypeIndex(wasm.FuncType{Results: []wasm.ValType{wasm.I32}}), Code: getsp.B},
+	)
+	mod.Exports = []wasm.Export{
+		{Name: "mem", Kind: wasm.ExportMemory, Index: 0},
+		{Name: "run", Kind: wasm.ExportFunc, Index: base},
+		{Name: "resume", Kind: wasm.ExportFunc, Index: base + 1},
+		{Name: "getsp", Kind: wasm.ExportFunc, Index: base + 2},
+	}
+}
+
+// suspendHalt ist der Grund „Programm beendet“ (rtl: SuspendHalt).
+const suspendHalt = 4

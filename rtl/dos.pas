@@ -1,5 +1,6 @@
 { Unit Dos von WasmPascal: nur Datum und Uhrzeit (PLAN.md). Beide kommen
-  aus der WASI-Uhr und sind UTC, weil WASI keine Zeitzone kennt. }
+  aus der Uhr des Ziels (System._Clock) und sind UTC, weil WASI keine
+  Zeitzone kennt. }
 unit Dos;
 
 interface
@@ -12,17 +13,9 @@ implementation
 { Liefert Tage und Hundertstelsekunden seit dem 1. 1. 1970 (UTC). }
 procedure Jetzt(var Tage, Hundertstel: LongInt);
 var
-  T: array[0..1] of LongInt;
-  Ns, Lo, Sek: Real;
+  Ns, Sek: Real;
 begin
-  Tage := 0;
-  Hundertstel := 0;
-  if _ClockTimeGet(0, 1, LongInt(@T)) <> 0 then
-    Exit;
-  Lo := T[0];
-  if Lo < 0 then
-    Lo := Lo + 4294967296.0;
-  Ns := T[1] * 4294967296.0 + Lo;
+  Ns := _Clock(0);
   Sek := Int(Ns / 1E9);
   Tage := Trunc(Int(Sek / 86400));
   Hundertstel := Trunc((Sek - Tage * 86400.0) * 100 + Int((Ns - Sek * 1E9) / 1E7))

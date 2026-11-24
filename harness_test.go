@@ -54,6 +54,7 @@ type harness struct {
 	dir     string // dieselbe Wurzel als Hostpfad, für -update
 	compile compileFunc
 	update  bool
+	node    string // Ziel gojs: Pfad zu node; leer = Ziel wasi mit wazero
 }
 
 // cases liefert alle *.pas, zu denen es eine *.out oder *.err gibt.
@@ -118,7 +119,11 @@ func (h harness) check(ctx context.Context, file, dir string) error {
 // Laufzeitfehler wird als eigene Zeile angehängt, ein Exit-Code ungleich 0 als
 // "[Exit-Code N]". Eingaben kommen aus *.in, falls vorhanden.
 func (h harness) result(ctx context.Context, file, dir string) (got, kind string, err error) {
-	res, err := h.compile(ctx, file, compiler.Options{Target: compiler.TargetWASI, FS: h.fsys})
+	target := compiler.TargetWASI
+	if h.node != "" {
+		target = compiler.TargetGoJS
+	}
+	res, err := h.compile(ctx, file, compiler.Options{Target: target, FS: h.fsys})
 	if err != nil {
 		var d *compiler.Diagnostic
 		if !errors.As(err, &d) {
@@ -134,6 +139,9 @@ func (h harness) result(ctx context.Context, file, dir string) (got, kind string
 	args := []string{path.Base(strings.TrimSuffix(file, ".pas"))}
 	if a, err := fs.ReadFile(h.fsys, strings.TrimSuffix(file, ".pas")+".args"); err == nil {
 		args = append(args, strings.Fields(string(a))...)
+	}
+	if h.node != "" {
+		return h.runNode(ctx, res.Wasm, args, stdin, dir)
 	}
 	var out bytes.Buffer
 	code, err := runner.Run(ctx, res.Wasm, runner.Options{
