@@ -1,0 +1,59 @@
+# CLAUDE.md – WasmPascal
+
+Turbo-Pascal-4.0-Compiler (ohne OOP, plus einige TP-7-/Delphi-Erweiterungen) nach WebAssembly, geschrieben in Go.
+Modul `github.com/lehrcode/wasmpascal`, CLI `pascal` (`build` | `run` | `check`).
+
+**Verbindlich ist [PLAN.md](PLAN.md).** Diese Datei fasst nur die Arbeitsregeln und die Typabbildung zusammen;
+bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichungen.md`.
+
+## Arbeitsregeln
+
+- **Eine Etappe nach der anderen.** Am Ende jeder Etappe: `go test ./...` grün, `go vet ./...` sauber, `gofmt` angewendet,
+  Commit, kurzer Bericht (was geht, was fehlt, offene Fragen) – dann auf Freigabe warten.
+- **Tests zuerst.** Jede neue Sprachfunktion bekommt ein Testprogramm in `testdata/` (`*.pas` + `*.out` bzw. `*.err`).
+  Golden-Files nur mit `-update` neu schreiben und die Diffs prüfen.
+- **Abhängigkeiten:** Paket `compiler` nur Go-Standardbibliothek; wazero nur in `runner` und `cmd/pascal`. Sonst nichts ohne Rückfrage.
+- **WASM-Tauglichkeit des Compilers:** kein `os/exec`, kein cgo, Dateizugriff nur über `fs.FS`.
+  `GOOS=js GOARCH=wasm` und `GOOS=wasip1 GOARCH=wasm` müssen `./compiler/...` bauen (wird im Testlauf geprüft).
+- **Bibliotheksregeln:** kein globaler veränderlicher Zustand, kein `os.Exit`/`log.Fatal`, kein `os.Stdin`/`os.Stdout`
+  außerhalb von `cmd/pascal`; Panics abfangen und als Fehler liefern; `ctx` respektieren.
+  Jede exportierte API hat Doku-Kommentar und mindestens ein `Example`-Test. `cmd/pascal` nutzt nur die öffentliche API.
+- **Fehlermeldungen:** `datei.pas(zeile,spalte): Error NN: Text`, Abbruch beim ersten Fehler.
+- **Codegenerator auf den Scheduler auslegen:** IR immer als CFG; jede Variable muss sich in den Frame auslagern lassen.
+- **Keine eigenmächtigen Spracherweiterungen.** Im Zweifel TP 4.0 nachbilden, Abweichungen in `docs/abweichungen.md`.
+- **Unklares TP-Verhalten:** plausible Annahme treffen, im Code mit `// TP-ANNAHME:` markieren, im Bericht nennen.
+- **Laufzeit in Pascal bevorzugen** (`rtl/*.pas`); Intrinsics in Go/WASM nur, wenn es nicht anders geht.
+- **PLAN.md und `docs/abweichungen.md` pflegen:** erledigte Etappen abhaken, Entscheidungen festhalten.
+
+## Typabbildung und Speichermodell (Kurzfassung)
+
+| Turbo Pascal | WASM-Wert | Im Speicher |
+| --- | --- | --- |
+| Byte, ShortInt, Char, Boolean | `i32` | 1 Byte |
+| Integer, Word, LongInt | `i32` | 4 Byte, kein 16-Bit-Überlauf |
+| Aufzählungen, Teilbereiche | `i32` | 1 Byte bis 256 Werte, sonst 4 Byte |
+| Real, Double, Extended, Comp | `f64` | 8 Byte |
+| Single | `f32` | 4 Byte |
+| Zeiger, `nil` | `i32` | 4 Byte |
+| `string[n]`/`string` | Adresse | immer 256 Byte (Längenbyte + 255 Bytes UTF-8), beim Zuweisen auf `n` gekürzt |
+| `set of T` | Adresse | immer 32 Byte, Operationen mit `v128` |
+| Records, Arrays | Adresse | natürliche Ausrichtung, Varianten als Union |
+| Dateivariablen | Adresse | Laufzeit-Record |
+
+- **Linearer Speicher:** Seite ab Adresse 0 gesperrt (nil) → Datensegment (Globale, typisierte Konstanten) →
+  Schatten-Stack (wächst nach unten, Standard 1 MB, `-stack`/`{$M}`, Überlauf = Runtime error 202) →
+  Heap (Free-List, `memory.grow`, erschöpft = Runtime error 203).
+- Einzelne Struktur höchstens 2 GB; die 64-KB-Grenze von TP entfällt.
+- **Prozeduren:** Skalare ohne Adressbedarf sind WASM-Locals; `var`-Parameter als Adresse; Wertparameter vom Typ
+  Record/Array/String/Menge kopiert der Aufgerufene; verschachtelte Prozeduren bekommen einen Static Link als
+  ersten Parameter; String-/Record-Ergebnisse über eine Adresse des Aufrufers.
+- **Adressfunktionen:** `@x`/`Addr` = lineare Adresse, `Ofs` als LongInt, `Seg` = 0, `Ptr(seg,ofs)` ignoriert `seg`,
+  `CSeg`/`DSeg`/`SSeg`/`SPtr`/`PrefixSeg`/`FreePtr`/`FreeMin` sind Compilerfehler.
+- **Laufzeitfehler:** `Runtime error NNN at datei.pas(zeile) in Prozedur`; Traps über Name Section und Custom Section
+  `wasmpascal.lines`; `-nolines` lässt beides weg.
+- **Zeichensatz:** durchgehend UTF-8, `Char` = Byte, `Length` zählt Bytes, Bezeichner nur ASCII.
+
+## Test-Harness
+
+`go test ./...` führt jedes `testdata/**/*.pas` mit einer zugehörigen `*.out` oder `*.err` aus (Details in
+`testdata/README.md`). `go test . -update` schreibt die erwarteten Ausgaben neu.
