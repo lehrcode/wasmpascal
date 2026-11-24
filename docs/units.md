@@ -260,7 +260,7 @@ Farben für `TextColor` und `TextBackground`:
 | `LowVideo` | Dunkle Schrift: löscht Bit 3 der Schriftfarbe. |
 | `NormVideo` | Zurück zu den Standardfarben des Terminals. |
 | `Delay(MS: Word)` | Wartet `MS` Millisekunden; die Ausgabe wird vorher geschrieben. |
-| `ReadKey: Char` | Liefert das nächste eingegebene Zeichen, Enter als `#13`. **Abweichung:** Die Eingabe ist zeilenweise; `ReadKey` wartet, bis eine Zeile mit Enter abgeschlossen ist, und liefert dann deren Zeichen einzeln. Sondertasten (Pfeile, F-Tasten) gibt es nicht. |
+| `ReadKey: Char` | Liefert eine Taste. **Abweichung:** Die Eingabe ist zeilenweise; `ReadKey` wartet, bis eine Zeile mit Enter abgeschlossen ist, liefert deren erstes Zeichen und verwirft den Rest samt Enter. Eine leere Zeile (nur Enter) ergibt `#13`, das Dateiende `#26`. So liest ein folgendes `ReadLn` eine neue Zeile, wie nach einem Tastendruck in TP. Die Eingabe erscheint auf dem Bildschirm; Sondertasten (Pfeile, F-Tasten) gibt es nicht. |
 | `Sound(Hz: Word)`, `NoSound` | Ohne Wirkung. |
 
 **Nicht vorhanden:** `GotoXY`, `WhereX`, `WhereY`, `Window`, `KeyPressed`,

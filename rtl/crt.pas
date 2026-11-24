@@ -135,15 +135,19 @@ begin
   if _Suspend(2, MS) <> 0 then;
 end;
 
-{ Zeilenmodus: wartet, bis eine Zeile mit Enter abgeschlossen ist, und
-  liefert deren Zeichen einzeln, Enter als #13. Sondertasten gibt es nicht. }
+{ Zeilenmodus: wartet, bis eine Zeile mit Enter abgeschlossen ist, liefert
+  deren erstes Zeichen und verwirft den Rest samt Enter, damit ein folgendes
+  ReadLn eine neue Zeile liest. Eine leere Zeile ergibt #13, das Dateiende
+  #26. Sondertasten gibt es nicht. }
 function ReadKey: Char;
 var
   C: Char;
 begin
   Read(C);
   if C = #10 then
-    C := #13;
+    C := #13
+  else if C <> #26 then
+    ReadLn;
   ReadKey := C
 end;
 
