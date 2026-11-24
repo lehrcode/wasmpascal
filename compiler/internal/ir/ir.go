@@ -314,6 +314,18 @@ type Grow struct {
 	Dst   *Var
 }
 
+// Suspend ist ein Anhaltepunkt: Die Prozedur gibt die Kontrolle an den Host
+// ab (Grund und Argument in Globalen) und setzt danach mit Dst = Ergebnis
+// des Hosts fort. Nur in anhaltefähigen Funktionen.
+type Suspend struct {
+	Reason, Arg Expr
+	Dst         *Var
+}
+
+func (s Suspend) String() string {
+	return fmt.Sprintf("%s := suspend(%s, %s)", s.Dst.Name, s.Reason, s.Arg)
+}
+
 // Pos ist eine Quelltextstelle: Index in Module.Files und Zeile.
 type Pos struct{ File, Line int }
 
@@ -442,8 +454,15 @@ type Func struct {
 	HasNested bool
 	// RTL: Routine der System-Unit; sie lässt die vorgemerkte Quelltextstelle
 	// unverändert, damit Fehler darin die Anweisung des Aufrufers nennen.
-	RTL    bool
-	Params []*Var // WASM-Parameter in Reihenfolge
+	RTL bool
+	// HasGoto: Der Kontrollfluss kann irreduzibel sein; die Funktion wird als
+	// Dispatch-Schleife übersetzt.
+	HasGoto bool
+	// Suspendable: Die Funktion erreicht einen Anhaltepunkt (gesetzt von
+	// analysis). Ihre Variablen liegen alle im Frame, sie wird als
+	// Dispatch-Schleife übersetzt.
+	Suspendable bool
+	Params      []*Var // WASM-Parameter in Reihenfolge
 	// Result ist die Ergebnisvariable: skalar → Rückgabewert; Aggregat →
 	// Indirect über den versteckten ersten Parameter.
 	Result *Var
@@ -509,4 +528,7 @@ type Module struct {
 	Data      []byte // Inhalt des Datensegments ab DataBase
 	StackSize int64
 	Hosts     []*Host // benutzte Importe in Reihenfolge der ersten Verwendung
+	// SuspendAction führt unter WASI die Aktion eines Anhaltepunkts aus
+	// (rtl: _SuspendAction); nil ohne System-Unit.
+	SuspendAction *Func
 }

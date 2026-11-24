@@ -44,4 +44,5 @@ var WASI = []Intrinsic{
 	{"_ArgsGet", wasi, "args_get", []ParamKind{I32, I32}, true},
 	{"_ClockTimeGet", wasi, "clock_time_get", []ParamKind{I32, I64U, I32}, true},
 	{"_ProcExit", wasi, "proc_exit", []ParamKind{I32}, false},
+	{"_PollOneoff", wasi, "poll_oneoff", []ParamKind{I32, I32, I32, I32}, true},
 }

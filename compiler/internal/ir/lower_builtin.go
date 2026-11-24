@@ -316,6 +316,10 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 	case check.BContinue:
 		s.jump(s.continues[len(s.continues)-1])
 		return nil
+	case check.BSuspend:
+		r := s.temp(types.LongInt)
+		s.emit(Suspend{Reason: arg(0), Arg: arg(1), Dst: r})
+		return Get{Var: r}
 	case check.BRunError:
 		code := s.temp(types.LongInt)
 		s.emit(Set{Var: code, Val: arg(0)})

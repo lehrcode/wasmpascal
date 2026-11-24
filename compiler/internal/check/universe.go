@@ -97,6 +97,7 @@ const (
 	BMemSize
 	BHeapBase
 	BRunError
+	BSuspend
 	bUnsupported
 
 	// BWasiBase + i ist abi.WASI[i].
@@ -132,7 +133,7 @@ var builtinProcs = []struct {
 	{"ParamStr", BParamStr, true}, {"Random", BRandom, true}, {"Pi", BPi, true},
 	{"Ptr", BPtr, true}, {"Addr", BAddr, true}, {"Ofs", BOfs, true}, {"Seg", BSeg, true},
 	{"_MemGrow", BMemGrow, true}, {"_MemSize", BMemSize, true}, {"_HeapBase", BHeapBase, true},
-	{"_RunError", BRunError, false},
+	{"_RunError", BRunError, false}, {"_Suspend", BSuspend, true},
 }
 
 // unsupported sind Bezeichner der System-Unit von TP 4.0, die es wegen des

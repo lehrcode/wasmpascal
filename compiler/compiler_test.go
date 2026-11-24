@@ -1,12 +1,15 @@
 package compiler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
+	"github.com/lehrcode/wasmpascal/runner"
 )
 
 func TestDiagnosticError(t *testing.T) {
@@ -98,5 +101,25 @@ func TestUnitsInIncludePaths(t *testing.T) {
 	unit := fstest.MapFS{"u.pas": {Data: []byte("unit U;\ninterface\nuses Crt;\nprocedure Rot;\nimplementation\nuses Dos;\nprocedure Rot;\nbegin\n  TextColor(Red)\nend;\nend.\n")}}
 	if err := Check(ctx, "u.pas", Options{FS: unit}); err != nil {
 		t.Errorf("Check mit Crt/Dos: %v", err)
+	}
+}
+
+// TestDelayWaits prüft, dass Delay über den Scheduler wirklich wartet.
+func TestDelayWaits(t *testing.T) {
+	src := fstest.MapFS{"p.pas": {Data: []byte("program P;\nuses Crt;\nbegin\n  Write('a');\n  Delay(200);\n  WriteLn('b')\nend.\n")}}
+	res, err := Compile(context.Background(), "p.pas", Options{FS: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	start := time.Now()
+	if _, err := runner.Run(context.Background(), res.Wasm, runner.Options{Stdout: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d < 200*time.Millisecond || d > 5*time.Second {
+		t.Errorf("Delay(200) dauerte %v", d)
+	}
+	if out.String() != "ab\n" {
+		t.Errorf("Ausgabe %q", out.String())
 	}
 }

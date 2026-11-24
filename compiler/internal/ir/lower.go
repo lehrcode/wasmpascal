@@ -85,6 +85,9 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 	l.declare(info.Root, nil, "")
 	bodies = append(bodies, procDecls(prog.Block.Decls)...)
 
+	if system != nil {
+		l.m.SuspendAction = l.rtl("_SuspendAction")
+	}
 	// Hauptprogramm: erst die Initialisierungen, am Ende _Done (im exit-Block)
 	l.mainInits = inits
 	l.body(main, nil, prog.Block.Body.Stmts)
@@ -414,12 +417,13 @@ type fnState struct {
 	at        Pos               // aktuelle Quelltextstelle
 	io        bool              // {$I+} gilt für die aktuelle Anweisung
 	rtl       bool              // Code der System-Unit (ohne Positionspflege)
+	labels    map[*types.Label]*Block
 	tmp       int
 }
 
 // body übersetzt einen Rumpf.
 func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt) {
-	s := &fnState{l: l, fn: f, proc: p, withs: map[ast.Expr]*Var{}, at: f.Pos, rtl: f.RTL}
+	s := &fnState{l: l, fn: f, proc: p, withs: map[ast.Expr]*Var{}, at: f.Pos, rtl: f.RTL, labels: map[*types.Label]*Block{}}
 	f.Entry = f.NewBlock()
 	s.cur = f.Entry
 	s.exit = f.NewBlock()
@@ -542,6 +546,9 @@ func (s *fnState) stmt(st ast.Stmt) {
 			s.stmt(b)
 		}
 	case *ast.LabeledStmt:
+		b := s.labelBlock(st.Label)
+		s.jump(b)
+		s.cur = b
 		s.stmt(st.Stmt)
 	case *ast.AssignStmt:
 		s.assign(st)
@@ -599,7 +606,8 @@ func (s *fnState) stmt(st ast.Stmt) {
 		}
 		s.stmt(st.Body)
 	case *ast.GotoStmt:
-		unsupported(st.Pos(), "goto is supported from stage 8")
+		s.fn.HasGoto = true
+		s.jump(s.labelBlock(st.Label))
 	default:
 		panic("ir: unbekannte Anweisung")
 	}
@@ -634,6 +642,17 @@ func ioChecks(st ast.Stmt) bool {
 		return st.IOChecks
 	}
 	return true
+}
+
+// labelBlock liefert den Block, an dem eine Marke beginnt.
+func (s *fnState) labelBlock(id *ast.Ident) *Block {
+	l := s.l.info.Uses[id].(*types.Label)
+	b, ok := s.labels[l]
+	if !ok {
+		b = s.fn.NewBlock()
+		s.labels[l] = b
+	}
+	return b
 }
 
 func (s *fnState) loop(brk, cont *Block, body func()) {

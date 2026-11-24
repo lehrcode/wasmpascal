@@ -99,6 +99,7 @@ const (
 	ErrNumExprExpected     = 79
 	ErrLabelNotInBlock     = 80
 	ErrLabelDefined        = 81
+	ErrUndefinedLabel      = 82
 	ErrInvalidAt           = 83
 	ErrInvalidForVar       = 97
 	ErrIntVarExpected      = 98
@@ -179,6 +180,7 @@ var messages = map[int]string{
 	ErrNumExprExpected:     "Integer or real expression expected",
 	ErrLabelNotInBlock:     "Label not within current block",
 	ErrLabelDefined:        "Label already defined",
+	ErrUndefinedLabel:      "Undefined label in preceding statement part",
 	ErrInvalidAt:           "Invalid @ argument",
 	ErrInvalidForVar:       "Invalid FOR control variable",
 	ErrIntVarExpected:      "Integer variable expected",

@@ -3,8 +3,8 @@
   Bildschirmsteuerung ueber ANSI-Sequenzen, ohne Schatten-Bildschirm und
   ohne Cursor-Verfolgung: Die Ausgabe geht als Text an das Terminal, Umbruch
   und Rollen uebernimmt das Terminal (PLAN.md). Nicht enthalten sind GotoXY,
-  WhereX, WhereY, Window und KeyPressed. Delay und ReadKey folgen mit dem
-  Scheduler in Etappe 8. }
+  WhereX, WhereY, Window und KeyPressed. Delay und ReadKey sind
+  Anhaltepunkte des Schedulers. }
 unit Crt;
 
 interface
@@ -47,6 +47,8 @@ procedure LowVideo;
 procedure NormVideo;
 procedure Sound(Hz: Word);
 procedure NoSound;
+procedure Delay(MS: Word);
+function ReadKey: Char;
 
 implementation
 
@@ -124,6 +126,25 @@ procedure NormVideo;
 begin
   TextAttr := NormAttr;
   Write(Esc, '[0m')
+end;
+
+{ Wartet MS Millisekunden; die Ausgabe wird vorher geleert. }
+procedure Delay(MS: Word);
+begin
+  Flush(Output);
+  if _Suspend(2, MS) <> 0 then;
+end;
+
+{ Zeilenmodus: wartet, bis eine Zeile mit Enter abgeschlossen ist, und
+  liefert deren Zeichen einzeln, Enter als #13. Sondertasten gibt es nicht. }
+function ReadKey: Char;
+var
+  C: Char;
+begin
+  Read(C);
+  if C = #10 then
+    C := #13;
+  ReadKey := C
 end;
 
 procedure Sound(Hz: Word);

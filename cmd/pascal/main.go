@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 
@@ -22,8 +23,21 @@ import (
 )
 
 func main() {
+	// Strg+C: Farben zurücksetzen (ESC[0m), damit keine Farbe im Terminal
+	// hängen bleibt, und beenden. Das Terminal bleibt im Zeilenmodus; ein
+	// Programm, das gerade auf eine Eingabezeile wartet, wird so sofort beendet.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	go func() {
+		<-sig
+		fmt.Fprint(os.Stdout, resetColors)
+		os.Exit(130)
+	}()
 	os.Exit(run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
+
+// resetColors setzt die ANSI-Attribute zurück und beginnt eine neue Zeile.
+const resetColors = "\x1b[0m\n"
 
 const usage = `Aufruf:
   pascal build [Optionen] datei.pas          übersetzt nach WebAssembly

@@ -61,7 +61,6 @@ func checkString(src string) (*Info, error) {
 func TestParserPrograms(t *testing.T) {
 	skip := map[string]string{
 		"17_unit.pas":         "uses Crt/Dos",
-		"21_goto.pas":         "goto",
 		"30_zahlenraten.pas":  "uses Crt",
 		"31_qualifiziert.pas": "uses Crt/Dos",
 		"34_ohne_kopf.pas":    "uses Crt",
@@ -350,7 +349,9 @@ func TestErrors(t *testing.T) {
 		{"const-parameter", "procedure P(const s: string); begin s := '' end; begin end.", "t.pas(1,37): Error 43: Illegal assignment"},
 		{"const-parameter weitergeben", "procedure Q(var s: string); begin end; procedure P(const s: string); begin Q(s) end; begin end.", "t.pas(1,78): Error 122: Invalid variable reference"},
 		{"with kein record", "var i: Integer; begin with i do end.", "t.pas(1,28): Error 75: Record variable expected"},
-		{"goto", "label 1; begin goto 1; 1: end.", "t.pas(1,16): Error 902: Not supported by WasmPascal (goto is not supported before stage 8)"},
+		{"goto ohne marke im rumpf", "label 1, 2; begin goto 2; 1: end.", "t.pas(1,24): Error 82: Undefined label in preceding statement part (2)"},
+		{"goto nach außen", "label 1; procedure P; begin goto 1 end; begin 1: end.", "t.pas(1,34): Error 80: Label not within current block"},
+		{"goto unbekannt", "begin goto 7 end.", "t.pas(1,12): Error 3: Unknown identifier (7)"},
 		{"label unbekannt", "begin 1: end.", "t.pas(1,7): Error 3: Unknown identifier (1)"},
 		{"label doppelt", "label 1; begin 1: ; 1: end.", "t.pas(1,21): Error 81: Label already defined"},
 		{"label außen", "label 1; procedure P; begin 1: end; begin 1: end.", "t.pas(1,29): Error 80: Label not within current block"},

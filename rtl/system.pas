@@ -76,6 +76,12 @@ const
   RightsRead = $200026;
   RightsWrite = $600077;
 
+  { Gruende fuer _Suspend (Scheduler, PLAN.md) }
+  SuspendYield = 1;   { Zeitscheibe bei Ausgaben abgelaufen }
+  SuspendDelay = 2;   { Delay, Argument in Millisekunden }
+  SuspendInput = 3;   { Eingabe gebraucht }
+  YieldMs = 30;
+
 var
   InOutRes: Integer;     { Fehler der letzten E/A, bis IOResult }
   CurDir: string;        { aktuelles Verzeichnis relativ zur Wurzel, ohne / }
@@ -84,6 +90,7 @@ var
   end;
   IoCount: LongInt;
   ArgCount, ArgPtrs, ArgBuf: LongInt;
+  LastYield: Real;       { Zeitpunkt des letzten Anhaltens in ms }
   HeapPtr: LongInt;      { erste Adresse oberhalb aller vergebenen Bloecke }
   HeapEnd: LongInt;      { Ende des vorhandenen Speichers }
   FreeList: PFreeBlock;  { freie Bloecke unterhalb von HeapPtr, nach Adresse sortiert }
@@ -912,6 +919,59 @@ begin
   InOutRes := 0
 end;
 
+{ ------------------------------------------------------------ Scheduler }
+
+{ Monotone Uhr in Millisekunden. }
+function NowMs: Real;
+var
+  T: array[0..1] of LongInt;
+  Lo: Real;
+begin
+  NowMs := 0;
+  if _ClockTimeGet(1, 1, LongInt(@T)) = 0 then
+  begin
+    Lo := T[0];
+    if Lo < 0 then
+      Lo := Lo + 4294967296.0;
+    NowMs := (T[1] * 4294967296.0 + Lo) / 1E6
+  end
+end;
+
+procedure FlushText(var F: TTextRec); forward;
+
+{ Haelt an: Ausgaben leeren, Kontrolle an den Host, danach weiter. }
+procedure Suspend(Reason, Arg: LongInt);
+begin
+  FlushText(TTextRec(Output));
+  if _Suspend(Reason, Arg) <> 0 then;
+  LastYield := NowMs
+end;
+
+{ Fuehrt unter WASI die Aktion eines Anhaltepunkts aus (der Treiber in
+  _start ruft sie zwischen Abwickeln und Fortsetzen). Eingaben liest WASI
+  danach blockierend; Delay wartet ueber poll_oneoff. }
+function _SuspendAction(Reason, Arg: LongInt): LongInt;
+var
+  Sub: array[0..11] of LongInt;   { subscription, 48 Byte }
+  Ev: array[0..7] of LongInt;     { event, 32 Byte }
+  N: LongInt;
+  T: Real;
+begin
+  _SuspendAction := 0;
+  if (Reason = SuspendDelay) and (Arg > 0) then
+  begin
+    FillChar(Sub, SizeOf(Sub), 0);
+    Sub[4] := 1;                      { clock_id: monotonic }
+    T := Arg * 1E6;                   { Nanosekunden }
+    Sub[7] := Trunc(T / 4294967296.0);
+    T := T - Sub[7] * 4294967296.0;
+    if T >= 2147483648.0 then
+      T := T - 4294967296.0;
+    Sub[6] := Trunc(T);
+    if _PollOneoff(LongInt(@Sub), LongInt(@Ev), 1, LongInt(@N)) <> 0 then;
+  end
+end;
+
 procedure _Assign(var F: TFileRec; const Name: string);
 begin
   F.Handle := -1;
@@ -1052,11 +1112,16 @@ begin
     PutChar(F, #10)
 end;
 
-{ Nach jedem Write/WriteLn: Konsolenausgaben sofort weitergeben. }
+{ Nach jedem Write/WriteLn: Konsolenausgaben sofort weitergeben; nach mehr
+  als 30 ms seit dem letzten Anhalten ist Write ein Anhaltepunkt. }
 procedure _WriteEnd(var F: TTextRec);
 begin
   if (F.Mode = fmOutput) and (F.Handle <= 2) then
-    FlushText(F)
+  begin
+    FlushText(F);
+    if NowMs - LastYield > YieldMs then
+      Suspend(SuspendYield, 0)
+  end
 end;
 
 { Liefert False am Dateiende; liest bei Bedarf nach. }
@@ -1065,7 +1130,7 @@ begin
   if F.BufPos >= F.BufEnd then
   begin
     if F.Handle = 0 then
-      FlushText(TTextRec(Output));
+      Suspend(SuspendInput, 0);   { Anhaltepunkt: Eingabe gebraucht }
     IoVec.Buf := LongInt(@F.Buffer);
     IoVec.Len := BufSize;
     if _FdRead(F.Handle, LongInt(@IoVec), 1, LongInt(@IoCount)) <> 0 then
@@ -1777,6 +1842,7 @@ begin
   RandSeed := 0;
   FileMode := 2;
   ExitCode := 0;
+  LastYield := NowMs;
   InitText(TTextRec(Input), 0, fmInput);
   InitText(TTextRec(Output), 1, fmOutput)
 end.

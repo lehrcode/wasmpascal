@@ -235,7 +235,10 @@ func (c *checker) stmt(s ast.Stmt) {
 		c.stmt(s.Body)
 		c.withs = c.withs[:n]
 	case *ast.GotoStmt:
-		c.fail(s.Pos(), source.ErrNotSupported, "goto is not supported before stage 8")
+		l := c.labelSym(s.Label)
+		if !l.Used {
+			l.Used, l.UsedAt = true, s.Label.Pos()
+		}
 	case *ast.LabeledStmt:
 		c.label(s.Label)
 		c.stmt(s.Stmt)
@@ -325,7 +328,9 @@ func (c *checker) forIn(s *ast.ForInStmt) {
 	delete(c.readOnly, v)
 }
 
-func (c *checker) label(id *ast.Ident) {
+// labelSym löst eine Marke auf; sie muss im aktuellen Block deklariert sein
+// (TP erlaubt keine Sprünge aus einer Prozedur heraus).
+func (c *checker) labelSym(id *ast.Ident) *types.Label {
 	sym, sc := c.scope.Lookup(id.Name)
 	l, ok := sym.(*types.Label)
 	switch {
@@ -333,9 +338,15 @@ func (c *checker) label(id *ast.Ident) {
 		c.fail(id.Pos(), source.ErrUnknownIdent, "%s", id.Text)
 	case sc != c.scope:
 		c.fail(id.Pos(), source.ErrLabelNotInBlock, "")
-	case l.Defined:
+	}
+	c.info.Uses[id] = l
+	return l
+}
+
+func (c *checker) label(id *ast.Ident) {
+	l := c.labelSym(id)
+	if l.Defined {
 		c.fail(id.Pos(), source.ErrLabelDefined, "")
 	}
 	l.Defined = true
-	c.info.Uses[id] = l
 }

@@ -357,5 +357,12 @@ func (c *checker) checkForwards(s *types.Scope) {
 	}
 }
 
-// checkLabels ist ein Platzhalter: Bis Etappe 8 ist goto ohnehin ein Fehler.
-func (c *checker) checkLabels(*types.Scope) {}
+// checkLabels meldet Marken, zu denen gesprungen wird, die aber im
+// Anweisungsteil nicht vorkommen (Error 82).
+func (c *checker) checkLabels(s *types.Scope) {
+	for _, sym := range s.Order {
+		if l, ok := sym.(*types.Label); ok && l.Used && !l.Defined {
+			c.fail(l.UsedAt, source.ErrUndefinedLabel, "%s", l.Text())
+		}
+	}
+}

@@ -4,6 +4,7 @@
 package codegen
 
 import (
+	"github.com/lehrcode/wasmpascal/compiler/internal/analysis"
 	"github.com/lehrcode/wasmpascal/compiler/internal/ir"
 	"github.com/lehrcode/wasmpascal/compiler/internal/types"
 	"github.com/lehrcode/wasmpascal/compiler/internal/wasm"
@@ -27,10 +28,17 @@ const (
 	globalFile = 2 // Datei der aktuellen Anweisung (Index in wasmpascal.lines)
 	globalLine = 3 // Zeile der aktuellen Anweisung
 	globalFunc = 4 // Funktionsindex der aktuellen Prozedur
+
+	// Scheduler (dispatch.go)
+	globalState  = 5 // 0 normal, 1 unwinding, 2 rewinding
+	globalReason = 6 // Grund des Anhaltens
+	globalArg    = 7 // Argument des Anhaltens
+	globalResume = 8 // Ergebnis des Hosts beim Fortsetzen
 )
 
-// Namen der exportierten Laufzeitfehler-Globalen.
-var GlobalExports = [...]string{"", "__rt_code", "__rt_file", "__rt_line", "__rt_func"}
+// GlobalExports sind die Namen der exportierten Globalen.
+var GlobalExports = [...]string{"", "__rt_code", "__rt_file", "__rt_line", "__rt_func",
+	"__sched_state", "__sched_reason", "__sched_arg", "__sched_resume"}
 
 // Generate erzeugt das Binärmodul.
 //
@@ -38,9 +46,10 @@ var GlobalExports = [...]string{"", "__rt_code", "__rt_file", "__rt_line", "__rt
 // Datensegment, danach der Schatten-Stack, der von seinem Ende nach unten
 // wächst, dahinter der Heap (rtl/system.pas, wächst mit memory.grow).
 func Generate(m *ir.Module, opts Options) []byte {
+	analysis.MarkSuspendable(m)
 	mod := &wasm.Module{}
 	g := &generator{m: m, mod: mod, opts: opts, funcIndex: map[*ir.Func]uint32{}, hostIndex: map[*ir.Host]uint32{},
-		spill: map[*ir.Var]int64{}, frameSize: map[*ir.Func]int64{}}
+		spill: map[*ir.Var]int64{}, frameSize: map[*ir.Func]int64{}, stateSlot: map[*ir.Func]int64{}}
 
 	// Importe in Reihenfolge der ersten Verwendung
 	for _, f := range m.Funcs {
@@ -68,7 +77,7 @@ func Generate(m *ir.Module, opts Options) []byte {
 	i32 := func(v int64) wasm.Global {
 		return wasm.Global{Type: wasm.I32, Mutable: true, Init: wasm.AppendS32([]byte{wasm.OpI32Const}, int32(v))}
 	}
-	mod.Globals = []wasm.Global{i32(g.stackTop), i32(0), i32(0), i32(0), i32(0)}
+	mod.Globals = []wasm.Global{i32(g.stackTop), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0)}
 	if len(m.Data) > 0 {
 		mod.Data = []wasm.Data{{Offset: ir.DataBase, Bytes: m.Data}}
 	}
@@ -81,11 +90,16 @@ func Generate(m *ir.Module, opts Options) []byte {
 	for _, f := range m.Funcs {
 		mod.Funcs = append(mod.Funcs, g.function(f))
 	}
+	start := g.funcIndex[m.Main]
+	if m.SuspendAction != nil {
+		start = uint32(len(mod.Imports) + len(mod.Funcs))
+		mod.Funcs = append(mod.Funcs, g.driver())
+	}
 	mod.Exports = []wasm.Export{
 		{Name: "memory", Kind: wasm.ExportMemory, Index: 0},
-		{Name: "_start", Kind: wasm.ExportFunc, Index: g.funcIndex[m.Main]},
+		{Name: "_start", Kind: wasm.ExportFunc, Index: start},
 	}
-	for i := globalCode; i <= globalFunc; i++ {
+	for i := globalCode; i <= globalResume; i++ {
 		mod.Exports = append(mod.Exports, wasm.Export{Name: GlobalExports[i], Kind: wasm.ExportGlobal, Index: uint32(i)})
 	}
 	if !opts.NoLines {
@@ -105,6 +119,8 @@ type generator struct {
 	// spill: Indirect-Variablen, auf die innere Prozeduren zugreifen; ihre
 	// Adresse liegt zusätzlich an diesem Offset im Frame.
 	spill map[*ir.Var]int64
+	// stateSlot: Offset des gesicherten Segments anhaltefähiger Funktionen.
+	stateSlot map[*ir.Func]int64
 }
 
 func valType(t ir.ValType) wasm.ValType {
@@ -137,6 +153,9 @@ func (g *generator) layout(f *ir.Func) {
 		switch v.Storage {
 		case ir.Undecided:
 			switch {
+			case f.Suspendable:
+				// alle Variablen überdauern das Anhalten im Frame
+				v.Storage = ir.Frame
 			case v.Temp:
 				v.Storage = ir.Local
 			case !v.Scalar || v.Addressed || g.opts.ForceFrame:
@@ -157,6 +176,9 @@ func (g *generator) layout(f *ir.Func) {
 			}
 		}
 	}
+	if f.Suspendable {
+		g.stateSlot[f] = place(4, 4)
+	}
 	if size == 0 && f.HasNested {
 		size = 16 // innere Prozeduren brauchen eine Frame-Adresse
 	}
@@ -172,6 +194,8 @@ type funcGen struct {
 	local     map[*ir.Var]uint32
 	fp        uint32
 	frameSize int64
+	st        uint32 // Zustandsvariable der Dispatch-Schleife
+	loopDepth uint32 // Tiefe des Schleifenkopfs im aktuellen Segment
 }
 
 func (g *generator) function(f *ir.Func) *wasm.Func {
@@ -194,6 +218,9 @@ func (g *generator) function(f *ir.Func) *wasm.Func {
 	}
 	if fg.frameSize > 0 {
 		fg.fp = newLocal(wasm.I32)
+	}
+	if isDispatch(f) {
+		fg.st = newLocal(wasm.I32)
 	}
 	for _, v := range f.Vars {
 		switch {
@@ -227,6 +254,13 @@ func (g *generator) function(f *ir.Func) *wasm.Func {
 		c.Op(wasm.OpEnd)
 		c.Index(wasm.OpLocalGet, fg.fp)
 		c.Index(wasm.OpGlobalSet, globalSP)
+		if f.Suspendable {
+			// Beim Fortsetzen stehen die Parameter schon (womöglich verändert) im Frame.
+			c.Index(wasm.OpGlobalGet, globalState)
+			c.I32Const(stateRewinding)
+			c.Op(wasm.OpI32Ne)
+			c.Block(wasm.OpIf, wasm.BlockEmpty)
+		}
 		for _, v := range f.Vars {
 			switch {
 			case v.Param >= 0 && v.Storage == ir.Frame:
@@ -239,10 +273,17 @@ func (g *generator) function(f *ir.Func) *wasm.Func {
 				c.Mem(wasm.OpI32Store, 2, uint32(g.spill[v]))
 			}
 		}
+		if f.Suspendable {
+			c.Op(wasm.OpEnd)
+		}
 	}
 
-	s := &structurer{g: analyze(f.Entry), code: c, fg: fg}
-	s.doTree(f.Entry, nil)
+	if isDispatch(f) {
+		fg.dispatch()
+	} else {
+		s := &structurer{g: analyze(f.Entry), code: c, fg: fg}
+		s.doTree(f.Entry, nil)
+	}
 	c.Op(wasm.OpUnreachable, wasm.OpEnd)
 	return &wasm.Func{Type: typ, Locals: fg.locals, Code: c.B}
 }

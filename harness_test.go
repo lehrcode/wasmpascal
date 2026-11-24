@@ -131,9 +131,13 @@ func (h harness) result(ctx context.Context, file, dir string) (got, kind string
 	if in, err := fs.ReadFile(h.fsys, strings.TrimSuffix(file, ".pas")+".in"); err == nil {
 		stdin = bytes.NewReader(in)
 	}
+	args := []string{path.Base(strings.TrimSuffix(file, ".pas"))}
+	if a, err := fs.ReadFile(h.fsys, strings.TrimSuffix(file, ".pas")+".args"); err == nil {
+		args = append(args, strings.Fields(string(a))...)
+	}
 	var out bytes.Buffer
 	code, err := runner.Run(ctx, res.Wasm, runner.Options{
-		Args:   []string{path.Base(strings.TrimSuffix(file, ".pas"))},
+		Args:   args,
 		Stdin:  stdin,
 		Stdout: &out,
 		Stderr: &out,

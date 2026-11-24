@@ -142,7 +142,9 @@ type Unit struct {
 // Label ist eine Sprungmarke.
 type Label struct {
 	symBase
-	Defined bool
+	Defined bool       // kommt im Anweisungsteil vor
+	Used    bool       // Ziel eines goto
+	UsedAt  source.Pos // erstes goto
 }
 
 // ScopeKind unterscheidet Scopes.

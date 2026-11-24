@@ -406,6 +406,11 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 		count(1, 1)
 		c.intExpr(args[0])
 		return none
+	case BSuspend:
+		count(2, 2)
+		c.intExpr(args[0])
+		c.intExpr(args[1])
+		return val(types.LongInt)
 
 	// ---------------------------------------------------------------- Adressen
 	case BPtr:
