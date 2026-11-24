@@ -22,6 +22,23 @@ procedure Aussen(n: Integer) [level 1]
     result Result: Integer (size 4)
     param k: Integer (size 4)
     procedure Innen [level 3]
+type TPunkt = record (size 8, align 4)
+  x: Integer @0
+  y: Integer @4
+type TZiffern = set of 0..9 (size 32, align 4)
+function Punkt(x: Integer; y: Integer): TPunkt [level 1]
+  result Result: TPunkt (size 8)
+  param x: Integer (size 4)
+  param y: Integer (size 4)
+function Quadrate: TFeld [level 1]
+  result Result: TFeld (size 20)
+  var i: Integer (size 4)
+function Gerade: TZiffern [level 1]
+  result Result: TZiffern (size 32)
+function Zaehlen: Integer [level 1]
+  result Result: Integer (size 4)
 function Text(s: string): string [level 1]
   result Result: string (size 256)
   param s: string (size 256)
+var p: TPunkt (size 8)
+var q: TFeld (size 20)

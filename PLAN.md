@@ -44,6 +44,8 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 | `Break`, `Continue` | TP 7 | Nur innerhalb von `for`, `while`, `repeat` und `for … in`; sonst Compilerfehler. |
 | `Low`, `High` | TP 7 | Für Ordinaltypen und deren Variablen, Arrays (Indexgrenzen) und Strings (`Low` = 0, `High` = deklarierte Maximallänge in Bytes). Immer zur Übersetzungszeit bekannt. |
 | `const`-Parameter | TP 7 | Im Rumpf schreibgeschützt. Records, Arrays, Strings und Mengen werden per Adresse übergeben, ohne Kopie; Skalare per Wert. |
+| Funktionsaufruf als Anweisung | TP 6 (`{$X+}`), Delphi | Immer erlaubt, ohne Schalter: Das Ergebnis eigener Funktionen wird verworfen. Wie bei `{$X+}` gilt das nicht für Standardfunktionen der System-Unit. |
+| Strukturierte Funktionsergebnisse | Delphi 1.0 | Funktionen dürfen alle Typen außer Dateien zurückgeben, also auch Records, Arrays und Mengen. Der Ergebnistyp ist ein Typbezeichner. Felder und Elemente des Ergebnisses setzt man über `Result`; `F.x` im Rumpf ist ein rekursiver Aufruf. |
 | `for … in` | Delphi 2005 | Über Arrays (alle Elemente in Indexreihenfolge), Strings (Bytes als `Char`) und Mengen (enthaltene Elemente aufsteigend). Die Schleifenvariable ist im Rumpf schreibgeschützt. Keine Enumeratoren, da es keine Klassen gibt. |
 
 Bewusst nicht aufgenommen: offene Array-Parameter (`array of T`) und Standardwerte für Parameter.
@@ -228,7 +230,7 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 - `var`-Parameter werden als Adresse (`i32`) übergeben.
 - Wertparameter vom Typ Record, Array, String oder Menge kopiert der Aufgerufene in seinen eigenen Frame.
 - Verschachtelte Prozeduren bekommen einen Static Link als versteckten ersten Parameter: die Frame-Adresse der umschließenden Prozedur. Locals einer Prozedur, auf die eine innere Prozedur zugreift, liegen deshalb immer im Frame auf dem Schatten-Stack.
-- Funktionsergebnisse vom Typ String oder Record werden über eine vom Aufrufer bereitgestellte Adresse zurückgegeben.
+- Funktionsergebnisse vom Typ String, Record, Array oder Menge werden über eine vom Aufrufer bereitgestellte Adresse zurückgegeben.
 
 ## Scheduler und anhaltefähige Prozeduren
 
@@ -295,6 +297,7 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - Erweiterungen: Result, schreibgeschützte Konstanten, const-Parameter, Low/High, Prüfung von Break/Continue. Units noch ohne Mehrdatei-Auflösung; die System-Unit ist zunächst ein Stub.
 - **Fertig, wenn:** Fehler-Golden-Tests (`*.err`) für typische Typfehler und positive Tests für alle Konstrukte bestehen.
 - *Erledigt (Nov 24, 2026).* Paket `types` (Typen mit Größen und Ausrichtung, Konstantenwerte, Symbole, Scopes) und `check` (Deklarationen, Konstantenauswertung, Ausdrücke, Anweisungen, 84 Standardroutinen, Erweiterungen). `check.Info` hält Typen, Konstanten, Symbolbezüge, Felder, Aufrufe und Scopes für die Codegenerierung. Tests: Symbol-Golden-Tests in `compiler/internal/check/testdata/` (`-update`), Tabellen mit 61 Ausdruckstypen und 107 Fehlerfällen, alle Parser-Lehrbuchprogramme ohne Units/goto, Fehler-Golden-Tests in `testdata/check/`. AST-Positionen von Ausdrücken zeigen jetzt auf den Ausdrucksanfang (`BinaryExpr.OpPos` für den Operator).
+- *Nachtrag nach Rückfrage:* Funktionsaufrufe als Anweisung sind immer erlaubt; Funktionen dürfen wie in Delphi 1.0 Records, Arrays und Mengen zurückgeben (siehe Tabelle der Erweiterungen).
 
 ### Etappe 4: IR, Codegenerator, Encoder, erstes Programm
 

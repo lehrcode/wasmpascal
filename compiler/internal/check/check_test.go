@@ -134,6 +134,8 @@ type
 var
   x: Byte; l: LongInt; r: Real; s: string[10]; a: TFeld; p: PNode; f: TFarbe;
 function Fn(n: Integer): Real; begin Fn := n end;
+function Knoten: TNode; begin Result.wert := 1 end;
+function Feld: TFeld; begin end;
 `
 
 func TestExprTypes(t *testing.T) {
@@ -170,6 +172,9 @@ func TestExprTypes(t *testing.T) {
 		{"x + l", "LongInt"},
 		{"r * 2", "Real"},
 		{"Fn(3)", "Real"},
+		{"Knoten", "TNode"},
+		{"Knoten.next", "PNode"},
+		{"Feld[3]", "Char"},
 		{"p^", "TNode"},
 		{"p^.next", "PNode"},
 		{"s[1]", "Char"},
@@ -236,7 +241,8 @@ func TestErrors(t *testing.T) {
 		{"datei in datei", "type F = file of Text; begin end.", "t.pas(1,18): Error 63: Invalid file type"},
 		{"feld doppelt", "type R = record a: Byte; case b: Byte of 1: (a: Char) end; begin end.", "t.pas(1,46): Error 4: Duplicate identifier (a)"},
 		{"variante falscher typ", "type R = record case Boolean of 'x': () end; begin end.", "t.pas(1,33): Error 74: Constant and case types do not match"},
-		{"ergebnistyp", "type R = record a: Byte end; function F: R; begin end; begin end.", "t.pas(1,42): Error 34: Invalid function result type"},
+		{"ergebnistyp datei", "function F: Text; begin end; begin end.", "t.pas(1,13): Error 34: Invalid function result type"},
+		{"ergebnistyp record mit datei", "type R = record f: Text end; function F: R; begin end; begin end.", "t.pas(1,42): Error 34: Invalid function result type"},
 		{"datei als wertparameter", "procedure P(f: Text); begin end; begin end.", "t.pas(1,16): Error 126: Files must be var parameters"},
 		// Konstanten
 		{"keine konstante", "var v: Integer; const C = v; begin end.", "t.pas(1,27): Error 31: Constant expected"},
@@ -286,7 +292,10 @@ func TestErrors(t *testing.T) {
 		{"var-parameter konstante", "procedure P(var a: Integer); begin end; begin P(1) end.", "t.pas(1,49): Error 20: Variable identifier expected"},
 		{"var-parameter typ", "procedure P(var a: Integer); begin end; var b: Byte; begin P(b) end.", "t.pas(1,62): Error 26: Type mismatch"},
 		{"var-parameter string", "procedure P(var s: string); begin end; var t: string[10]; begin P(t) end.", "t.pas(1,67): Error 26: Type mismatch"},
-		{"funktion als anweisung", "function F: Integer; begin F := 1 end; begin F end.", "t.pas(1,46): Error 122: Invalid variable reference"},
+		{"feld über funktionsnamen", "type R = record a: Byte end; function F: R; begin F.a := 1 end; begin end.", "t.pas(1,51): Error 20: Variable identifier expected"},
+		{"standardfunktion als anweisung", "begin UpCase('a') end.", "t.pas(1,7): Error 122: Invalid variable reference"},
+		{"typumwandlung als anweisung", "var i: Integer; begin Byte(i) end.", "t.pas(1,23): Error 122: Invalid variable reference"},
+		{"variable als anweisung", "var i: Integer; begin i end.", "t.pas(1,23): Error 122: Invalid variable reference"},
 		{"prozedur als wert", "procedure P; begin end; var i: Integer; begin i := P end.", "t.pas(1,52): Error 143: Invalid procedure or function reference"},
 		{"variable aufrufen", "var i: Integer; begin i(1) end.", "t.pas(1,23): Error 143: Invalid procedure or function reference"},
 		{"forward fehlt", "procedure P; forward; begin end.", "t.pas(1,11): Error 59: Undefined forward (P)"},

@@ -168,9 +168,11 @@ func (c *checker) stmt(s ast.Stmt) {
 	case *ast.AssignStmt:
 		c.assign(s)
 	case *ast.CallStmt:
+		// Aufrufe eigener Funktionen dürfen als Anweisung stehen, das Ergebnis
+		// wird verworfen (wie {$X+} in TP 6/7 und Delphi, hier immer an). Wie
+		// dort gilt das nicht für die Standardfunktionen der System-Unit.
 		x := c.exprOrType(s.Call)
-		if x.Mode != NoValue {
-			// TP 4.0 kennt keine Funktionsaufrufe als Anweisung ({$X+} kam später).
+		if x.Mode != NoValue && !c.isProcCall(s.Call) {
 			c.fail(s.Call.Pos(), source.ErrInvalidVarRef, "")
 		}
 	case *ast.IfStmt:
@@ -240,6 +242,16 @@ func (c *checker) stmt(s ast.Stmt) {
 	default:
 		panic("check: unbekannte Anweisung")
 	}
+}
+
+// isProcCall meldet, ob e ein Aufruf einer eigenen Prozedur oder Funktion ist.
+func (c *checker) isProcCall(e ast.Expr) bool {
+	key := e
+	if sel, ok := e.(*ast.SelectorExpr); ok {
+		key = sel.Sel
+	}
+	call := c.info.Calls[key]
+	return call != nil && call.Kind == CallProc
 }
 
 func (c *checker) assign(s *ast.AssignStmt) {

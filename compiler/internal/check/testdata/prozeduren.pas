@@ -53,12 +53,49 @@ begin
   g := Mitte(n)
 end;
 
+type
+  TPunkt = record x, y: Integer end;
+  TZiffern = set of 0..9;
+
+function Punkt(x, y: Integer): TPunkt;
+begin
+  Result.x := x;
+  Result.y := y
+end;
+
+function Quadrate: TFeld;
+var
+  i: Integer;
+begin
+  for i := 1 to 5 do Result[i] := i * i
+end;
+
+function Gerade: TZiffern;
+begin
+  Gerade := [0, 2, 4, 6, 8]
+end;
+
+function Zaehlen: Integer;
+begin
+  Inc(g);
+  Zaehlen := g
+end;
+
 function Text(s: string): string;
 begin
   Text := s + '!'
 end;
 
+var
+  p: TPunkt;
+  q: TFeld;
 begin
   Leer;
-  Aussen(3)
+  Aussen(3);
+  p := Punkt(1, 2);
+  g := Punkt(3, 4).y + Quadrate[2] + Summe(Quadrate);
+  q := Quadrate;
+  if 4 in Gerade then Zaehlen;
+  Zaehlen;
+  Quadrat(7)
 end.

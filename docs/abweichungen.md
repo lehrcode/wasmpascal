@@ -34,8 +34,8 @@ kommen die Einzelentscheidungen dazu, die während der Umsetzung fallen.
 | 3 | Ganzzahlarithmetik | Ergebnistyp `LongInt`, wenn ein Operand `LongInt` ist, sonst `Integer`; beide sind 32 Bit. |
 | 3 | Typumwandlungen | Ordinal ↔ Ordinal (Konstanten werden auf die Zielbreite gekürzt, `Word(x)` auf 16 Bit), Zeiger ↔ Zeiger, Zeiger ↔ 4-Byte-Ganzzahl; sonst Variablenumwandlung bei gleicher Größe. `Real(i)` ist wie in TP ein Fehler (61). |
 | 3 | `var`-Parameter | Verlangen identische Typen, auch bei Strings (`string[10]` an `var s: string` ist Error 26), wie TP mit der Voreinstellung `{$V+}`. |
-| 3 | Funktionsaufruf als Anweisung | Nicht erlaubt (TP 4.0 kennt `{$X+}` nicht): Error 122. |
-| 3 | Funktionsergebnisse | Nur Ordinal-, Real-, String- und Zeigertypen, wie in TP (Error 34). PLAN.md erwähnt im ABI-Abschnitt auch Record-Ergebnisse; das wäre eine Erweiterung und ist offen. |
+| 3 | Funktionsaufruf als Anweisung | Erweiterung (siehe PLAN.md): Aufrufe eigener Funktionen dürfen immer als Anweisung stehen, das Ergebnis wird verworfen. Standardfunktionen der System-Unit, Typumwandlungen und Variablen ergeben wie bei `{$X+}` in TP 7 Error 122. |
+| 3 | Funktionsergebnisse | Erweiterung wie Delphi 1.0 (siehe PLAN.md): alle Typen außer Dateien (und Records/Arrays mit Dateien), also auch Records, Arrays und Mengen (Error 34 sonst). Der Ergebnistyp muss wie in TP ein Typbezeichner sein. Nur `F := …` setzt das Ergebnis; `F.x`, `F[i]` usw. im Rumpf sind rekursive Aufrufe, Felder und Elemente setzt man über `Result.x`/`Result[i]`. |
 | 3 | Zeigerverträglichkeit | Typisierte Zeiger sind nur bei gleichem Basistyp verträglich; `Pointer`, `@x` und `nil` mit allen. |
 | 3 | Record-Konstanten | Felder stehen in Deklarationsreihenfolge; Felder dürfen fehlen (`// TP-ANNAHME`). |
 | 3 | `for`-Laufvariable | Muss eine Variable des aktuellen Blocks (oder ein Wertparameter) sein, sonst Error 97. |

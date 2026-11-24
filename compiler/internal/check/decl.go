@@ -399,13 +399,11 @@ func (c *checker) signature(d *ast.ProcDecl) *types.Signature {
 		}
 	}
 	if d.Result != nil {
+		// Wie in Delphi 1.0 sind alle Ergebnistypen außer Dateien erlaubt,
+		// also auch Records, Arrays und Mengen.
 		sig.Result = c.typeExpr(d.Result)
-		switch t := sig.Result; {
-		case types.IsOrdinal(t), types.IsReal(t), types.IsString(t):
-		default:
-			if _, isPtr := t.(*types.Pointer); !isPtr {
-				c.fail(d.Result.Pos(), source.ErrInvalidResultType, "")
-			}
+		if containsFile(sig.Result) {
+			c.fail(d.Result.Pos(), source.ErrInvalidResultType, "")
 		}
 	}
 	return sig
