@@ -218,9 +218,10 @@ DOS voraus. Ihre Verwendung ergibt Error 902 (Not supported by WasmPascal):
 
 ## Crt
 
-Steuert den Bildschirm über ANSI-Sequenzen. Es gibt keinen Bildschirmspeicher
-und keine Cursorposition: Die Ausgabe läuft als Text durch, Umbruch und
-Rollen übernimmt das Terminal.
+Steuert den Bildschirm über ANSI-Sequenzen. Es gibt keinen Bildschirmspeicher,
+und das Programm kennt die Cursorposition nicht: Die Ausgabe läuft als Text
+durch, Umbruch und Rollen übernimmt das Terminal. Setzen lässt sich der
+Cursor mit `GotoXY`.
 
 ### Konstanten
 
@@ -252,6 +253,7 @@ Farben für `TextColor` und `TextBackground`:
 | --- | --- |
 | `ClrScr` | Löscht den Bildschirm und setzt den Cursor nach links oben. |
 | `ClrEol` | Löscht von der Cursorposition bis zum Zeilenende. |
+| `GotoXY(X, Y: Byte)` | Setzt den Cursor auf Spalte `X`, Zeile `Y`; 1,1 ist links oben im sichtbaren Bereich des Terminals. Ist `X` oder `Y` kleiner als 1, bleibt der Cursor stehen. **Abweichung:** Ohne `Window` gilt immer der ganze Bildschirm, und eine Obergrenze (TP: 80×25) wird nicht geprüft, weil das Terminal größer sein kann. |
 | `InsLine` | Fügt an der Cursorzeile eine Leerzeile ein. |
 | `DelLine` | Löscht die Cursorzeile. |
 | `TextColor(Farbe: Byte)` | Setzt die Schriftfarbe (0..15, dazu `Blink`; 16..31 blinken ebenfalls). |
@@ -263,7 +265,7 @@ Farben für `TextColor` und `TextBackground`:
 | `ReadKey: Char` | Liefert eine Taste. **Abweichung:** Die Eingabe ist zeilenweise; `ReadKey` wartet, bis eine Zeile mit Enter abgeschlossen ist, liefert deren erstes Zeichen und verwirft den Rest samt Enter. Eine leere Zeile (nur Enter) ergibt `#13`, das Dateiende `#26`. So liest ein folgendes `ReadLn` eine neue Zeile, wie nach einem Tastendruck in TP. Die Eingabe erscheint auf dem Bildschirm; Sondertasten (Pfeile, F-Tasten) gibt es nicht. |
 | `Sound(Hz: Word)`, `NoSound` | Ohne Wirkung. |
 
-**Nicht vorhanden:** `GotoXY`, `WhereX`, `WhereY`, `Window`, `KeyPressed`,
+**Nicht vorhanden:** `WhereX`, `WhereY`, `Window`, `KeyPressed`,
 `TextMode`, `AssignCrt`. Ihre Verwendung ergibt Error 3 (Unknown identifier).
 
 ## Dos

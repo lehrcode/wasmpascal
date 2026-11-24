@@ -2,8 +2,8 @@
 
   Bildschirmsteuerung ueber ANSI-Sequenzen, ohne Schatten-Bildschirm und
   ohne Cursor-Verfolgung: Die Ausgabe geht als Text an das Terminal, Umbruch
-  und Rollen uebernimmt das Terminal (PLAN.md). Nicht enthalten sind GotoXY,
-  WhereX, WhereY, Window und KeyPressed. Delay und ReadKey sind
+  und Rollen uebernimmt das Terminal (PLAN.md). GotoXY setzt den Cursor per
+  ANSI; nicht enthalten sind WhereX, WhereY, Window und KeyPressed. Delay und ReadKey sind
   Anhaltepunkte des Schedulers. }
 unit Crt;
 
@@ -40,6 +40,7 @@ procedure ClrScr;
 procedure ClrEol;
 procedure InsLine;
 procedure DelLine;
+procedure GotoXY(X, Y: Byte);
 procedure TextColor(Color: Byte);
 procedure TextBackground(Color: Byte);
 procedure HighVideo;
@@ -93,6 +94,17 @@ end;
 procedure DelLine;
 begin
   Write(Esc, '[M')
+end;
+
+{ Setzt den Cursor auf Spalte X, Zeile Y (ab 1,1 links oben im sichtbaren
+  Bereich des Terminals).
+  TP-ANNAHME: Ohne Window gilt der ganze Bildschirm; Werte kleiner als 1
+  lassen den Cursor wie in TP stehen, eine Obergrenze (TP: 80x25) wird nicht
+  geprueft, weil das Terminal groesser sein kann. }
+procedure GotoXY(X, Y: Byte);
+begin
+  if (X >= 1) and (Y >= 1) then
+    Write(Esc, '[', Y, ';', X, 'H')
 end;
 
 { Farben 16..31 blinken wie in TP 3.0; Blink (128) ebenso. }
