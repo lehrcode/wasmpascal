@@ -17,3 +17,7 @@ kommen die Einzelentscheidungen dazu, die während der Umsetzung fallen.
 | 1 | `{$I datei}` | Ohne Endung wird `.pas` angenommen. Gesucht wird im Verzeichnis der einbindenden Datei, dann in den `-I`-Pfaden; `\` gilt als Trenner, Groß-/Kleinschreibung ist egal. Höchstens 16 Ebenen, sonst Error 9. |
 | 1 | Fehlernummern | Unzulässiges ASCII-Zeichen: Error 5; `#n` über 255: Error 76; fehlplatziertes `{$ELSE}`/`{$ENDIF}` und fehlerhafte Direktiven: Error 17; fehlendes `{$ENDIF}`: Error 10 am Dateiende (jeweils `// TP-ANNAHME`). Eigene Nummern ab 900: 900 ungültiges UTF-8, 901 Nicht-ASCII-Zeichen außerhalb von Strings und Kommentaren. |
 | 1 | CLI | Die CLI liest Dateien über ein `os.DirFS` der Laufwerkswurzel und zeigt Pfade in Meldungen relativ zum Arbeitsverzeichnis. |
+| 1 | `Integer` | Bereich wie `LongInt` (`MaxInt` = 2147483647); TP-4.0-Programme, die mit 16-Bit-Überlauf rechnen, verhalten sich anders. `Word` bleibt 0..65535. |
+| 1 | 1-Byte-Typen | `Byte`, `ShortInt`, `Char` (und 1-Byte-Teilbereiche) werden bei jeder Zuweisung auf 8 Bit gekürzt, wie TP mit `{$R-}`. |
+| 1 | Teilbereiche | Speichergröße nach Wertebereich: 1 Byte nur, wenn alle Werte in 0..255 bzw. −128..127 passen. |
+| 1 | `nil` | TP prüft Dereferenzierungen nicht. WasmPascal prüft jedes `p^` und meldet `Runtime error 216` (Nummer wie „General protection fault“ in BP 7), weil WASM keinen Speicherschutz hat. |

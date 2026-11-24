@@ -20,7 +20,7 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 
 **Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` und `.OBJ`-Linking, `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount`. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen GotoXY, WhereX, WhereY, Window und KeyPressed; ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
 
-**Direktiven:** Unterstützt werden `{$I datei}`, `{$I-}`/`{$I+}` mit `IOResult` sowie `{$DEFINE}`, `{$IFDEF}`, `{$IFNDEF}`, `{$ELSE}` und `{$ENDIF}`. Von {$M} wird nur die Stackgröße ausgewertet (siehe Größengrenzen). Alle anderen werden ignoriert. Boolesche Ausdrücke werden immer mit Kurzschlussauswertung berechnet (entspricht `{$B-}`).
+**Direktiven:** Unterstützt werden `{$I datei}`, `{$I-}`/`{$I+}` mit `IOResult` sowie `{$DEFINE}`, `{$UNDEF}`, `{$IFDEF}`, `{$IFNDEF}`, `{$IFOPT}`, `{$ELSE}` und `{$ENDIF}` (`{$UNDEF}` und `{$IFOPT}` seit Etappe 1, weil TP 4.0 sie kennt). Von {$M} wird nur die Stackgröße ausgewertet (siehe Größengrenzen). Alle anderen werden ignoriert. Boolesche Ausdrücke werden immer mit Kurzschlussauswertung berechnet (entspricht `{$B-}`).
 
 **Reservierte Wörter:** die von TP 4.0, zusätzlich immer `object`, `constructor`, `destructor` und `inherited`. Sie sind für eine spätere OOP-Erweiterung im Stil von TP 5.5/6.0 vorgemerkt, haben in diesem Plan aber noch keine Bedeutung; ihre Verwendung als Bezeichner ist ein Compilerfehler. Alle anderen später eingeführten Schlüsselwörter (`asm`, `library`, `exports`) bleiben normale Bezeichner.
 
@@ -28,7 +28,7 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 
 - Quelltext muss gültiges UTF-8 sein, sonst Compilerfehler mit Hinweis auf `iconv -f CP437 -t UTF-8`. Ein BOM am Anfang wird übersprungen.
 - Bezeichner und Schlüsselwörter bestehen nur aus ASCII; in String-Literalen und Kommentaren ist beliebiges UTF-8 erlaubt.
-- `string` bleibt der ShortString von TP: Längenbyte plus höchstens 255 **Bytes**. `Length` zählt Bytes (`Length('Größe')` = 6), `s[0]` bleibt das Längenbyte. Es gibt keine längeren oder dynamischen Strings.
+- `string` bleibt der ShortString von TP: Längenbyte plus höchstens 255 **Bytes**. `Length` zählt Bytes (`Length('Größe')` = 7), `s[0]` bleibt das Längenbyte. Es gibt keine längeren oder dynamischen Strings.
 - `Char` ist ein Byte. Ein Literal in Hochkommas, das mehr als ein Byte lang ist (`'ä'`), ist ein String und kein `Char`.
 - `Copy`, `Delete`, `Insert` und Indizierung arbeiten auf Bytes und können ein Mehrbyte-Zeichen zerschneiden.
 - `UpCase` und die Groß-/Kleinschreibung von Bezeichnern betreffen nur a–z.
@@ -171,10 +171,11 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 
 | Turbo Pascal | In WASM-Werten | Im Speicher |
 | --- | --- | --- |
-| Byte, ShortInt, Char, Boolean | `i32` | 1 Byte |
-| Integer, Word | `i32` | 4 Byte (kein 16-Bit-Überlauf) |
+| Byte, ShortInt, Char, Boolean | `i32` | 1 Byte; jede Zuweisung kürzt auf 8 Bit |
+| Integer | `i32` | 4 Byte, Bereich wie LongInt (`MaxInt` = 2147483647) |
+| Word | `i32` | 4 Byte, Bereich 0..65535 (kein 16-Bit-Überlauf) |
 | LongInt | `i32` | 4 Byte |
-| Aufzählungen, Teilbereiche | `i32` | 1 Byte bis 256 Werte, sonst 4 Byte |
+| Aufzählungen, Teilbereiche | `i32` | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen, sonst 4 Byte |
 | Real, Double, Extended, Comp | `f64` | 8 Byte |
 | Single | `f32` | 4 Byte |
 | Zeiger, `nil` | `i32` | 4 Byte |
@@ -184,9 +185,15 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 | Prozedurale Typen | gibt es in 4.0 nicht | – |
 | Dateivariablen | Adresse (`i32`) | Laufzeit-Record (Handle, Modus, Puffer) |
 
+**Festlegungen zu Wertebereichen (nach Etappe 1):**
+
+- `Integer` hat den Bereich von `LongInt`; `MaxInt` = `High(Integer)` = 2147483647. `Word` bleibt 0..65535; Konstanten außerhalb davon sind Compilerfehler, gerechnet wird aber in 32 Bit ohne 16-Bit-Kürzung.
+- `Byte`, `ShortInt` und `Char` werden bei jeder Zuweisung auf 8 Bit gekürzt (`ShortInt` mit Vorzeichenerweiterung), egal ob die Variable in einem WASM-Local oder im Speicher liegt. `b := b + 1` ergibt bei `b = 255` also immer 0, wie in TP mit `{$R-}`. Teilbereiche mit 1 Byte Speicher werden ebenso gekürzt.
+- Die Speichergröße eines Teilbereichs richtet sich nach dem Wertebereich, nicht nach der Anzahl der Werte: `1000..1100` belegt 4 Byte.
+
 **Speicheraufteilung (linearer Speicher):**
 
-1. Ab Adresse 0 eine gesperrte Seite, damit `nil`-Zugriffe auffallen.
+1. Ab Adresse 0 eine freie Seite, die nie belegt wird. WASM kennt keinen Speicherschutz; deshalb prüft jede Dereferenzierung `p^` den Zeiger und bricht bei `nil` mit `Runtime error 216` ab.
 2. Globale Variablen und typisierte Konstanten (Datensegment).
 3. Schatten-Stack, wächst nach unten. Er nimmt Records, Arrays, Strings und Mengen als lokale Variablen auf, außerdem alle Locals, deren Adresse gebraucht wird (`var`-Argumente, `@x`), sowie die Frames anhaltefähiger Prozeduren.
 4. Heap für `New`/`Dispose`/`GetMem`/`FreeMem`/`Mark`/`Release`: ein einfacher Free-List-Allocator, wächst bei Bedarf mit `memory.grow`. `MemAvail`/`MaxAvail` liefern plausible Werte.
@@ -210,7 +217,7 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 
 **Laufzeitfehler mit Zeilennummern:** Jeder Laufzeitfehler nennt Fehlernummer, Datei, Zeile und Prozedur, zum Beispiel `Runtime error 200 at zahlen.pas(42) in Auswerten`.
 
-- **Geprüfte Fehler** (Division durch 0, I/O-Fehler bei `{$I+}`, Heap voll, Stack-Überlauf, `nil`-Zugriff wo geprüft): Der Compiler übergibt Datei-Index, Zeile und Prozedur-Index als Konstanten an die Fehlerroutine der Laufzeit.
+- **Geprüfte Fehler** (Division durch 0, I/O-Fehler bei `{$I+}`, Heap voll, Stack-Überlauf, `nil`-Dereferenzierung als Runtime error 216): Der Compiler übergibt Datei-Index, Zeile und Prozedur-Index als Konstanten an die Fehlerroutine der Laufzeit.
 - **WASM-Traps** (Speicherzugriff außerhalb des gültigen Bereichs, `unreachable`): Der Compiler schreibt die standardisierte Name Section (Funktionsnamen) und eine eigene Custom Section `wasmpascal.lines`, die Byte-Offsets im Code auf Datei und Zeile abbildet. Der Go-Runner und der Browser-Loader übersetzen einen Trap damit in dieselbe Meldung.
 - Die Option `-nolines` (API: `Options.NoLines`) lässt Zeilentabelle und Name Section weg; geprüfte Fehler nennen dann nur die Fehlernummer.
 - In der Go-API kommt ein Laufzeitfehler als `*runner.RuntimeError` mit `Code`, `File`, `Line` und `Proc` zurück (per `errors.As`).
@@ -298,7 +305,7 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 ### Etappe 5: Speicher und zusammengesetzte Typen
 
 - Schatten-Stack, Static Link für verschachtelte Prozeduren, `var`-Parameter, Records inkl. Varianten, Arrays (mehrdimensional, beliebige Ordinal-Indizes), ShortStrings, Mengen, Zeiger, Heap-Allocator, `with`.
-- Laufzeitfehler: Division durch 0, `nil`-Zugriff (wo erkennbar), Heap erschöpft, jeweils mit Datei, Zeile und Prozedur; dazu Name Section, Zeilentabelle und deren Auswertung im Runner (siehe Laufzeitfehler mit Zeilennummern).
+- Laufzeitfehler: Division durch 0, `nil`-Dereferenzierung (Runtime error 216), Heap erschöpft, jeweils mit Datei, Zeile und Prozedur; dazu Name Section, Zeilentabelle und deren Auswertung im Runner (siehe Laufzeitfehler mit Zeilennummern).
 - **Fertig, wenn:** Testprogramme für verkettete Listen, Binärbäume, Quicksort auf Record-Arrays, Mengenoperationen, for-in über Strings und Mengen, const-Parameter mit Records und rekursive innere Prozeduren bestehen, außerdem ein globales Array über 64 KB, ein Heap-Block über 64 KB, ein Test für Addr/Ofs/Seg/Ptr und ein Test, der mit kleinem {$M}-Stack absichtlich Runtime error 202 auslöst. Alle Fehlertests prüfen die vollständige Meldung mit Datei und Zeile, auch für einen provozierten WASM-Trap.
 
 ### Etappe 6: Laufzeitbibliothek in Pascal

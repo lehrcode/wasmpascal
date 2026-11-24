@@ -29,9 +29,10 @@ bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichung
 
 | Turbo Pascal | WASM-Wert | Im Speicher |
 | --- | --- | --- |
-| Byte, ShortInt, Char, Boolean | `i32` | 1 Byte |
-| Integer, Word, LongInt | `i32` | 4 Byte, kein 16-Bit-Überlauf |
-| Aufzählungen, Teilbereiche | `i32` | 1 Byte bis 256 Werte, sonst 4 Byte |
+| Byte, ShortInt, Char, Boolean | `i32` | 1 Byte; jede Zuweisung kürzt auf 8 Bit |
+| Integer, LongInt | `i32` | 4 Byte, beide −2³¹..2³¹−1 (`MaxInt` = 2147483647) |
+| Word | `i32` | 4 Byte, 0..65535, kein 16-Bit-Überlauf |
+| Aufzählungen, Teilbereiche | `i32` | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen, sonst 4 Byte |
 | Real, Double, Extended, Comp | `f64` | 8 Byte |
 | Single | `f32` | 4 Byte |
 | Zeiger, `nil` | `i32` | 4 Byte |
@@ -40,7 +41,7 @@ bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichung
 | Records, Arrays | Adresse | natürliche Ausrichtung, Varianten als Union |
 | Dateivariablen | Adresse | Laufzeit-Record |
 
-- **Linearer Speicher:** Seite ab Adresse 0 gesperrt (nil) → Datensegment (Globale, typisierte Konstanten) →
+- **Linearer Speicher:** Seite ab Adresse 0 bleibt frei; jedes `p^` prüft auf `nil` (Runtime error 216) → Datensegment (Globale, typisierte Konstanten) →
   Schatten-Stack (wächst nach unten, Standard 1 MB, `-stack`/`{$M}`, Überlauf = Runtime error 202) →
   Heap (Free-List, `memory.grow`, erschöpft = Runtime error 203).
 - Einzelne Struktur höchstens 2 GB; die 64-KB-Grenze von TP entfällt.
