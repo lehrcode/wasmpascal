@@ -5,6 +5,8 @@ Modul `github.com/lehrcode/wasmpascal`, CLI `pascal` (`build` | `run` | `check`)
 
 **Verbindlich ist [PLAN.md](PLAN.md).** Diese Datei fasst nur die Arbeitsregeln und die Typabbildung zusammen;
 bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichungen.md`.
+`docs/units.md` ist die Referenz der Units System, Crt und Dos für Programmierer; bei Änderungen an
+Standardroutinen oder `rtl/*.pas` mitpflegen.
 
 ## Arbeitsregeln
 
