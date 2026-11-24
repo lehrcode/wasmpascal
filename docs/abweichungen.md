@@ -45,3 +45,10 @@ kommen die Einzelentscheidungen dazu, die während der Umsetzung fallen.
 | 3 | Vordefinierte Variablen | `Input`, `Output`, `RandSeed`, `FileMode`, `ExitCode`. Die Größen der Datei-Records (48 bzw. 304 Byte für `Text`) sind vorläufig bis Etappe 6. |
 | 3 | `uses` | Bis Etappe 7 ergibt jede Unit außer `System` Error 15 (`File not found (Crt.pas)`). |
 | 3 | Fehlernummern | Typfehler nach der TP-7-Liste (`// TP-ANNAHME`); eigene Nummer 903 für `Break`/`Continue` außerhalb einer Schleife. |
+| 4 | Zeilenende | `WriteLn` schreibt `LF` (`\n`), nicht `CR LF` wie unter DOS. |
+| 4 | `Write` für Real | Ohne Formatangabe Exponentialschreibweise mit Breite 17 (` 1.5000000000E+00`), mit `:w` entsprechend weniger Stellen (mindestens eine), mit `:w:d` Festkomma. Gerundet wird wie TP: halbe Werte von null weg, bezogen auf den exakten Binärwert. Exponenten über 99 bekommen drei Stellen. |
+| 4 | `Write` für Boolean | `TRUE`/`FALSE` in Großbuchstaben, wie TP. |
+| 4 | `Single` | Wird in Ausdrücken als `f64` gerechnet und beim Speichern auf Single-Genauigkeit gerundet. |
+| 4 | Auswertungsreihenfolge | Funktionsaufrufe in einem Ausdruck werden vor dem übrigen Ausdruck ausgewertet (Voraussetzung für den Scheduler). Ändert eine Funktion eine Variable, die im selben Ausdruck gelesen wird, kann das Ergebnis von TP abweichen; TP legt die Reihenfolge ebenfalls nicht fest. |
+| 4 | `Round` | Rundet halbe Werte von null weg (`Round(-2.5) = -3`), wie TP. |
+| 4 | Laufzeitprüfungen | Keine Bereichs- und Überlaufprüfungen (wie TP mit `{$R-}`); Division durch 0 und Überlauf bei `Trunc`/`Round` führen bis Etappe 5 zu einem WASM-Trap ohne Pascal-Meldung. |

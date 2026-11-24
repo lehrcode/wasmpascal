@@ -74,6 +74,9 @@ func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err erro
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
 		return 0, fmt.Errorf("runner: WASI: %w", err)
 	}
+	if err := instantiateDevHost(ctx, rt, opts.Stdout); err != nil {
+		return 0, fmt.Errorf("runner: %w", err)
+	}
 
 	args := opts.Args
 	if len(args) == 0 {

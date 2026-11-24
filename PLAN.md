@@ -299,13 +299,14 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - *Erledigt (Nov 24, 2026).* Paket `types` (Typen mit Größen und Ausrichtung, Konstantenwerte, Symbole, Scopes) und `check` (Deklarationen, Konstantenauswertung, Ausdrücke, Anweisungen, 84 Standardroutinen, Erweiterungen). `check.Info` hält Typen, Konstanten, Symbolbezüge, Felder, Aufrufe und Scopes für die Codegenerierung. Tests: Symbol-Golden-Tests in `compiler/internal/check/testdata/` (`-update`), Tabellen mit 61 Ausdruckstypen und 107 Fehlerfällen, alle Parser-Lehrbuchprogramme ohne Units/goto, Fehler-Golden-Tests in `testdata/check/`. AST-Positionen von Ausdrücken zeigen jetzt auf den Ausdrucksanfang (`BinaryExpr.OpPos` für den Operator).
 - *Nachtrag nach Rückfrage:* Funktionsaufrufe als Anweisung sind immer erlaubt; Funktionen dürfen wie in Delphi 1.0 Records, Arrays und Mengen zurückgeben (siehe Tabelle der Erweiterungen).
 
-### Etappe 4: IR, Codegenerator, Encoder, erstes Programm
+### Etappe 4: IR, Codegenerator, Encoder, erstes Programm ✅
 
 - IR als CFG mit Basisblöcken; Lowering vom getypten AST.
 - Strukturierte WASM-Erzeugung aus dem CFG für nicht anhaltefähige Prozeduren (Kontrollfluss ohne `goto` ist immer reduzierbar; Prozeduren mit goto folgen in Etappe 8).
 - Eigener Binär-Encoder; Validierung der erzeugten Module in Tests über wazero.
 - `pascal run` mit wazero, Ziel `wasi`; Ganzzahlen, Reals, Boolean, Char, `if`/`while`/`repeat`/`for`/`case`, Prozeduren, Funktionen, `WriteLn` für Zahlen und Strings (vorerst in Go-Hostfunktionen erlaubt, wird in Etappe 6 ersetzt).
 - **Fertig, wenn:** Hello World, Fakultät, Fibonacci, Primzahlsieb und ein Programm mit `case` korrekte Ausgaben liefern (darunter Result, Schleifen mit Break und Continue sowie for-in über ein Array), sowohl über die CLI als auch über einen Example-Test, der compiler.Compile und runner.Run direkt aufruft.
+- *Erledigt (Nov 24, 2026).* Pakete `wasm` (Encoder), `ir` (CFG mit Ausdrucksbäumen; Aufrufe nur auf Anweisungsebene; Variablen abstrakt, Ablage entscheidet die Codegenerierung), `codegen` (Locals oder Frame auf dem Schatten-Stack, Prolog/Epilog, strukturierter Kontrollfluss nach Ramsey „Beyond Relooper“ über Dominatorbaum). Übersetzbar: Ganzzahlen, Reals, Boolean, Char, Aufzählungen, Teilbereiche, Arrays (global, lokal, typisierte Konstanten, als Wert-, const- und var-Parameter sowie Funktionsergebnis), var-Parameter, alle Anweisungen außer `with`/`goto`, `Write`/`WriteLn` auf die Standardausgabe über vorläufige Hostfunktionen (Modul `wasmpascal`, Go-Runner). Noch nicht übersetzbare Sprachmittel ergeben Error 902 mit der Etappe. Tests: zehn Programme in `testdata/etappe4/` mit von Hand hergeleiteten Ausgaben, dieselben Programme mit allen Variablen im Frame (`TestForceFrame`), Example-Tests in `compiler` und `runner`, Encoder-Validierung über wazero.
 
 ### Etappe 5: Speicher und zusammengesetzte Typen
 

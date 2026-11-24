@@ -66,3 +66,9 @@ Parser-Golden-Tests: `compiler/internal/parser/testdata/*.pas` → `*.ast`, neu 
 `go test ./compiler/internal/parser -update`.
 Symbol-Golden-Tests der Typprüfung: `compiler/internal/check/testdata/*.pas` → `*.sym`, neu schreiben mit
 `go test ./compiler/internal/check -update`.
+
+## Pipeline (Stand Etappe 4)
+
+`source` → `lexer` → `parser` (AST) → `check` (Typprüfung, `check.Info`) → `ir.Lower` (CFG) → `codegen.Generate`
+(Ablage, Frames, strukturierter Kontrollfluss) → `wasm` (Encoder). `Write`/`WriteLn` laufen bis Etappe 6 über
+vorläufige Go-Hostfunktionen im Runner (`runner/devhost.go`, Modul `wasmpascal`).

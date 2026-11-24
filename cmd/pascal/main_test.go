@@ -30,10 +30,9 @@ func TestCLI(t *testing.T) {
 		{[]string{"check", missing}, 1, missing + ": Error 15: File not found"},
 		{[]string{"build", missing}, 1, "Error 15"},
 		{[]string{"run", missing, "a", "b"}, 1, "Error 15"},
-		// Etappe 0: die Übersetzung selbst ist noch nicht implementiert.
-		{[]string{"check", prog}, 1, "noch nicht implementiert"},
-		{[]string{"build", "-target", "gojs", "-o", filepath.Join(dir, "p.wasm"), prog}, 1, "noch nicht implementiert"},
-		{[]string{"run", "-I", dir, "-D", "X", "-stack", "65536", "-nolines", prog}, 1, "noch nicht implementiert"},
+		{[]string{"check", prog}, 0, ""},
+		{[]string{"build", "-target", "gojs", "-o", filepath.Join(dir, "p.wasm"), prog}, 1, "gojs"},
+		{[]string{"run", "-I", dir, "-D", "X", "-stack", "65536", "-nolines", prog}, 0, ""},
 	}
 	for _, tt := range tests {
 		var stdout, stderr bytes.Buffer
@@ -67,5 +66,27 @@ func TestHostFS(t *testing.T) {
 	}
 	if len(incs) != 2 || !fs.ValidPath(incs[0]) || !strings.HasSuffix(incs[0], "src/lib") || !strings.HasSuffix(incs[1], "src") {
 		t.Errorf("IncludePaths = %q", incs)
+	}
+}
+
+func TestCLIRunAndBuild(t *testing.T) {
+	dir := t.TempDir()
+	prog := filepath.Join(dir, "gruss.pas")
+	src := "program Gruss;\nbegin\n  WriteLn('Hallo');\n  Halt(4)\nend.\n"
+	if err := os.WriteFile(prog, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"run", prog}, strings.NewReader(""), &stdout, &stderr)
+	if code != 4 || stdout.String() != "Hallo\n" || stderr.Len() != 0 {
+		t.Errorf("run = %d, stdout %q, stderr %q", code, stdout.String(), stderr.String())
+	}
+	code = run(context.Background(), []string{"build", prog}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("build = %d: %s", code, stderr.String())
+	}
+	wasm, err := os.ReadFile(filepath.Join(dir, "gruss.wasm"))
+	if err != nil || len(wasm) < 8 || string(wasm[:4]) != "\x00asm" {
+		t.Errorf("gruss.wasm: %v, %d Bytes", err, len(wasm))
 	}
 }

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing/fstest"
 
 	"github.com/lehrcode/wasmpascal/compiler"
+	"github.com/lehrcode/wasmpascal/runner"
 )
 
 func ExampleCompile() {
@@ -21,7 +23,10 @@ func ExampleCompile() {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(len(res.Wasm) > 0)
+	if _, err := runner.Run(context.Background(), res.Wasm, runner.Options{Stdout: os.Stdout}); err != nil {
+		fmt.Println(err)
+	}
+	// Output: Hallo, Welt!
 }
 
 func ExampleCheck() {

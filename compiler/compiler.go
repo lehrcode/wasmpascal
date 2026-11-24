@@ -4,9 +4,9 @@
 // GOOS=wasip1. Quelltexte werden ausschließlich über Options.FS gelesen, damit
 // sie im Browser aus dem Speicher kommen können.
 //
-// Stand Etappe 3: Compile und Check parsen und prüfen den Quelltext und melden
-// Lexer-, Syntax- und Typfehler; danach liefern sie einen Fehler „noch nicht
-// implementiert“.
+// Stand Etappe 4: Compile erzeugt WASI-Module für Programme mit Ganzzahlen,
+// Reals, Boolean, Char, Arrays, Prozeduren und Funktionen. Noch nicht
+// übersetzbare Sprachmittel melden Error 902 mit der Etappe, in der sie folgen.
 package compiler
 
 import (
@@ -15,7 +15,10 @@ import (
 	"fmt"
 	"io/fs"
 
+	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/check"
+	"github.com/lehrcode/wasmpascal/compiler/internal/codegen"
+	"github.com/lehrcode/wasmpascal/compiler/internal/ir"
 	"github.com/lehrcode/wasmpascal/compiler/internal/lexer"
 	"github.com/lehrcode/wasmpascal/compiler/internal/parser"
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
@@ -47,6 +50,9 @@ type Options struct {
 	StackSize int
 	// NoLines lässt Zeilentabelle und Name Section weg.
 	NoLines bool
+
+	// forceFrame legt alle Variablen in den Frame (nur für Tests im Paket).
+	forceFrame bool
 }
 
 // Result ist das Ergebnis einer erfolgreichen Übersetzung.
@@ -80,9 +86,6 @@ func (d *Diagnostic) Error() string {
 		return fmt.Sprintf("%s: Error %d: %s", d.File, d.Code, d.Msg)
 	}
 }
-
-// errNotImplemented kennzeichnet den Stand des Gerüsts.
-var errNotImplemented = errors.New("compiler: Übersetzung noch nicht implementiert")
 
 // Compile übersetzt das Programm mainFile (ein Pfad in opts.FS) samt aller
 // benutzten Units in ein WebAssembly-Modul.
@@ -127,14 +130,35 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if err != nil {
 		return nil, diagnostic(err)
 	}
-	if _, err := check.Check(file, check.Config{}); err != nil {
+	info, err := check.Check(file, check.Config{})
+	if err != nil {
+		return nil, diagnostic(err)
+	}
+	if !emit {
+		return nil, nil
+	}
+	prog, ok := file.(*ast.Program)
+	if !ok {
+		return nil, &Diagnostic{File: mainFile, Code: source.ErrSyntax, Msg: "Syntax error (program expected, found a unit)"}
+	}
+	if opts.Target == TargetGoJS {
+		return nil, errors.New("compiler: Ziel gojs folgt in Etappe 9")
+	}
+	stack := int64(opts.StackSize)
+	if stack == 0 {
+		stack = int64(lx.StackSize())
+	}
+	if stack == 0 {
+		stack = 1 << 20
+	}
+	m, err := ir.Lower(prog, info, ir.Options{StackSize: stack})
+	if err != nil {
 		return nil, diagnostic(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	_ = emit
-	return nil, errNotImplemented
+	return &Result{Wasm: codegen.Generate(m, codegen.Options{ForceFrame: opts.forceFrame})}, nil
 }
 
 // diagnostic wandelt interne Compilerfehler in *Diagnostic um.

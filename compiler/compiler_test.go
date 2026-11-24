@@ -54,7 +54,7 @@ func TestCompileReportsErrors(t *testing.T) {
 		"teil.pas":  {Data: []byte("{$IFDEF EXTRA}\nconst x = 'offen\n{$ENDIF}")},
 		"lib/x.pas": {Data: []byte("")},
 	}
-	if _, err := Compile(context.Background(), "p.pas", Options{FS: src}); !errors.Is(err, errNotImplemented) {
+	if _, err := Compile(context.Background(), "p.pas", Options{FS: src}); err != nil {
 		t.Errorf("ohne EXTRA: %v", err)
 	}
 	_, err := Compile(context.Background(), "p.pas", Options{FS: src, Defines: []string{"extra"}})
