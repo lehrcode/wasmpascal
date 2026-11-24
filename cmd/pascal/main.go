@@ -13,7 +13,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,16 +91,16 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintf(stderr, "pascal: unbekanntes Ziel %q (wasi oder gojs)\n", target)
 		return 2
 	}
-	fsys, fsMain, fsIncludes, err := hostFS(mainFile, includes)
+	root, fsMain, fsIncludes, err := hostFS(mainFile, includes)
 	if err != nil {
 		fmt.Fprintln(stderr, "pascal:", err)
 		return 1
 	}
-	opts.FS, opts.IncludePaths = fsys, fsIncludes
+	opts.FS, opts.IncludePaths = os.DirFS(root), fsIncludes
 
 	if cmd == "check" {
 		if err := compiler.Check(ctx, fsMain, opts); err != nil {
-			fmt.Fprintln(stderr, err)
+			printCompileError(stderr, err, root)
 			return 1
 		}
 		return 0
@@ -109,7 +108,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 	res, err := compiler.Compile(ctx, fsMain, opts)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		printCompileError(stderr, err, root)
 		return 1
 	}
 
@@ -145,12 +144,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 // hostFS bildet Hostpfade auf ein fs.FS ab. Weil Units und Includes auch über
 // "../" erreichbar sein können, ist die Wurzel das Laufwerk bzw. "/" und alle
 // Pfade werden absolut, aber ohne führenden Trenner übergeben.
-func hostFS(mainFile string, includes []string) (fsys fs.FS, fsMain string, fsIncludes []string, err error) {
+func hostFS(mainFile string, includes []string) (root, fsMain string, fsIncludes []string, err error) {
 	abs, err := filepath.Abs(mainFile)
 	if err != nil {
-		return nil, "", nil, err
+		return "", "", nil, err
 	}
-	root := filepath.VolumeName(abs) + string(filepath.Separator)
+	root = filepath.VolumeName(abs) + string(filepath.Separator)
 	rel := func(p string) (string, error) {
 		a, err := filepath.Abs(p)
 		if err != nil {
@@ -163,16 +162,36 @@ func hostFS(mainFile string, includes []string) (fsys fs.FS, fsMain string, fsIn
 		return filepath.ToSlash(r), nil
 	}
 	if fsMain, err = rel(mainFile); err != nil {
-		return nil, "", nil, err
+		return "", "", nil, err
 	}
 	for _, inc := range includes {
 		r, err := rel(inc)
 		if err != nil {
-			return nil, "", nil, err
+			return "", "", nil, err
 		}
 		fsIncludes = append(fsIncludes, r)
 	}
-	return os.DirFS(root), fsMain, fsIncludes, nil
+	return root, fsMain, fsIncludes, nil
+}
+
+// printCompileError gibt einen Compilerfehler aus. Dateinamen in Diagnosen
+// werden aus der fs.FS-Form wieder zu Pfaden relativ zum Arbeitsverzeichnis.
+func printCompileError(w io.Writer, err error, root string) {
+	var d *compiler.Diagnostic
+	if errors.As(err, &d) {
+		d.File = hostPath(root, d.File)
+	}
+	fmt.Fprintln(w, err)
+}
+
+func hostPath(root, fsPath string) string {
+	abs := filepath.Join(root, filepath.FromSlash(fsPath))
+	if wd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(wd, abs); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return abs
 }
 
 // stringList ist ein wiederholbarer Kommandozeilenparameter.

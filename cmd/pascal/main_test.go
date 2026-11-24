@@ -27,7 +27,7 @@ func TestCLI(t *testing.T) {
 		{[]string{"tanzen"}, 2, "unbekannter Befehl"},
 		{[]string{"build"}, 2, "genau eine Quelldatei"},
 		{[]string{"build", "-target", "dos", prog}, 2, "unbekanntes Ziel"},
-		{[]string{"check", missing}, 1, "fehlt.pas: Error 15: File not found"},
+		{[]string{"check", missing}, 1, missing + ": Error 15: File not found"},
 		{[]string{"build", missing}, 1, "Error 15"},
 		{[]string{"run", missing, "a", "b"}, 1, "Error 15"},
 		// Etappe 0: die Übersetzung selbst ist noch nicht implementiert.
@@ -54,13 +54,16 @@ func TestHostFS(t *testing.T) {
 	}
 	t.Chdir(filepath.Join(dir, "src", "lib"))
 
-	fsys, main, incs, err := hostFS("../p.pas", []string{".", ".."})
+	root, main, incs, err := hostFS("../p.pas", []string{".", ".."})
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := fs.ReadFile(fsys, main)
+	data, err := fs.ReadFile(os.DirFS(root), main)
 	if err != nil || string(data) != "x" {
 		t.Fatalf("ReadFile(%q) = %q, %v", main, data, err)
+	}
+	if got := hostPath(root, main); got != filepath.Join("..", "p.pas") && got != filepath.Join(dir, "src", "p.pas") {
+		t.Errorf("hostPath = %q", got)
 	}
 	if len(incs) != 2 || !fs.ValidPath(incs[0]) || !strings.HasSuffix(incs[0], "src/lib") || !strings.HasSuffix(incs[1], "src") {
 		t.Errorf("IncludePaths = %q", incs)

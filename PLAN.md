@@ -266,11 +266,12 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - **Fertig, wenn:** `go test ./...` und `go vet ./...` grün sind und `GOOS=wasip1 GOARCH=wasm go build ./compiler/...` sowie `GOOS=js GOARCH=wasm go build ./compiler/...` bauen.
 - *Erledigt (Nov 24, 2026).* Entscheidungen: Testfall = `*.pas` mit `*.out` oder `*.err` (Units/Includes ohne beides werden übersprungen), optional `*.in` als Eingabe; stdout und stderr landen gemeinsam in `*.out`, Laufzeitfehler als eigene Zeile, Exit-Code ≠ 0 als `[Exit-Code N]`. `runner.Options.Args` ist wie `os.Args` aufgebaut (`Args[0]` = `ParamStr(0)`). Die CLI übergibt Hostdateien über ein `os.DirFS` auf die Laufwerkswurzel. Handkodierte Test-Module liegen in `internal/wasmtest`.
 
-### Etappe 1: Lexer und Quelltext
+### Etappe 1: Lexer und Quelltext ✅
 
 - Alle Tokens von TP 4.0 plus die reservierten Wörter object, constructor, destructor, inherited, Bezeichner case-insensitive, Kommentare `{ }` und `(* *)`, Zeichenkonstanten `#65`, `^M`, `$FF`, Strings mit `''`.
 - Direktiven-Präprozessor (`{$I}`, `{$DEFINE}`, `{$IFDEF}` ...), Positionsangaben mit Datei, Zeile, Spalte. Prüfung auf gültiges UTF-8, BOM überspringen, Bezeichner nur ASCII.
 - **Fertig, wenn:** Tabellengetriebene Lexer-Tests für alle Token-Arten bestehen.
+- *Erledigt (Nov 24, 2026).* Pakete `source` (Positionen, Fehler, Loader mit DOS-artiger Dateisuche, Symbole und Bedingungsstapel) und `lexer` (Tokens, Direktiven, Includes). `^C` ist kontextabhängig: Der Parser schaltet mit `Lexer.SetTypeMode` an Typstellen auf Zeiger um. `{$I+/-}` steht als `Token.IOChecks` an jedem Token, `{$M}` über `Lexer.StackSize`. `compiler.Check`/`Compile` zerlegen bereits in Tokens und melden Lexerfehler; Golden-Tests dazu in `testdata/lexer/`. Einzelentscheidungen in `docs/abweichungen.md`.
 
 ### Etappe 2: Parser und AST
 

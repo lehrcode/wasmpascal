@@ -4,8 +4,8 @@
 // GOOS=wasip1. Quelltexte werden ausschließlich über Options.FS gelesen, damit
 // sie im Browser aus dem Speicher kommen können.
 //
-// Stand Etappe 0: Die API ist angelegt, die Übersetzung selbst fehlt noch.
-// Compile und Check liefern nach den Vorprüfungen einen Fehler.
+// Stand Etappe 1: Compile und Check zerlegen den Quelltext in Tokens und
+// melden Lexerfehler; danach liefern sie einen Fehler „noch nicht implementiert“.
 package compiler
 
 import (
@@ -13,6 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+
+	"github.com/lehrcode/wasmpascal/compiler/internal/lexer"
+	"github.com/lehrcode/wasmpascal/compiler/internal/source"
 )
 
 // Target wählt die Ziel-ABI des erzeugten Moduls.
@@ -75,9 +78,6 @@ func (d *Diagnostic) Error() string {
 	}
 }
 
-// TP-Fehlernummern, die bereits im Gerüst gebraucht werden.
-const errFileNotFound = 15
-
 // errNotImplemented kennzeichnet den Stand des Gerüsts.
 var errNotImplemented = errors.New("compiler: Übersetzung noch nicht implementiert")
 
@@ -114,9 +114,35 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if opts.StackSize < 0 {
 		return nil, fmt.Errorf("compiler: negative Stackgröße %d", opts.StackSize)
 	}
-	if _, err := fs.Stat(opts.FS, mainFile); err != nil {
-		return nil, &Diagnostic{File: mainFile, Code: errFileNotFound, Msg: "File not found"}
+	loader := source.NewLoader(opts.FS, opts.IncludePaths)
+	lx, err := lexer.New(loader, mainFile, source.NewDefines(opts.Defines...))
+	if err != nil {
+		return nil, diagnostic(err)
+	}
+	// Stand Etappe 1: Der Quelltext wird nur in Tokens zerlegt.
+	for i := 0; ; i++ {
+		if i%1024 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		tok, err := lx.Next()
+		if err != nil {
+			return nil, diagnostic(err)
+		}
+		if tok.Kind == lexer.EOF {
+			break
+		}
 	}
 	_ = emit
 	return nil, errNotImplemented
+}
+
+// diagnostic wandelt interne Compilerfehler in *Diagnostic um.
+func diagnostic(err error) error {
+	var se *source.Error
+	if errors.As(err, &se) {
+		return &Diagnostic{File: se.Pos.File, Line: se.Pos.Line, Col: se.Pos.Col, Code: se.Code, Msg: se.Msg}
+	}
+	return err
 }

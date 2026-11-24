@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"testing/fstest"
+
+	"github.com/lehrcode/wasmpascal/compiler/internal/source"
 )
 
 func TestDiagnosticError(t *testing.T) {
@@ -35,7 +37,7 @@ func TestCompilePreconditions(t *testing.T) {
 	}
 
 	var d *Diagnostic
-	if _, err := Compile(ctx, "fehlt.pas", Options{FS: src}); !errors.As(err, &d) || d.Code != errFileNotFound {
+	if _, err := Compile(ctx, "fehlt.pas", Options{FS: src}); !errors.As(err, &d) || d.Code != source.ErrFileNotFound {
 		t.Errorf("Compile mit fehlender Datei: %v", err)
 	}
 
@@ -43,5 +45,21 @@ func TestCompilePreconditions(t *testing.T) {
 	cancel()
 	if _, err := Compile(cctx, "p.pas", Options{FS: src}); !errors.Is(err, context.Canceled) {
 		t.Errorf("Compile mit abgebrochenem ctx: %v", err)
+	}
+}
+
+func TestCompileReportsLexerErrors(t *testing.T) {
+	src := fstest.MapFS{
+		"p.pas":     {Data: []byte("program P;\n{$I teil}\nbegin end.")},
+		"teil.pas":  {Data: []byte("{$IFDEF EXTRA}\n  x := 'offen\n{$ENDIF}")},
+		"lib/x.pas": {Data: []byte("")},
+	}
+	if _, err := Compile(context.Background(), "p.pas", Options{FS: src}); !errors.Is(err, errNotImplemented) {
+		t.Errorf("ohne EXTRA: %v", err)
+	}
+	_, err := Compile(context.Background(), "p.pas", Options{FS: src, Defines: []string{"extra"}})
+	var d *Diagnostic
+	if !errors.As(err, &d) || d.Error() != "teil.pas(2,8): Error 8: String constant exceeds line" {
+		t.Errorf("mit EXTRA: %v", err)
 	}
 }

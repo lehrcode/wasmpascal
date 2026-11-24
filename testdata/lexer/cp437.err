@@ -1,0 +1,1 @@
+lexer/cp437.pas(3,14): Error 900: Source file is not valid UTF-8; convert it with: iconv -f CP437 -t UTF-8
