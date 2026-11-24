@@ -20,7 +20,7 @@ const
   Nichts: ^Integer = nil;
   Faktor: Real = (1 + 2) * 0.5;
   Zeichen: array[0..2] of Char = ('a', 'b', #99);
-  Grenze = Max div 2;
+  Grenze = SizeOf(TMatrix) div 2;
 begin
   WriteLn(Name, ' ', Ursprung.x, ' ', Einheit[2, 2]:0:1, ' ', Tage[2]);
   if 7 in Primzahlen then WriteLn(Ord(Linie.Farbe))

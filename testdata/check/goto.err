@@ -1,0 +1,1 @@
+check/goto.pas(5,3): Error 902: Not supported by WasmPascal (goto is not supported before stage 8)

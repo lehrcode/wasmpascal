@@ -1,0 +1,27 @@
+type TFeld = array[1..5] of Integer (size 20, align 4)
+var g: Integer (size 4)
+procedure Leer [level 1]
+procedure Modi(a: Integer; var b: Integer; const c: TFeld; var d; const e) [level 1]
+  param a: Integer (size 4)
+  param var b: Integer (size 4)
+  param const c: TFeld (size 20)
+  param var d: untyped
+  param const e: untyped
+  var lokal: Real (size 8)
+function Quadrat(x: Integer): LongInt [level 1]
+  result Result: LongInt (size 4)
+  param x: Integer (size 4)
+function Summe(const f: TFeld): Integer [level 1]
+  result Result: Integer (size 4)
+  param const f: TFeld (size 20)
+  var x: Integer (size 4)
+procedure Aussen(n: Integer) [level 1]
+  param n: Integer (size 4)
+  var Tiefe: Integer (size 4)
+  function Mitte(k: Integer): Integer [level 2]
+    result Result: Integer (size 4)
+    param k: Integer (size 4)
+    procedure Innen [level 3]
+function Text(s: string): string [level 1]
+  result Result: string (size 256)
+  param s: string (size 256)

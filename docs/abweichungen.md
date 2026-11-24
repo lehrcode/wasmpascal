@@ -29,3 +29,19 @@ kommen die Einzelentscheidungen dazu, die während der Umsetzung fallen.
 | 2 | Fehlernummern | Syntaxfehler benutzen die Nummern der TP-7-Liste (z. B. 85 `";" expected`, 57 `THEN expected`, 113 `Error in statement` für `; else`); `// TP-ANNAHME`, dass TP 4.0 dieselben hat. |
 | 2 | Typisierte Konstanten | `(a, b)` ist eine Array-Konstante, `(x: 1; y: 2)` eine Record-Konstante. Ein einzelner geklammerter Wert `(5)` bleibt ein Ausdruck; die Typprüfung darf ihn bei Array-Typen als einelementige Liste deuten. |
 | 2 | `^` im Typkontext | Der Parser liest nach `=` im type-Teil, nach `:` in Deklarationen und nach `array … of`/`file of` im Typmodus (`^C` = Zeiger). Nach `set of` nicht, damit `set of ^A..^Z` möglich bleibt. |
+| 3 | Konstantenausdrücke | Erlaubt wie ab TP 5 (TP 4.0 kannte nur einfache Konstanten), mit `Abs`, `Chr`, `Hi`, `High`, `Length`, `Lo`, `Low`, `Odd`, `Ord`, `Pred`, `Round`, `SizeOf`, `Succ`, `Swap`, `Trunc` sowie `UpCase` und `Concat`. Typisierte Konstanten sind darin nicht erlaubt (Error 31), wie in TP. |
+| 3 | Ganzzahlkonstanten | `$80000000`..`$FFFFFFFF` ergeben negative Werte; Dezimalkonstanten über `MaxLongInt` sind Real-Konstanten (`// TP-ANNAHME`). Überlauf beim Falten ist Error 76. |
+| 3 | Ganzzahlarithmetik | Ergebnistyp `LongInt`, wenn ein Operand `LongInt` ist, sonst `Integer`; beide sind 32 Bit. |
+| 3 | Typumwandlungen | Ordinal ↔ Ordinal (Konstanten werden auf die Zielbreite gekürzt, `Word(x)` auf 16 Bit), Zeiger ↔ Zeiger, Zeiger ↔ 4-Byte-Ganzzahl; sonst Variablenumwandlung bei gleicher Größe. `Real(i)` ist wie in TP ein Fehler (61). |
+| 3 | `var`-Parameter | Verlangen identische Typen, auch bei Strings (`string[10]` an `var s: string` ist Error 26), wie TP mit der Voreinstellung `{$V+}`. |
+| 3 | Funktionsaufruf als Anweisung | Nicht erlaubt (TP 4.0 kennt `{$X+}` nicht): Error 122. |
+| 3 | Funktionsergebnisse | Nur Ordinal-, Real-, String- und Zeigertypen, wie in TP (Error 34). PLAN.md erwähnt im ABI-Abschnitt auch Record-Ergebnisse; das wäre eine Erweiterung und ist offen. |
+| 3 | Zeigerverträglichkeit | Typisierte Zeiger sind nur bei gleichem Basistyp verträglich; `Pointer`, `@x` und `nil` mit allen. |
+| 3 | Record-Konstanten | Felder stehen in Deklarationsreihenfolge; Felder dürfen fehlen (`// TP-ANNAHME`). |
+| 3 | `for`-Laufvariable | Muss eine Variable des aktuellen Blocks (oder ein Wertparameter) sein, sonst Error 97. |
+| 3 | `case` | Marken werden auf Verträglichkeit geprüft, aber nicht auf Doppelungen oder Wertebereich (`// TP-ANNAHME`). |
+| 3 | Argumentzahl | Wie TP: zu viele Argumente ergeben `")" expected` (89), zu wenige `"," expected` (87). |
+| 3 | `Seg(x)` | Ist die Konstante 0. |
+| 3 | Vordefinierte Variablen | `Input`, `Output`, `RandSeed`, `FileMode`, `ExitCode`. Die Größen der Datei-Records (48 bzw. 304 Byte für `Text`) sind vorläufig bis Etappe 6. |
+| 3 | `uses` | Bis Etappe 7 ergibt jede Unit außer `System` Error 15 (`File not found (Crt.pas)`). |
+| 3 | Fehlernummern | Typfehler nach der TP-7-Liste (`// TP-ANNAHME`); eigene Nummer 903 für `Break`/`Continue` außerhalb einer Schleife. |

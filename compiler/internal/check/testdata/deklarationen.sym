@@ -1,0 +1,76 @@
+const Zehn = 10: Integer
+const Hex = 255: Integer
+const Negativ = -10: Integer
+const Halb = 0.5: Real
+const Zeichen = 'z': Char
+const Text_ = "Hallo": string
+const Leer = "": string
+const Wahr = True: Boolean
+const Menge = [1, 3, 4, 5]: set of LongInt
+const Bereich = 35: Integer
+const Verkettet = "abc!": string
+const Laenge = 4: Integer
+const Kode = 66: LongInt
+const Gross = 2147483647: LongInt
+const Klein = -128: ShortInt
+type TFarbe = (Rot, Gruen, Blau) (size 1, align 1)
+type THell = Gruen..Blau (size 1, align 1)
+type TZiffer = 0..9 (size 1, align 1)
+type TBuchstabe = 'a'..'z' (size 1, align 1)
+type TGross = 1000..1100 (size 4, align 4)
+type TNeg = -100..100 (size 1, align 1)
+type TName = string[20] (size 256, align 1)
+type TFeld = array[1..10] of Integer (size 40, align 4)
+type TMatrix = array[1..3] of array[1..4] of Real (size 96, align 8)
+type TBits = packed array[0..7] of Boolean (size 8, align 1)
+type TZaehler = array[Char] of Word (size 1024, align 4)
+type TNachFarbe = array[TFarbe] of TName (size 768, align 1)
+type TMischung = record (size 288, align 8)
+  b: Byte @0
+  i: Integer @4
+  c: Char @8
+  r: Real @16
+  s: TName @24
+  w: Word @280
+type TForm = (Kreis, Rechteck) (size 1, align 1)
+type TFigur = record (size 24, align 8)
+  x: Integer @0
+  y: Integer @4
+  Art: TForm @8
+  Radius: Real @16 [variant 1]
+  Breite: Integer @12 [variant 2]
+  Hoehe: Integer @16 [variant 2]
+  Gefuellt: Boolean @20 [variant 2]
+type TUnion = record (size 4, align 4)
+  L: LongInt @0 [variant 1]
+  B0: Byte @0 [variant 2]
+  B1: Byte @1 [variant 2]
+  B2: Byte @2 [variant 2]
+  B3: Byte @3 [variant 2]
+type TZiffern = set of TZiffer (size 32, align 4)
+type TZeichen = set of Char (size 32, align 4)
+type TFarben = set of TFarbe (size 32, align 4)
+type PKnoten = ^TKnoten (size 4, align 4)
+type TKnoten = record (size 8, align 4)
+  Wert: Integer @0
+  Naechster: PKnoten @4
+type PString = ^string (size 4, align 4)
+type TDatei = file of TMischung (size 48, align 4)
+type TRoh = file (size 48, align 4)
+type TFeldAlias = array[1..10] of Integer (size 40, align 4)
+var i: Integer (size 4)
+var f: TFarbe (size 1)
+var m: TMischung (size 288)
+var t: Text (size 304)
+var p: Pointer (size 4)
+var a: array[1..3] of Char (size 3)
+var b: array[1..3] of Char (size 3)
+const Tage: array[1..3] of Byte = (31, 28, 31) (size 3)
+const Ursprung: TFigur = (x: 0; y: 0; Art: Kreis; Radius: 1.5) (size 24)
+const Kennung: packed array[1..4] of Char = ('W', 'A', 'S', 'M') (size 4)
+const Erlaubt: TZiffern = [1, 2, 3] (size 32)
+const Nichts: PKnoten = nil (size 4)
+const Einheit: TMatrix = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0)) (size 96)
+const Name: TName = "Pascal" (size 256)
+const Faktor: Real = 3 (size 8)
+const Einzeln: array[1..1] of Integer = (5) (size 4)

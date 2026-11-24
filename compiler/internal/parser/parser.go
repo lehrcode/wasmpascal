@@ -762,7 +762,7 @@ func (p *parser) exprFrom(f ast.Expr) ast.Expr {
 	case lexer.Eq, lexer.Ne, lexer.Lt, lexer.Le, lexer.Gt, lexer.Ge, lexer.In:
 		op, pos := p.tok.Kind, p.tok.Pos
 		p.next()
-		x = &ast.BinaryExpr{Base: ast.At(pos), Op: op, X: x, Y: p.simpleExpr(nil)}
+		x = &ast.BinaryExpr{Base: ast.At(x.Pos()), OpPos: pos, Op: op, X: x, Y: p.simpleExpr(nil)}
 	}
 	return x
 }
@@ -774,7 +774,7 @@ func (p *parser) simpleExpr(f ast.Expr) ast.Expr {
 		case lexer.Plus, lexer.Minus, lexer.Or, lexer.Xor:
 			op, pos := p.tok.Kind, p.tok.Pos
 			p.next()
-			x = &ast.BinaryExpr{Base: ast.At(pos), Op: op, X: x, Y: p.term(nil)}
+			x = &ast.BinaryExpr{Base: ast.At(x.Pos()), OpPos: pos, Op: op, X: x, Y: p.term(nil)}
 		default:
 			return x
 		}
@@ -791,7 +791,7 @@ func (p *parser) term(f ast.Expr) ast.Expr {
 		case lexer.Star, lexer.Slash, lexer.Div, lexer.Mod, lexer.And, lexer.Shl, lexer.Shr:
 			op, pos := p.tok.Kind, p.tok.Pos
 			p.next()
-			x = &ast.BinaryExpr{Base: ast.At(pos), Op: op, X: x, Y: p.factor()}
+			x = &ast.BinaryExpr{Base: ast.At(x.Pos()), OpPos: pos, Op: op, X: x, Y: p.factor()}
 		default:
 			return x
 		}
@@ -859,15 +859,15 @@ func (p *parser) setLit() ast.Expr {
 // designator liest Bezeichner mit Selektoren: a.b, a[i], p^, f(x).
 func (p *parser) designator() ast.Expr {
 	var x ast.Expr = p.ident()
+	start := x.Pos()
 	for {
-		pos := p.tok.Pos
 		switch p.tok.Kind {
 		case lexer.Dot:
 			p.next()
-			x = &ast.SelectorExpr{Base: ast.At(pos), X: x, Sel: p.ident()}
+			x = &ast.SelectorExpr{Base: ast.At(start), X: x, Sel: p.ident()}
 		case lexer.LBrack:
 			p.next()
-			ix := &ast.IndexExpr{Base: ast.At(pos), X: x, Indices: []ast.Expr{p.expr()}}
+			ix := &ast.IndexExpr{Base: ast.At(start), X: x, Indices: []ast.Expr{p.expr()}}
 			for p.got(lexer.Comma) {
 				ix.Indices = append(ix.Indices, p.expr())
 			}
@@ -875,13 +875,14 @@ func (p *parser) designator() ast.Expr {
 			x = ix
 		case lexer.Caret:
 			p.next()
-			x = &ast.DerefExpr{Base: ast.At(pos), X: x}
+			x = &ast.DerefExpr{Base: ast.At(start), X: x}
 		case lexer.LParen:
 			p.next()
-			c := &ast.CallExpr{Base: ast.At(pos), Fun: x, Args: []ast.Expr{p.arg()}}
+			c := &ast.CallExpr{Base: ast.At(start), Fun: x, Args: []ast.Expr{p.arg()}}
 			for p.got(lexer.Comma) {
 				c.Args = append(c.Args, p.arg())
 			}
+			c.Rparen = p.tok.Pos
 			p.expect(lexer.RParen)
 			x = c
 		default:

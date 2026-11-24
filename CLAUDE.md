@@ -61,3 +61,5 @@ bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichung
 
 Parser-Golden-Tests: `compiler/internal/parser/testdata/*.pas` → `*.ast`, neu schreiben mit
 `go test ./compiler/internal/parser -update`.
+Symbol-Golden-Tests der Typprüfung: `compiler/internal/check/testdata/*.pas` → `*.sym`, neu schreiben mit
+`go test ./compiler/internal/check -update`.

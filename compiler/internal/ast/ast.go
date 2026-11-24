@@ -10,7 +10,8 @@ import (
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
 )
 
-// Node ist jeder Knoten des Baums.
+// Node ist jeder Knoten des Baums. Pos ist bei Ausdrücken immer der Anfang
+// des Ausdrucks (bei a.b, a[i], p^, f(x) und a + b also der Anfang von a).
 type Node interface {
 	Pos() source.Pos
 }
@@ -129,18 +130,21 @@ type UnaryExpr struct {
 	X  Expr
 }
 
-// BinaryExpr ist ein zweistelliger Operator.
+// BinaryExpr ist ein zweistelliger Operator. Pos ist der Anfang von X,
+// OpPos die Stelle des Operators.
 type BinaryExpr struct {
 	Base
-	Op   lexer.Kind
-	X, Y Expr
+	Op    lexer.Kind
+	OpPos source.Pos
+	X, Y  Expr
 }
 
 // CallExpr ist f(args): Funktions-/Prozeduraufruf oder Typumwandlung T(x).
 type CallExpr struct {
 	Base
-	Fun  Expr
-	Args []Expr
+	Fun    Expr
+	Args   []Expr
+	Rparen source.Pos // Position der schließenden Klammer
 }
 
 // FormatArg ist ein Argument mit Formatangabe x:breite[:nachkomma], erlaubt

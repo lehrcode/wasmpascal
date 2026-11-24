@@ -19,7 +19,7 @@
   (const nichts (^ integer) nil)
   (const faktor real (* (+ 1 2) 0.5))
   (const zeichen (array ((.. 0 2)) char) (list "a" "b" "c"))
-  (const grenze (div max 2))
+  (const grenze (div (call sizeof tmatrix) 2))
   (begin
     (call writeln name " "
       (. ursprung x)

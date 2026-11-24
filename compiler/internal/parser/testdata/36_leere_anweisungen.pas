@@ -1,6 +1,7 @@
 program Leer;
 var
   x: Integer;
+  r: record a: Integer end;
 begin
   ;;
   begin end;
@@ -12,5 +13,5 @@ begin
     1: ;
   end;
   for x := 1 to 3 do ;
-  with Output do ;
+  with r do ;
 end.

@@ -1,5 +1,6 @@
 (program leer
   (var (x) integer)
+  (var (r) (record (field (a) integer)))
   (begin
     (empty)
     (empty)
@@ -10,5 +11,5 @@
     (repeat (empty) (until true))
     (case x (arm (1) (empty)))
     (for x 1 to 3 (empty))
-    (with (output) (empty))
+    (with (r) (empty))
     (empty)))

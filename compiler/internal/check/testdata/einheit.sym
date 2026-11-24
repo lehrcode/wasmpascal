@@ -1,0 +1,15 @@
+const Version = 2: Integer
+type TPunkt = record (size 16, align 8)
+  x: Real @0
+  y: Real @8
+var Anzahl: Integer (size 4)
+function Abstand(const a: TPunkt; const b: TPunkt): Real [level 1]
+  result Result: Real (size 8)
+  param const a: TPunkt (size 16)
+  param const b: TPunkt (size 16)
+procedure Zaehle [level 1]
+implementation
+var Intern: Integer (size 4)
+function Quadrat(x: Real): Real [level 1]
+  result Result: Real (size 8)
+  param x: Real (size 8)

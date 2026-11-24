@@ -288,12 +288,13 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - **Fertig, wenn:** Mindestens 30 Parser-Golden-Tests bestehen, darunter typische Programme aus TP-Lehrbüchern (selbst geschrieben).
 - *Erledigt (Nov 24, 2026).* Paket `ast` mit S-Ausdruck-Printer (`ast.Sprint`), Paket `parser` (Recursive Descent, Abbruch per Panic/Recover beim ersten Fehler). 37 Golden-Tests in `compiler/internal/parser/testdata/` (`go test ./compiler/internal/parser -update`), dazu Tabellen für Fehler und Sonderfälle sowie Fehler-Golden-Tests in `testdata/parser/`. Namensauflösung (Recordfeld oder `Unit.Name`, Aufruf oder Typumwandlung) bleibt der Typprüfung überlassen. `{$I-}` steht als `IOChecks` an jeder Anweisung.
 
-### Etappe 3: Typprüfung
+### Etappe 3: Typprüfung ✅
 
 - Scopes, Symboltabellen, alle Typen aus der Typabbildung, Typverträglichkeit und Zuweisungskompatibilität, Konstantenauswertung, Typumwandlungen `T(x)`.
 - Standardprozeduren und -funktionen als eingebaute Symbole: `Write`/`WriteLn`/`Read`/`ReadLn` mit Formatangaben, `Inc`, `Dec`, `Ord`, `Chr`, `Succ`, `Pred`, `Low`/`High` (Erweiterung aus TP 7), `SizeOf`, `Length`, `Copy`, `Concat`, `Pos`, `Delete`, `Insert`, `Str`, `Val`, `New`, `Dispose` usw.
 - Erweiterungen: Result, schreibgeschützte Konstanten, const-Parameter, Low/High, Prüfung von Break/Continue. Units noch ohne Mehrdatei-Auflösung; die System-Unit ist zunächst ein Stub.
 - **Fertig, wenn:** Fehler-Golden-Tests (`*.err`) für typische Typfehler und positive Tests für alle Konstrukte bestehen.
+- *Erledigt (Nov 24, 2026).* Paket `types` (Typen mit Größen und Ausrichtung, Konstantenwerte, Symbole, Scopes) und `check` (Deklarationen, Konstantenauswertung, Ausdrücke, Anweisungen, 84 Standardroutinen, Erweiterungen). `check.Info` hält Typen, Konstanten, Symbolbezüge, Felder, Aufrufe und Scopes für die Codegenerierung. Tests: Symbol-Golden-Tests in `compiler/internal/check/testdata/` (`-update`), Tabellen mit 61 Ausdruckstypen und 107 Fehlerfällen, alle Parser-Lehrbuchprogramme ohne Units/goto, Fehler-Golden-Tests in `testdata/check/`. AST-Positionen von Ausdrücken zeigen jetzt auf den Ausdrucksanfang (`BinaryExpr.OpPos` für den Operator).
 
 ### Etappe 4: IR, Codegenerator, Encoder, erstes Programm
 

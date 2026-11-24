@@ -62,49 +62,138 @@ const (
 	ErrDotDotExpected     = 95
 	ErrInStatement        = 113
 
+	// Typprüfung
+	ErrUnknownIdent        = 3
+	ErrDuplicateIdent      = 4
+	ErrUndefinedPtrType    = 19
+	ErrVarIdentExpected    = 20
+	ErrStructTooLarge      = 22
+	ErrSetBaseRange        = 23
+	ErrInvalidStringLen    = 25
+	ErrTypeMismatch        = 26
+	ErrInvalidSubrangeBase = 27
+	ErrLowerGtUpper        = 28
+	ErrOrdinalTypeExpected = 29
+	ErrIntConstExpected    = 30
+	ErrConstExpected       = 31
+	ErrInvalidResultType   = 34
+	ErrIntExprExpected     = 38
+	ErrOrdinalExprExpected = 39
+	ErrBoolExprExpected    = 40
+	ErrOperandTypes        = 41
+	ErrIllegalAssignment   = 43
+	ErrFieldIdentExpected  = 44
+	ErrUndefinedForward    = 59
+	ErrInvalidTypecast     = 61
+	ErrDivisionByZero      = 62
+	ErrInvalidFileType     = 63
+	ErrCannotReadWrite     = 64
+	ErrPointerVarExpected  = 65
+	ErrStringVarExpected   = 66
+	ErrCaseConstType       = 74
+	ErrRecordVarExpected   = 75
+	ErrFileVarExpected     = 77
+	ErrNumExprExpected     = 79
+	ErrLabelNotInBlock     = 80
+	ErrLabelDefined        = 81
+	ErrInvalidAt           = 83
+	ErrInvalidForVar       = 97
+	ErrIntVarExpected      = 98
+	ErrOrdinalVarExpected  = 104
+	ErrInvalidVarRef       = 122
+	ErrFilesMustBeVar      = 126
+	ErrHeaderMismatch      = 131
+	ErrInvalidFormat       = 135
+	ErrInvalidProcRef      = 143
+
 	ErrInvalidUTF8  = 900
 	ErrNonASCII     = 901
 	ErrNotSupported = 902
+	ErrBreakOutside = 903
 )
 
 var messages = map[int]string{
-	ErrIdentExpected:      "Identifier expected",
-	ErrTypeIdentExpected:  "Type identifier expected",
-	ErrInType:             "Error in type",
-	ErrBeginExpected:      "BEGIN expected",
-	ErrEndExpected:        "END expected",
-	ErrInExpression:       "Error in expression",
-	ErrDoExpected:         "DO expected",
-	ErrOfExpected:         "OF expected",
-	ErrInterfaceExpected:  "INTERFACE expected",
-	ErrThenExpected:       "THEN expected",
-	ErrToDowntoExpected:   "TO or DOWNTO expected",
-	ErrImplExpected:       "IMPLEMENTATION expected",
-	ErrSemicolonExpected:  `";" expected`,
-	ErrColonExpected:      `":" expected`,
-	ErrCommaExpected:      `"," expected`,
-	ErrLParenExpected:     `"(" expected`,
-	ErrRParenExpected:     `")" expected`,
-	ErrEqExpected:         `"=" expected`,
-	ErrAssignExpected:     `":=" expected`,
-	ErrLBrackExpected:     `"[" expected`,
-	ErrRBrackExpected:     `"]" expected`,
-	ErrDotExpected:        `"." expected`,
-	ErrDotDotExpected:     `".." expected`,
-	ErrInStatement:        "Error in statement",
-	ErrNotSupported:       "Not supported by WasmPascal",
-	ErrSyntax:             "Syntax error",
-	ErrRealConst:          "Error in real constant",
-	ErrIntConst:           "Error in integer constant",
-	ErrStringExceedsLine:  "String constant exceeds line",
-	ErrTooManyNestedFiles: "Too many nested files",
-	ErrUnexpectedEOF:      "Unexpected end of file",
-	ErrInvalidFileName:    "Invalid file name",
-	ErrFileNotFound:       "File not found",
-	ErrInvalidDirective:   "Invalid compiler directive",
-	ErrConstOutOfRange:    "Constant out of range",
-	ErrInvalidUTF8:        "Source file is not valid UTF-8; convert it with: iconv -f CP437 -t UTF-8",
-	ErrNonASCII:           "Invalid character; identifiers and symbols must be ASCII",
+	ErrIdentExpected:     "Identifier expected",
+	ErrTypeIdentExpected: "Type identifier expected",
+	ErrInType:            "Error in type",
+	ErrBeginExpected:     "BEGIN expected",
+	ErrEndExpected:       "END expected",
+	ErrInExpression:      "Error in expression",
+	ErrDoExpected:        "DO expected",
+	ErrOfExpected:        "OF expected",
+	ErrInterfaceExpected: "INTERFACE expected",
+	ErrThenExpected:      "THEN expected",
+	ErrToDowntoExpected:  "TO or DOWNTO expected",
+	ErrImplExpected:      "IMPLEMENTATION expected",
+	ErrSemicolonExpected: `";" expected`,
+	ErrColonExpected:     `":" expected`,
+	ErrCommaExpected:     `"," expected`,
+	ErrLParenExpected:    `"(" expected`,
+	ErrRParenExpected:    `")" expected`,
+	ErrEqExpected:        `"=" expected`,
+	ErrAssignExpected:    `":=" expected`,
+	ErrLBrackExpected:    `"[" expected`,
+	ErrRBrackExpected:    `"]" expected`,
+	ErrDotExpected:       `"." expected`,
+	ErrDotDotExpected:    `".." expected`,
+	ErrInStatement:       "Error in statement",
+	ErrNotSupported:      "Not supported by WasmPascal",
+	ErrBreakOutside:      "BREAK or CONTINUE outside of loop",
+
+	ErrUnknownIdent:        "Unknown identifier",
+	ErrDuplicateIdent:      "Duplicate identifier",
+	ErrUndefinedPtrType:    "Undefined type in pointer definition",
+	ErrVarIdentExpected:    "Variable identifier expected",
+	ErrStructTooLarge:      "Structure too large",
+	ErrSetBaseRange:        "Set base type out of range",
+	ErrInvalidStringLen:    "Invalid string length",
+	ErrTypeMismatch:        "Type mismatch",
+	ErrInvalidSubrangeBase: "Invalid subrange base type",
+	ErrLowerGtUpper:        "Lower bound greater than upper bound",
+	ErrOrdinalTypeExpected: "Ordinal type expected",
+	ErrIntConstExpected:    "Integer constant expected",
+	ErrConstExpected:       "Constant expected",
+	ErrInvalidResultType:   "Invalid function result type",
+	ErrIntExprExpected:     "Integer expression expected",
+	ErrOrdinalExprExpected: "Ordinal expression expected",
+	ErrBoolExprExpected:    "Boolean expression expected",
+	ErrOperandTypes:        "Operand types do not match operator",
+	ErrIllegalAssignment:   "Illegal assignment",
+	ErrFieldIdentExpected:  "Field identifier expected",
+	ErrUndefinedForward:    "Undefined forward",
+	ErrInvalidTypecast:     "Invalid typecast",
+	ErrDivisionByZero:      "Division by zero",
+	ErrInvalidFileType:     "Invalid file type",
+	ErrCannotReadWrite:     "Cannot Read or Write variables of this type",
+	ErrPointerVarExpected:  "Pointer variable expected",
+	ErrStringVarExpected:   "String variable expected",
+	ErrCaseConstType:       "Constant and case types do not match",
+	ErrRecordVarExpected:   "Record variable expected",
+	ErrFileVarExpected:     "File variable expected",
+	ErrNumExprExpected:     "Integer or real expression expected",
+	ErrLabelNotInBlock:     "Label not within current block",
+	ErrLabelDefined:        "Label already defined",
+	ErrInvalidAt:           "Invalid @ argument",
+	ErrInvalidForVar:       "Invalid FOR control variable",
+	ErrIntVarExpected:      "Integer variable expected",
+	ErrOrdinalVarExpected:  "Ordinal variable expected",
+	ErrInvalidVarRef:       "Invalid variable reference",
+	ErrFilesMustBeVar:      "Files must be var parameters",
+	ErrHeaderMismatch:      "Header does not match previous definition",
+	ErrInvalidFormat:       "Invalid format specifier",
+	ErrInvalidProcRef:      "Invalid procedure or function reference",
+	ErrSyntax:              "Syntax error",
+	ErrRealConst:           "Error in real constant",
+	ErrIntConst:            "Error in integer constant",
+	ErrStringExceedsLine:   "String constant exceeds line",
+	ErrTooManyNestedFiles:  "Too many nested files",
+	ErrUnexpectedEOF:       "Unexpected end of file",
+	ErrInvalidFileName:     "Invalid file name",
+	ErrFileNotFound:        "File not found",
+	ErrInvalidDirective:    "Invalid compiler directive",
+	ErrConstOutOfRange:     "Constant out of range",
+	ErrInvalidUTF8:         "Source file is not valid UTF-8; convert it with: iconv -f CP437 -t UTF-8",
+	ErrNonASCII:            "Invalid character; identifiers and symbols must be ASCII",
 }
 
 // Error ist ein Compilerfehler mit Position und TP-Fehlernummer.
