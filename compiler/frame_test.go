@@ -11,16 +11,19 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
+	"github.com/lehrcode/wasmpascal/compiler/internal/check"
+	"github.com/lehrcode/wasmpascal/compiler/internal/types"
 	"github.com/lehrcode/wasmpascal/runner"
 )
 
-// TestForceFrame übersetzt die Testprogramme der Etappen 4 und 5 so, dass
+// TestForceFrame übersetzt die Testprogramme der Etappen 4 bis 6 so, dass
 // alle Variablen im Frame auf dem Schatten-Stack statt in WASM-Locals liegen,
 // und erwartet dieselbe Ausgabe. Das sichert die Planregel ab, dass sich jede
 // Variable auslagern lässt (Voraussetzung für Etappe 8).
 func TestForceFrame(t *testing.T) {
 	var files []string
-	for _, dir := range []string{"etappe4", "etappe5"} {
+	for _, dir := range []string{"etappe4", "etappe5", "etappe6"} {
 		f, _ := filepath.Glob(filepath.Join("..", "testdata", dir, "*.pas"))
 		files = append(files, f...)
 	}
@@ -40,8 +43,16 @@ func TestForceFrame(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			code, err := runner.Run(context.Background(), res.Wasm, runner.Options{Stdout: &out})
+			opts := runner.Options{Stdout: &out, Args: []string{strings.TrimSuffix(filepath.Base(rel), ".pas")},
+				Dirs: map[string]string{"/": t.TempDir()}}
+			if in, err := os.ReadFile(strings.TrimSuffix(file, ".pas") + ".in"); err == nil {
+				opts.Stdin = bytes.NewReader(in)
+			}
+			code, err := runner.Run(context.Background(), res.Wasm, opts)
 			var rte *runner.RuntimeError
+			if (err != nil || code != 0) && out.Len() > 0 && !bytes.HasSuffix(out.Bytes(), []byte("\n")) {
+				out.WriteByte('\n')
+			}
 			switch {
 			case errors.As(err, &rte):
 				out.WriteString(rte.Error() + "\n")
@@ -72,6 +83,28 @@ func TestNoLines(t *testing.T) {
 		}
 		if err == nil || err.Error() != want {
 			t.Errorf("NoLines=%v: %v, want %q", noLines, err, want)
+		}
+	}
+}
+
+// TestFileRecSizes prüft, dass die Größen der Datei-Records im Compiler zu
+// TFileRec und TTextRec in rtl/system.pas passen.
+func TestFileRecSizes(t *testing.T) {
+	system, err := parseSystem()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := check.Check(&ast.Program{Block: &ast.Block{Body: &ast.CompoundStmt{}}}, check.Config{System: system})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]int64{"_filerecsize": types.FileRecSize, "_textrecsize": types.TextRecSize} {
+		c, ok := info.SystemImpl.Syms[name].(*types.Const)
+		if !ok {
+			t.Fatalf("%s fehlt in rtl/system.pas", name)
+		}
+		if c.Val.Int != want {
+			t.Errorf("%s = %d in rtl/system.pas, im Compiler %d", name, c.Val.Int, want)
 		}
 	}
 }

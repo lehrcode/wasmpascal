@@ -338,11 +338,11 @@ func (NilType) Align() int64   { return 4 }
 // Nil ist der Typ der Konstante nil.
 var Nil Type = NilType{}
 
-// Größen der Laufzeit-Records für Dateien.
-// Vorläufig; die endgültige Belegung entsteht mit der Laufzeit in Etappe 6.
+// Größen der Laufzeit-Records für Dateien; sie müssen zu TFileRec und
+// TTextRec in rtl/system.pas passen (geprüft in den Tests des Compilers).
 const (
-	FileRecSize = 48
-	TextRecSize = 48 + 256 // mit Puffer
+	FileRecSize = 272 // Handle, Mode, RecSize, Reserve, Name
+	TextRecSize = 528 // Handle, Mode, BufPos, BufEnd, Name, Puffer mit 256 Byte
 )
 
 // File ist file, file of Elem oder Text.

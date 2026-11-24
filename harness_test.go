@@ -38,7 +38,7 @@ func TestPrograms(t *testing.T) {
 	for _, c := range cases {
 		t.Run(strings.TrimSuffix(c, ".pas"), func(t *testing.T) {
 			t.Parallel()
-			if err := h.check(t.Context(), c); err != nil {
+			if err := h.check(t.Context(), c, t.TempDir()); err != nil {
 				t.Error(err)
 			}
 		})
@@ -74,12 +74,13 @@ func (h harness) cases() ([]string, error) {
 }
 
 // check übersetzt und startet ein Testprogramm und vergleicht das Ergebnis.
-func (h harness) check(ctx context.Context, file string) error {
+// Dateizugriffe des Programms landen im Verzeichnis dir.
+func (h harness) check(ctx context.Context, file, dir string) error {
 	ctx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
 
 	base := strings.TrimSuffix(file, ".pas")
-	got, kind, err := h.result(ctx, file)
+	got, kind, err := h.result(ctx, file, dir)
 	if err != nil {
 		return err
 	}
@@ -116,7 +117,7 @@ func (h harness) check(ctx context.Context, file string) error {
 // Die Programmausgabe umfasst stdout und stderr in Schreibreihenfolge; ein
 // Laufzeitfehler wird als eigene Zeile angehängt, ein Exit-Code ungleich 0 als
 // "[Exit-Code N]". Eingaben kommen aus *.in, falls vorhanden.
-func (h harness) result(ctx context.Context, file string) (got, kind string, err error) {
+func (h harness) result(ctx context.Context, file, dir string) (got, kind string, err error) {
 	res, err := h.compile(ctx, file, compiler.Options{Target: compiler.TargetWASI, FS: h.fsys})
 	if err != nil {
 		var d *compiler.Diagnostic
@@ -136,6 +137,7 @@ func (h harness) result(ctx context.Context, file string) (got, kind string, err
 		Stdin:  stdin,
 		Stdout: &out,
 		Stderr: &out,
+		Dirs:   dirs(dir),
 	})
 	if err != nil {
 		var rte *runner.RuntimeError
@@ -159,6 +161,13 @@ func endLine(b *bytes.Buffer) {
 	if b.Len() > 0 && !bytes.HasSuffix(b.Bytes(), []byte("\n")) {
 		b.WriteByte('\n')
 	}
+}
+
+func dirs(dir string) map[string]string {
+	if dir == "" {
+		return nil
+	}
+	return map[string]string{"/": dir}
 }
 
 func exists(fsys fs.FS, name string) bool {

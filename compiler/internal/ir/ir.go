@@ -24,6 +24,7 @@ type ValType int
 const (
 	I32 ValType = iota
 	F64
+	I64 // nur für Argumente von WASI-Aufrufen
 )
 
 // MemType ist die Darstellung eines skalaren Werts im Speicher.
@@ -166,13 +167,15 @@ const (
 	FToInt   // f64 → i32 (abschneiden)
 	Ext8     // Vorzeichenerweiterung des unteren Bytes
 	RoundF32 // auf Single-Genauigkeit runden (f64 → f32 → f64)
+	ExtS64   // i32 → i64 mit Vorzeichen
+	ExtU64   // i32 → i64 ohne Vorzeichen
 )
 
 var opNames = [...]string{
 	"add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr",
 	"eq", "ne", "lt", "le", "gt", "ge",
 	"fadd", "fsub", "fmul", "fdiv", "feq", "fne", "flt", "fle", "fgt", "fge",
-	"eqz", "fneg", "fabs", "fsqrt", "ftrunc", "itof", "ftoi", "ext8", "f32",
+	"eqz", "fneg", "fabs", "fsqrt", "ftrunc", "itof", "ftoi", "ext8", "f32", "ext64s", "ext64u",
 }
 
 func (o Op) String() string { return opNames[o] }
@@ -243,6 +246,8 @@ func (u Un) VT() ValType {
 	switch u.Op {
 	case NegF, AbsF, SqrtF, TruncF, IntToF, RoundF32:
 		return F64
+	case ExtS64, ExtU64:
+		return I64
 	}
 	return I32
 }
@@ -385,10 +390,14 @@ type Return struct{}
 // Unreachable beendet einen Block, der nie fortgesetzt wird (nach Halt).
 type Unreachable struct{}
 
-// Trap bricht mit dem Laufzeitfehler Code an der Stelle Pos ab.
+// Trap bricht mit dem Laufzeitfehler Code (oder dem Wert von CodeVar) an
+// der Stelle Pos ab. KeepPos: die vorgemerkte Stelle des Aufrufers behalten
+// (Fehler in der Laufzeit).
 type Trap struct {
-	Code int
-	Pos  Pos
+	Code    int
+	CodeVar *Var
+	Pos     Pos
+	KeepPos bool
 }
 
 func (j Jump) String() string { return fmt.Sprintf("jump b%d", j.To.ID) }
@@ -431,7 +440,10 @@ type Func struct {
 	StaticLink *Var
 	// HasNested: Es gibt innere Prozeduren; die Funktion braucht einen Frame.
 	HasNested bool
-	Params    []*Var // WASM-Parameter in Reihenfolge
+	// RTL: Routine der System-Unit; sie lässt die vorgemerkte Quelltextstelle
+	// unverändert, damit Fehler darin die Anweisung des Aufrufers nennen.
+	RTL    bool
+	Params []*Var // WASM-Parameter in Reihenfolge
 	// Result ist die Ergebnisvariable: skalar → Rückgabewert; Aggregat →
 	// Indirect über den versteckten ersten Parameter.
 	Result *Var

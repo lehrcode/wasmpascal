@@ -44,6 +44,7 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 		sets:    map[[4]uint64]int64{},
 		files:   map[string]int{},
 		copyIns: map[*Func][]copyIn{},
+		hosts:   map[int]*Host{},
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -63,22 +64,24 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 	l.m.Funcs = append(l.m.Funcs, main)
 	var bodies []*ast.ProcDecl
 	if system != nil {
+		l.rtlMode = true
 		l.declare(info.SystemIntf, nil, "")
 		l.declare(info.SystemImpl, nil, "")
+		l.rtlMode = false
 		bodies = append(bodies, procDecls(system.Impl)...)
 	}
 	l.declare(info.Root, nil, "")
 	bodies = append(bodies, procDecls(prog.Block.Decls)...)
 
-	// Hauptprogramm: zuerst die Initialisierung der System-Unit
+	// Hauptprogramm: zuerst die Initialisierung der System-Unit, am Ende _Done
 	var init []ast.Stmt
 	if system != nil && system.Init != nil {
 		init = system.Init.Stmts
 	}
-	l.body(main, nil, append(init, prog.Block.Body.Stmts...))
+	l.body(main, nil, append(init, prog.Block.Body.Stmts...), len(init))
 	for _, d := range bodies {
 		p := info.Procs[d]
-		l.body(l.funcs[p], p, d.Block.Body.Stmts)
+		l.body(l.funcs[p], p, d.Block.Body.Stmts, 0)
 	}
 	return l.m, nil
 }
@@ -93,6 +96,8 @@ type lowerer struct {
 	sets    map[[4]uint64]int64
 	files   map[string]int
 	copyIns map[*Func][]copyIn
+	hosts   map[int]*Host
+	rtlMode bool // es werden Routinen der System-Unit angelegt
 }
 
 // copyIn ist ein Wertparameter vom Aggregattyp: Der Aufgerufene kopiert ihn
@@ -176,8 +181,6 @@ func checkSupported(t types.Type, pos source.Pos) {
 		for _, f := range t.Fields {
 			checkSupported(f.Type, pos)
 		}
-	case *types.File:
-		unsupported(pos, "files are supported from stage 6")
 	}
 }
 
@@ -326,7 +329,7 @@ func (l *lowerer) declare(s *types.Scope, parent *Func, prefix string) {
 
 // newFunc legt die Func einer Prozedur mit Parametern und Locals an.
 func (l *lowerer) newFunc(p *types.Proc, parent *Func, name string) *Func {
-	f := &Func{Name: name, Display: p.Text(), Proc: p, Parent: parent, Pos: l.pos(p.Pos())}
+	f := &Func{Name: name, Display: p.Text(), Proc: p, Parent: parent, Pos: l.pos(p.Pos()), RTL: l.rtlMode}
 	l.funcs[p] = f
 	l.m.Funcs = append(l.m.Funcs, f)
 	param := func(v *Var) *Var {
@@ -397,14 +400,24 @@ type fnState struct {
 	continues []*Block
 	withs     map[ast.Expr]*Var // with-Record → Hilfswert mit seiner Adresse
 	at        Pos               // aktuelle Quelltextstelle
+	io        bool              // {$I+} gilt für die aktuelle Anweisung
+	rtl       bool              // Code der System-Unit (ohne Positionspflege)
 	tmp       int
 }
 
-func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt) {
-	s := &fnState{l: l, fn: f, proc: p, withs: map[ast.Expr]*Var{}, at: f.Pos}
+// body übersetzt einen Rumpf; die ersten rtlStmts Anweisungen gehören zur
+// System-Unit (deren Initialisierung im Hauptprogramm).
+func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt, rtlStmts int) {
+	s := &fnState{l: l, fn: f, proc: p, withs: map[ast.Expr]*Var{}, at: f.Pos, rtl: f.RTL}
 	f.Entry = f.NewBlock()
 	s.cur = f.Entry
 	s.exit = f.NewBlock()
+	if f == l.m.Main && l.info.SystemImpl != nil {
+		saved := s.cur
+		s.cur = s.exit
+		s.callRtl("_Done", nil)
+		s.cur = saved
+	}
 	s.exit.Term = Return{}
 	for _, ci := range l.copyIns[f] {
 		if st, ok := ci.dst.Type.(*types.String); ok {
@@ -413,7 +426,8 @@ func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt) {
 			s.emit(Copy{Dst: Addr{Var: ci.dst}, Src: Get{Var: ci.src}, N: IntConst{V: int32(ci.dst.Type.Size())}})
 		}
 	}
-	for _, st := range stmts {
+	for i, st := range stmts {
+		s.rtl = f.RTL || i < rtlStmts
 		s.stmt(st)
 	}
 	s.jump(s.exit)
@@ -437,7 +451,7 @@ func (s *fnState) branch(c Expr, then, els *Block) {
 // check bricht mit Laufzeitfehler code ab, wenn fail ungleich 0 ist.
 func (s *fnState) check(fail Expr, code int) {
 	trap, ok := s.fn.NewBlock(), s.fn.NewBlock()
-	trap.Term = Trap{Code: code, Pos: s.at}
+	trap.Term = Trap{Code: code, Pos: s.at, KeepPos: s.rtl}
 	s.branch(fail, trap, ok)
 	s.cur = ok
 }
@@ -487,9 +501,6 @@ func itoa(i int) string {
 func (s *fnState) variable(v *types.Var, pos source.Pos) *Var {
 	iv, ok := s.l.vars[v]
 	if !ok {
-		if v.Kind == types.BuiltinVar {
-			unsupported(pos, v.Text()+" is supported from stage 6")
-		}
 		panic("ir: Variable " + v.Name() + " nicht angelegt")
 	}
 	if iv.Owner != nil && iv.Owner != s.fn {
@@ -504,7 +515,8 @@ func (s *fnState) variable(v *types.Var, pos source.Pos) *Var {
 func (s *fnState) stmt(st ast.Stmt) {
 	if _, isCompound := st.(*ast.CompoundStmt); !isCompound {
 		s.at = s.l.pos(st.Pos())
-		if !s.l.opts.NoLines {
+		s.io = ioChecks(st)
+		if !s.l.opts.NoLines && !s.rtl {
 			s.emit(Line{Pos: s.at})
 		}
 	}
@@ -576,6 +588,37 @@ func (s *fnState) stmt(st ast.Stmt) {
 	default:
 		panic("ir: unbekannte Anweisung")
 	}
+}
+
+// ioChecks liefert den Zustand von {$I+}/{$I-} am Beginn einer Anweisung.
+func ioChecks(st ast.Stmt) bool {
+	switch st := st.(type) {
+	case *ast.EmptyStmt:
+		return st.IOChecks
+	case *ast.AssignStmt:
+		return st.IOChecks
+	case *ast.CallStmt:
+		return st.IOChecks
+	case *ast.IfStmt:
+		return st.IOChecks
+	case *ast.CaseStmt:
+		return st.IOChecks
+	case *ast.WhileStmt:
+		return st.IOChecks
+	case *ast.RepeatStmt:
+		return st.IOChecks
+	case *ast.ForStmt:
+		return st.IOChecks
+	case *ast.ForInStmt:
+		return st.IOChecks
+	case *ast.WithStmt:
+		return st.IOChecks
+	case *ast.GotoStmt:
+		return st.IOChecks
+	case *ast.LabeledStmt:
+		return st.IOChecks
+	}
+	return true
 }
 
 func (s *fnState) loop(brk, cont *Block, body func()) {

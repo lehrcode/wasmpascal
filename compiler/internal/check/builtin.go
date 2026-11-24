@@ -3,6 +3,7 @@ package check
 import (
 	"strings"
 
+	"github.com/lehrcode/wasmpascal/compiler/internal/abi"
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
 	"github.com/lehrcode/wasmpascal/compiler/internal/types"
@@ -401,6 +402,10 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 	case BMemSize, BHeapBase:
 		count(0, 0)
 		return val(types.LongInt)
+	case BRunError:
+		count(1, 1)
+		c.intExpr(args[0])
+		return none
 
 	// ---------------------------------------------------------------- Adressen
 	case BPtr:
@@ -425,6 +430,17 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 		}
 		// Seg ist immer 0 (PLAN.md, Adressfunktionen).
 		return TypeAndValue{Mode: Constant, Type: types.Word, Val: types.IntVal(0)}
+	}
+	if b.ID >= BWasiBase {
+		w := abi.WASI[b.ID-BWasiBase]
+		count(len(w.Params), len(w.Params))
+		for _, a := range args {
+			c.intExpr(a)
+		}
+		if w.Result {
+			return val(types.LongInt)
+		}
+		return none
 	}
 	panic("check: unbekannte Standardroutine " + b.Text())
 }

@@ -1,6 +1,7 @@
 package check
 
 import (
+	"github.com/lehrcode/wasmpascal/compiler/internal/abi"
 	"github.com/lehrcode/wasmpascal/compiler/internal/types"
 )
 
@@ -95,7 +96,11 @@ const (
 	BMemGrow
 	BMemSize
 	BHeapBase
+	BRunError
 	bUnsupported
+
+	// BWasiBase + i ist abi.WASI[i].
+	BWasiBase types.BuiltinID = 1000
 )
 
 var builtinProcs = []struct {
@@ -127,6 +132,7 @@ var builtinProcs = []struct {
 	{"ParamStr", BParamStr, true}, {"Random", BRandom, true}, {"Pi", BPi, true},
 	{"Ptr", BPtr, true}, {"Addr", BAddr, true}, {"Ofs", BOfs, true}, {"Seg", BSeg, true},
 	{"_MemGrow", BMemGrow, true}, {"_MemSize", BMemSize, true}, {"_HeapBase", BHeapBase, true},
+	{"_RunError", BRunError, false},
 }
 
 // unsupported sind Bezeichner der System-Unit von TP 4.0, die es wegen des
@@ -154,18 +160,13 @@ func newUniverse() *types.Scope {
 	u.Insert(types.NewConst("maxint", "MaxInt", noPos, types.Integer, types.IntVal(types.MaxLongInt)))
 	u.Insert(types.NewConst("maxlongint", "MaxLongInt", noPos, types.LongInt, types.IntVal(types.MaxLongInt)))
 
-	for _, v := range []struct {
-		name string
-		t    types.Type
-	}{
-		{"Input", types.Text}, {"Output", types.Text}, {"RandSeed", types.LongInt},
-		{"FileMode", types.Byte}, {"ExitCode", types.Integer},
-	} {
-		u.Insert(types.NewVar(lower(v.name), v.name, noPos, types.BuiltinVar, v.t))
-	}
-
+	// Input, Output, RandSeed, FileMode und ExitCode deklariert die
+	// System-Unit (rtl/system.pas).
 	for _, b := range builtinProcs {
 		u.Insert(types.NewBuiltin(b.name, b.id, b.isFunc))
+	}
+	for i, w := range abi.WASI {
+		u.Insert(types.NewBuiltin(w.Name, BWasiBase+types.BuiltinID(i), w.Result))
 	}
 	for _, name := range unsupported {
 		b := types.NewBuiltin(name, bUnsupported, false)

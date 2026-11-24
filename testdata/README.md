@@ -12,6 +12,8 @@ Pascal-Testprogramme für den Test-Harness (`harness_test.go` im Wurzelverzeichn
 - `name.err`: erwartete Compilermeldung, z. B.
   `fehler/semikolon.pas(3,9): Error 85: ";" expected`. Pfade sind relativ zu `testdata/`.
 - `name.in` (optional): Eingabe auf stdin.
+- Jeder Testfall bekommt ein eigenes leeres Verzeichnis als Wurzel `/` für
+  Dateizugriffe.
 
 Neuer Testfall: `name.pas` schreiben, eine leere `name.out` (oder `name.err`)
 anlegen und `go test . -run TestPrograms -update` ausführen. Danach den Inhalt

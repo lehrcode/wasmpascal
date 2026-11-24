@@ -62,7 +62,7 @@ func TestHarness(t *testing.T) {
 
 	ctx := context.Background()
 	for _, c := range []string{"ok.pas", "sub/exit.pas", "bad.pas"} {
-		if err := h.check(ctx, c); err != nil {
+		if err := h.check(ctx, c, ""); err != nil {
 			t.Errorf("check(%s): %v", c, err)
 		}
 	}
@@ -71,14 +71,14 @@ func TestHarness(t *testing.T) {
 		"neu.pas":     "weicht",
 		"wechsel.pas": "Compilerfehler erwartet",
 	} {
-		if err := h.check(ctx, c); err == nil || !strings.Contains(err.Error(), msg) {
+		if err := h.check(ctx, c, ""); err == nil || !strings.Contains(err.Error(), msg) {
 			t.Errorf("check(%s) = %v, want Fehler mit %q", c, err, msg)
 		}
 	}
 
 	h.update = true
 	for _, c := range []string{"neu.pas", "wechsel.pas"} {
-		if err := h.check(ctx, c); err != nil {
+		if err := h.check(ctx, c, ""); err != nil {
 			t.Errorf("update %s: %v", c, err)
 		}
 	}

@@ -13,9 +13,26 @@ import (
 	"github.com/lehrcode/wasmpascal/compiler/internal/lexer"
 	"github.com/lehrcode/wasmpascal/compiler/internal/parser"
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
+	"github.com/lehrcode/wasmpascal/rtl"
 )
 
 var update = flag.Bool("update", false, "Golden-Files (*.sym) neu schreiben")
+
+// systemUnit parst rtl/system.pas; die Tests prüfen damit wie der Compiler.
+func systemUnit(t testing.TB) *ast.Unit {
+	t.Helper()
+	lx, err := lexer.New(source.NewLoader(rtl.FS, nil), "system.pas", source.NewDefines())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := parser.Parse(lx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f.(*ast.Unit)
+}
+
+var system *ast.Unit
 
 func checkFile(loader *source.Loader, name string) (*Info, error) {
 	lx, err := lexer.New(loader, name, source.NewDefines())
@@ -26,7 +43,12 @@ func checkFile(loader *source.Loader, name string) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Check(f, Config{})
+	return Check(f, Config{System: system})
+}
+
+func TestMain(m *testing.M) {
+	system = systemUnit(&testing.T{})
+	os.Exit(m.Run())
 }
 
 func checkString(src string) (*Info, error) {
@@ -111,7 +133,7 @@ func exprType(t *testing.T, decls, expr string) string {
 	if err != nil {
 		return "Syntaxfehler: " + err.Error()
 	}
-	info, err := Check(f, Config{})
+	info, err := Check(f, Config{System: system})
 	if err != nil {
 		return err.Error()
 	}

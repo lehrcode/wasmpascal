@@ -86,6 +86,8 @@ const (
 	OpF64Copysign byte = 0xA6
 
 	OpI32TruncF64S   byte = 0xAA
+	OpI64ExtendI32S  byte = 0xAC
+	OpI64ExtendI32U  byte = 0xAD
 	OpF32DemoteF64   byte = 0xB6
 	OpF64ConvertI32S byte = 0xB7
 	OpF64PromoteF32  byte = 0xBB

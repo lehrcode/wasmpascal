@@ -108,8 +108,11 @@ type generator struct {
 }
 
 func valType(t ir.ValType) wasm.ValType {
-	if t == ir.F64 {
+	switch t {
+	case ir.F64:
 		return wasm.F64
+	case ir.I64:
+		return wasm.I64
 	}
 	return wasm.I32
 }
@@ -207,7 +210,7 @@ func (g *generator) function(f *ir.Func) *wasm.Func {
 	typ := g.mod.TypeIndex(wasm.FuncType{Params: params, Results: results})
 
 	c := &fg.code
-	if !g.opts.NoLines {
+	if !g.opts.NoLines && !f.RTL {
 		c.I32Const(int32(g.funcIndex[f]))
 		c.Index(wasm.OpGlobalSet, globalFunc)
 	}
@@ -220,7 +223,7 @@ func (g *generator) function(f *ir.Func) *wasm.Func {
 		c.I32Const(int32(g.stackBase))
 		c.Op(wasm.OpI32LtU)
 		c.Block(wasm.OpIf, wasm.BlockEmpty)
-		fg.trap(ir.ErrStackOver, f.Pos)
+		fg.trap(ir.Trap{Code: ir.ErrStackOver, Pos: f.Pos, KeepPos: f.RTL})
 		c.Op(wasm.OpEnd)
 		c.Index(wasm.OpLocalGet, fg.fp)
 		c.Index(wasm.OpGlobalSet, globalSP)
@@ -260,12 +263,16 @@ func (fg *funcGen) ret() {
 }
 
 // trap bricht mit einem geprüften Laufzeitfehler ab.
-func (fg *funcGen) trap(code int, pos ir.Pos) {
+func (fg *funcGen) trap(t ir.Trap) {
 	c := &fg.code
-	c.I32Const(int32(code))
+	if t.CodeVar != nil {
+		fg.expr(ir.Get{Var: t.CodeVar})
+	} else {
+		c.I32Const(int32(t.Code))
+	}
 	c.Index(wasm.OpGlobalSet, globalCode)
-	if !fg.g.opts.NoLines {
-		fg.setPos(pos)
+	if !fg.g.opts.NoLines && !t.KeepPos {
+		fg.setPos(t.Pos)
 	}
 	c.Op(wasm.OpUnreachable)
 }
@@ -393,6 +400,8 @@ var unOps = map[ir.Op][]byte{
 	ir.FToInt:   {wasm.OpI32TruncF64S},
 	ir.Ext8:     {wasm.OpI32Extend8S},
 	ir.RoundF32: {wasm.OpF32DemoteF64, wasm.OpF64PromoteF32},
+	ir.ExtS64:   {wasm.OpI64ExtendI32S},
+	ir.ExtU64:   {wasm.OpI64ExtendI32U},
 }
 
 func (fg *funcGen) expr(e ir.Expr) {
@@ -510,7 +519,7 @@ func (fg *funcGen) instr(in ir.Instr) {
 	case ir.Call:
 		_, hasResult := in.Fn.ResultVT()
 		fg.call(in.Args, in.Dst, func() { c.Index(wasm.OpCall, fg.g.funcIndex[in.Fn]) }, hasResult)
-		if !fg.g.opts.NoLines {
+		if !fg.g.opts.NoLines && !fg.fn.RTL {
 			fg.setPos(in.Pos) // nach der Rückkehr gilt wieder die eigene Stelle
 		}
 	case ir.HostCall:

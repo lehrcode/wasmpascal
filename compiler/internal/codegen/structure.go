@@ -202,7 +202,7 @@ func (s *structurer) nodeWithin(x *ir.Block, merges []*ir.Block, ctx []ctxEntry)
 	case ir.Unreachable:
 		s.code.Op(wasm.OpUnreachable)
 	case ir.Trap:
-		s.fg.trap(t.Code, t.Pos)
+		s.fg.trap(t)
 	default:
 		panic(fmt.Sprintf("codegen: Block %d ohne Abschluss", x.ID))
 	}

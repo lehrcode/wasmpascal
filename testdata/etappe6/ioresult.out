@@ -1,0 +1,8 @@
+Reset: 2
+danach: 0
+ReadLn auf geschlossener Datei: 103
+Close ohne Assign: 102
+Lesen aus Ausgabedatei: 104
+Schreiben in Eingabedatei: 105
+MkDir doppelt: 5
+fertig
