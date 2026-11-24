@@ -78,11 +78,12 @@ func TestForceFrame(t *testing.T) {
 	}
 }
 
-// TestNoLines: Ohne Zeilentabelle nennen Laufzeitfehler nur die Nummer.
+// TestNoLines: Ohne Zeilentabelle nennen Laufzeitfehler nur die Nummer. Mit
+// Zeilentabelle steht nur der Dateiname ohne Verzeichnis im Modul.
 func TestNoLines(t *testing.T) {
-	src := fstest.MapFS{"p.pas": {Data: []byte("program P;\nvar a: Integer;\nbegin\n  a := 0;\n  WriteLn(1 div a)\nend.\n")}}
+	src := fstest.MapFS{"home/user/prog/p.pas": {Data: []byte("program P;\nvar a: Integer;\nbegin\n  a := 0;\n  WriteLn(1 div a)\nend.\n")}}
 	for _, noLines := range []bool{false, true} {
-		res, err := Compile(context.Background(), "p.pas", Options{FS: src, NoLines: noLines})
+		res, err := Compile(context.Background(), "home/user/prog/p.pas", Options{FS: src, NoLines: noLines})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -93,6 +94,9 @@ func TestNoLines(t *testing.T) {
 		}
 		if err == nil || err.Error() != want {
 			t.Errorf("NoLines=%v: %v, want %q", noLines, err, want)
+		}
+		if bytes.Contains(res.Wasm, []byte("home/user")) {
+			t.Errorf("NoLines=%v: Modul enthält das Verzeichnis", noLines)
 		}
 	}
 }

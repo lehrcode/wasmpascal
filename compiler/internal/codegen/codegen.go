@@ -4,6 +4,8 @@
 package codegen
 
 import (
+	"path"
+
 	"github.com/lehrcode/wasmpascal/compiler/internal/analysis"
 	"github.com/lehrcode/wasmpascal/compiler/internal/ir"
 	"github.com/lehrcode/wasmpascal/compiler/internal/types"
@@ -635,12 +637,13 @@ func (g *generator) nameSection() wasm.Custom {
 
 // linesSection erzeugt wasmpascal.lines: Version, Dateinamen und je Funktion
 // Index, Anzeigename, Datei und Zeile der Deklaration. Der Runner übersetzt
-// damit die Laufzeitfehler-Globalen in eine Meldung.
+// damit die Laufzeitfehler-Globalen in eine Meldung. Eingebettet wird nur der
+// Dateiname ohne Verzeichnis, damit das Modul keine Hostpfade enthält.
 func (g *generator) linesSection() wasm.Custom {
 	b := wasm.AppendU32(nil, 1)
 	b = wasm.AppendU32(b, uint32(len(g.m.Files)))
 	for _, f := range g.m.Files {
-		b = appendName(b, f)
+		b = appendName(b, path.Base(f))
 	}
 	b = wasm.AppendU32(b, uint32(len(g.m.Funcs)))
 	for _, f := range g.m.Funcs {

@@ -90,3 +90,4 @@ kommen die Einzelentscheidungen dazu, die während der Umsetzung fallen.
 | 9 | Eingabe unter gojs | Zeilenweise über den Loader (`readLine`); im Browser bearbeitet ein einfacher Zeileneditor die Zeile (Echo, Rücktaste, Enter, Strg+D = Ende der Eingabe, Strg+C = Abbruch). Ohne `readLine` ist die Eingabe sofort zu Ende. |
 | 9 | Uhrzeit unter gojs | `GetTime`/`GetDate` und `Randomize` nehmen `walltime` des Browsers, weiterhin in UTC. |
 | 9 | Abbrechen | Ein Programm lässt sich im Browser nur an einem Anhaltepunkt abbrechen (Eingabe, `Delay`, Ausgabe nach 30 ms); eine Endlosschleife ohne Ausgabe blockiert die Seite. |
+| 9 | Dateinamen im Modul | `wasmpascal.lines` enthält nur den Dateinamen ohne Verzeichnis (`Runtime error 200 at division200.pas(7) in Quote`), damit kein Hostpfad im `.wasm` landet; gleichnamige Dateien aus verschiedenen Verzeichnissen sind in der Meldung nicht zu unterscheiden. Compilermeldungen nennen weiter den Pfad. |

@@ -53,7 +53,7 @@ bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichung
   Funktionsergebnisse wie Delphi 1.0.
 - **Adressfunktionen:** `@x`/`Addr` = lineare Adresse, `Ofs` als LongInt, `Seg` = 0, `Ptr(seg,ofs)` ignoriert `seg`,
   `CSeg`/`DSeg`/`SSeg`/`SPtr`/`PrefixSeg`/`FreePtr`/`FreeMin` sind Compilerfehler.
-- **Laufzeitfehler:** `Runtime error NNN at datei.pas(zeile) in Prozedur`; Traps über Name Section und Custom Section
+- **Laufzeitfehler:** `Runtime error NNN at datei.pas(zeile) in Prozedur` (nur Dateiname, ohne Verzeichnis); Traps über Name Section und Custom Section
   `wasmpascal.lines`; `-nolines` lässt beides weg.
 - **Zeichensatz:** durchgehend UTF-8, `Char` = Byte, `Length` zählt Bytes, Bezeichner nur ASCII.
 

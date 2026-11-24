@@ -147,14 +147,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		Dirs:   map[string]string{"/": "."},
 	})
 	if err != nil {
-		var rte *runner.RuntimeError
-		if errors.As(err, &rte) && rte.File != "" {
-			// Pfade aus dem Programm (nicht aus der eingebetteten Laufzeit)
-			// relativ zum Arbeitsverzeichnis zeigen
-			if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rte.File))); statErr == nil {
-				rte.File = hostPath(root, rte.File)
-			}
-		}
 		fmt.Fprintln(stderr, err)
 		if code == 0 {
 			code = 1
