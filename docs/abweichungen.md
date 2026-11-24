@@ -21,3 +21,11 @@ kommen die Einzelentscheidungen dazu, die während der Umsetzung fallen.
 | 1 | 1-Byte-Typen | `Byte`, `ShortInt`, `Char` (und 1-Byte-Teilbereiche) werden bei jeder Zuweisung auf 8 Bit gekürzt, wie TP mit `{$R-}`. |
 | 1 | Teilbereiche | Speichergröße nach Wertebereich: 1 Byte nur, wenn alle Werte in 0..255 bzw. −128..127 passen. |
 | 1 | `nil` | TP prüft Dereferenzierungen nicht. WasmPascal prüft jedes `p^` und meldet `Runtime error 216` (Nummer wie „General protection fault“ in BP 7), weil WASM keinen Speicherschutz hat. |
+| 2 | Vorzeichen | `+`/`-` als Vorzeichen binden wie `not` am stärksten, damit `a * -b` wie in TP erlaubt ist. `-a*b` wird als `(-a)*b` gelesen; das Ergebnis ist dasselbe. |
+| 2 | Vergleiche | Ein Ausdruck enthält höchstens einen Vergleichsoperator (`a = b = c` ist ein Syntaxfehler), wie in der Pascal-Grammatik. |
+| 2 | Programmende | Nach dem abschließenden `end.` wird nichts mehr gelesen, wie in TP. Ein danach offenes `{$IFDEF}` fällt deshalb nicht auf. |
+| 2 | Programmkopf | `program Name;` ist optional; Parameter wie `(Input, Output)` werden gelesen und ignoriert. |
+| 2 | Nicht unterstützt | `absolute`, `external`, `interrupt` und `inline` ergeben Error 902 „Not supported by WasmPascal“. |
+| 2 | Fehlernummern | Syntaxfehler benutzen die Nummern der TP-7-Liste (z. B. 85 `";" expected`, 57 `THEN expected`, 113 `Error in statement` für `; else`); `// TP-ANNAHME`, dass TP 4.0 dieselben hat. |
+| 2 | Typisierte Konstanten | `(a, b)` ist eine Array-Konstante, `(x: 1; y: 2)` eine Record-Konstante. Ein einzelner geklammerter Wert `(5)` bleibt ein Ausdruck; die Typprüfung darf ihn bei Array-Typen als einelementige Liste deuten. |
+| 2 | `^` im Typkontext | Der Parser liest nach `=` im type-Teil, nach `:` in Deklarationen und nach `array … of`/`file of` im Typmodus (`^C` = Zeiger). Nach `set of` nicht, damit `set of ^A..^Z` möglich bleibt. |

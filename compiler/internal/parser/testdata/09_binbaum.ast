@@ -1,0 +1,56 @@
+(program binaerbaum
+  (type pbaum (^ tbaum))
+  (type tbaum
+    (record
+      (field (schluessel) string)
+      (field (anzahl) integer)
+      (field (links rechts) pbaum)))
+  (var (wurzel) pbaum)
+  (var (wort) string)
+  (procedure einfuegen
+    (params (var (b) pbaum) (const (s) string))
+    (begin
+      (if
+        (= b nil)
+        (begin
+          (call new b)
+          (:= (. (^ b) schluessel) s)
+          (:= (. (^ b) anzahl) 1)
+          (:= (. (^ b) links) nil)
+          (:= (. (^ b) rechts) nil))
+        (if
+          (< s (. (^ b) schluessel))
+          (call einfuegen (. (^ b) links) s)
+          (if
+            (> s (. (^ b) schluessel))
+            (call einfuegen (. (^ b) rechts) s)
+            (call inc (. (^ b) anzahl)))))))
+  (procedure inorder
+    (params (value (b) pbaum))
+    (begin
+      (if
+        (<> b nil)
+        (begin
+          (call inorder (. (^ b) links))
+          (call writeln (. (^ b) schluessel) ": " (. (^ b) anzahl))
+          (call inorder (. (^ b) rechts))))))
+  (function hoehe
+    (params (value (b) pbaum))
+    (result integer)
+    (var (l r) integer)
+    (begin
+      (if
+        (= b nil)
+        (:= hoehe 0)
+        (begin
+          (:= l (call hoehe (. (^ b) links)))
+          (:= r (call hoehe (. (^ b) rechts)))
+          (if (> l r) (:= hoehe (+ l 1)) (:= hoehe (+ r 1)))))))
+  (begin
+    (:= wurzel nil)
+    (repeat
+      (call readln wort)
+      (if (<> wort "") (call einfuegen wurzel wort))
+      (until (= wort "")))
+    (call inorder wurzel)
+    (call writeln "Hoehe: " (call hoehe wurzel))))

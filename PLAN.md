@@ -280,12 +280,13 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - **Fertig, wenn:** Tabellengetriebene Lexer-Tests für alle Token-Arten bestehen.
 - *Erledigt (Nov 24, 2026).* Pakete `source` (Positionen, Fehler, Loader mit DOS-artiger Dateisuche, Symbole und Bedingungsstapel) und `lexer` (Tokens, Direktiven, Includes). `^C` ist kontextabhängig: Der Parser schaltet mit `Lexer.SetTypeMode` an Typstellen auf Zeiger um. `{$I+/-}` steht als `Token.IOChecks` an jedem Token, `{$M}` über `Lexer.StackSize`. `compiler.Check`/`Compile` zerlegen bereits in Tokens und melden Lexerfehler; Golden-Tests dazu in `testdata/lexer/`. Einzelentscheidungen in `docs/abweichungen.md`.
 
-### Etappe 2: Parser und AST
+### Etappe 2: Parser und AST ✅
 
 - Vollständige Grammatik von TP 4.0: `program`, `unit` (interface/implementation/Initialisierung), `uses`, `const` (auch typisiert), `type`, `var`, Prozeduren/Funktionen inkl. `forward`, alle Anweisungen, `with`, `case` mit Bereichen und `else`.
 - `goto`/`label` werden vollständig geparst. Bis Etappe 8 meldet die Typprüfung „goto noch nicht unterstützt“.
 - Ein AST-Printer für Golden-Tests. Dazu die Syntax der Erweiterungen: const-Parameter und for-in.
 - **Fertig, wenn:** Mindestens 30 Parser-Golden-Tests bestehen, darunter typische Programme aus TP-Lehrbüchern (selbst geschrieben).
+- *Erledigt (Nov 24, 2026).* Paket `ast` mit S-Ausdruck-Printer (`ast.Sprint`), Paket `parser` (Recursive Descent, Abbruch per Panic/Recover beim ersten Fehler). 37 Golden-Tests in `compiler/internal/parser/testdata/` (`go test ./compiler/internal/parser -update`), dazu Tabellen für Fehler und Sonderfälle sowie Fehler-Golden-Tests in `testdata/parser/`. Namensauflösung (Recordfeld oder `Unit.Name`, Aufruf oder Typumwandlung) bleibt der Typprüfung überlassen. `{$I-}` steht als `IOChecks` an jeder Anweisung.
 
 ### Etappe 3: Typprüfung
 

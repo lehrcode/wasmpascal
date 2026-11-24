@@ -1,0 +1,29 @@
+(program matrix
+  (const n 3)
+  (type tmatrix (array ((.. 1 n) (.. 1 n)) real))
+  (type tzeile (array ((.. 1 n)) real))
+  (type ttabelle (array ((.. 1 n)) tzeile))
+  (type tbits (packed-array ((.. 0 7)) boolean))
+  (var (a b c) tmatrix)
+  (var (t) ttabelle)
+  (var (bits) tbits)
+  (var (i j k) integer)
+  (begin
+    (for i 1 to n
+      (for j 1 to n
+        (begin
+          (:= (index a i j) (+ i j))
+          (if (= i j) (:= (index b i j) 1) (:= (index b i j) 0))
+          (:= (index (index t i) j) (index a i j)))))
+    (for i 1 to n
+      (for j 1 to n
+        (begin
+          (:= (index c i j) 0)
+          (for k 1 to n
+            (:= (index c i j) (+ (index c i j) (* (index a i k) (index b k j))))))))
+    (for i 1 to n
+      (begin
+        (for j 1 to n (call write (fmt (index (index c i) j) 6 1)))
+        (call writeln)))
+    (call fillchar bits (call sizeof bits) 0)
+    (:= (index bits 3) true)))

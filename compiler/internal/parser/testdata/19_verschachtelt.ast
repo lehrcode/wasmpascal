@@ -1,0 +1,18 @@
+(program verschachtelt
+  (var (global) integer)
+  (procedure aussen
+    (params (value (n) integer))
+    (var (summe) integer)
+    (procedure mitte
+      (params (value (k) integer))
+      (var (faktor) integer)
+      (function innen
+        (params (value (x) integer))
+        (result integer)
+        (begin (:= innen (+ (* x faktor) n))))
+      (begin
+        (:= faktor 2)
+        (:= summe (+ summe (call innen k)))
+        (if (> k 0) (call mitte (- k 1)))))
+    (begin (:= summe 0) (call mitte n) (:= global summe)))
+  (begin (call aussen 3) (call writeln global)))

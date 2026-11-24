@@ -1,0 +1,30 @@
+(program caesar
+  (params input output)
+  (const verschiebung 3)
+  (var (klar geheim) string)
+  (function verschluessle
+    (params (const (s) string) (value (k) integer))
+    (result string)
+    (var (i) integer)
+    (var (c) char)
+    (var (t) string)
+    (begin
+      (:= t s)
+      (for i 1 to
+        (call length s)
+        (begin
+          (:= c (call upcase (index s i)))
+          (if
+            (in c (set (.. "A" "Z")))
+            (:=
+              (index t i)
+              (call chr
+                (+
+                  (mod (+ (+ (- (call ord c) (call ord "A")) k) 26) 26)
+                  (call ord "A")))))))
+      (:= verschluessle t)))
+  (begin
+    (call readln klar)
+    (:= geheim (call verschluessle klar verschiebung))
+    (call writeln geheim)
+    (call writeln (call verschluessle geheim (- verschiebung)))))

@@ -4,8 +4,8 @@
 // GOOS=wasip1. Quelltexte werden ausschließlich über Options.FS gelesen, damit
 // sie im Browser aus dem Speicher kommen können.
 //
-// Stand Etappe 1: Compile und Check zerlegen den Quelltext in Tokens und
-// melden Lexerfehler; danach liefern sie einen Fehler „noch nicht implementiert“.
+// Stand Etappe 2: Compile und Check parsen den Quelltext und melden Lexer-
+// und Syntaxfehler; danach liefern sie einen Fehler „noch nicht implementiert“.
 package compiler
 
 import (
@@ -15,6 +15,7 @@ import (
 	"io/fs"
 
 	"github.com/lehrcode/wasmpascal/compiler/internal/lexer"
+	"github.com/lehrcode/wasmpascal/compiler/internal/parser"
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
 )
 
@@ -119,20 +120,12 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if err != nil {
 		return nil, diagnostic(err)
 	}
-	// Stand Etappe 1: Der Quelltext wird nur in Tokens zerlegt.
-	for i := 0; ; i++ {
-		if i%1024 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-		}
-		tok, err := lx.Next()
-		if err != nil {
-			return nil, diagnostic(err)
-		}
-		if tok.Kind == lexer.EOF {
-			break
-		}
+	// Stand Etappe 2: Der Quelltext wird nur geparst.
+	if _, err := parser.Parse(lx); err != nil {
+		return nil, diagnostic(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	_ = emit
 	return nil, errNotImplemented

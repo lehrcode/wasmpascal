@@ -1,0 +1,31 @@
+(program bubblesort
+  (const n 10)
+  (const daten (array ((.. 1 n)) integer) (list 5 3 9 1 7 2 8 6 4 10))
+  (type tfeld (array ((.. 1 n)) integer))
+  (var (feld) tfeld)
+  (var (i) integer)
+  (procedure tausche
+    (params (var (x y) integer))
+    (var (h) integer)
+    (begin (:= h x) (:= x y) (:= y h)))
+  (procedure sortiere
+    (params (var (f) tfeld))
+    (var (i j) integer)
+    (var (getauscht) boolean)
+    (begin
+      (for i n downto 2
+        (begin
+          (:= getauscht false)
+          (for j 1 to
+            (- i 1)
+            (if
+              (> (index f j) (index f (+ j 1)))
+              (begin
+                (call tausche (index f j) (index f (+ j 1)))
+                (:= getauscht true))))
+          (if (not getauscht) (call exit))))))
+  (begin
+    (for i 1 to n (:= (index feld i) (index daten i)))
+    (call sortiere feld)
+    (for i 1 to n (call write (fmt (index feld i) 4)))
+    (call writeln)))

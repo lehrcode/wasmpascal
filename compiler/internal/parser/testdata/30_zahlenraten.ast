@@ -1,0 +1,29 @@
+(program zahlenraten
+  (uses crt)
+  (var (geheim tipp versuche) integer)
+  (var (taste) char)
+  (begin
+    (call randomize)
+    (repeat
+      (call clrscr)
+      (call textcolor yellow)
+      (call writeln "Ich denke mir eine Zahl zwischen 1 und 100.")
+      (call normvideo)
+      (:= geheim (+ (call random 100) 1))
+      (:= versuche 0)
+      (repeat
+        (call write "Dein Tipp: ")
+        (call readln tipp)
+        (call inc versuche)
+        (if
+          (< tipp geheim)
+          (call writeln "zu klein")
+          (if (> tipp geheim) (call writeln "zu groß")))
+        (until (= tipp geheim)))
+      (call textcolor (+ lightgreen blink))
+      (call writeln "Richtig nach " versuche " Versuchen!")
+      (call delay 500)
+      (call normvideo)
+      (call write "Nochmal (j/n)? ")
+      (:= taste (call upcase readkey))
+      (until (<> taste "J")))))

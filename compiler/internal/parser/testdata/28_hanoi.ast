@@ -1,0 +1,13 @@
+(program tuermevonhanoi
+  (var (zuege) longint)
+  (procedure bewege
+    (params (value (n) integer) (value (von nach ueber) char))
+    (begin
+      (if
+        (> n 0)
+        (begin
+          (call bewege (- n 1) von ueber nach)
+          (call inc zuege)
+          (call writeln "Scheibe " n ": " von " -> " nach)
+          (call bewege (- n 1) ueber nach von)))))
+  (begin (:= zuege 0) (call bewege 4 "A" "C" "B") (call writeln zuege " Zuege")))

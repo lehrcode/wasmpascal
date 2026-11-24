@@ -48,10 +48,10 @@ func TestCompilePreconditions(t *testing.T) {
 	}
 }
 
-func TestCompileReportsLexerErrors(t *testing.T) {
+func TestCompileReportsErrors(t *testing.T) {
 	src := fstest.MapFS{
 		"p.pas":     {Data: []byte("program P;\n{$I teil}\nbegin end.")},
-		"teil.pas":  {Data: []byte("{$IFDEF EXTRA}\n  x := 'offen\n{$ENDIF}")},
+		"teil.pas":  {Data: []byte("{$IFDEF EXTRA}\nconst x = 'offen\n{$ENDIF}")},
 		"lib/x.pas": {Data: []byte("")},
 	}
 	if _, err := Compile(context.Background(), "p.pas", Options{FS: src}); !errors.Is(err, errNotImplemented) {
@@ -59,7 +59,16 @@ func TestCompileReportsLexerErrors(t *testing.T) {
 	}
 	_, err := Compile(context.Background(), "p.pas", Options{FS: src, Defines: []string{"extra"}})
 	var d *Diagnostic
-	if !errors.As(err, &d) || d.Error() != "teil.pas(2,8): Error 8: String constant exceeds line" {
+	if !errors.As(err, &d) || d.Error() != "teil.pas(2,11): Error 8: String constant exceeds line" {
 		t.Errorf("mit EXTRA: %v", err)
+	}
+}
+
+func TestCompileReportsSyntaxErrors(t *testing.T) {
+	src := fstest.MapFS{"p.pas": {Data: []byte("program P;\nbegin\n  if x then\nend")}}
+	err := Check(context.Background(), "p.pas", Options{FS: src})
+	var d *Diagnostic
+	if !errors.As(err, &d) || d.Error() != "p.pas(4,4): Error 10: Unexpected end of file" {
+		t.Errorf("Check = %v", err)
 	}
 }

@@ -23,7 +23,11 @@ func (p Pos) String() string {
 
 // Fehlernummern. Sie folgen der Nummerierung von Turbo Pascal; Nummern ab 900
 // sind eigene Fehler von WasmPascal ohne Entsprechung in TP.
+//
+// TP-ANNAHME: Die Nummern stammen aus der Fehlerliste von Turbo Pascal 7, die
+// für die hier benutzten Fehler mit TP 4.0 übereinstimmen dürfte.
 const (
+	ErrIdentExpected      = 2
 	ErrSyntax             = 5
 	ErrRealConst          = 6
 	ErrIntConst           = 7
@@ -33,13 +37,62 @@ const (
 	ErrInvalidFileName    = 14
 	ErrFileNotFound       = 15
 	ErrInvalidDirective   = 17
+	ErrTypeIdentExpected  = 12
+	ErrInType             = 21
+	ErrBeginExpected      = 36
+	ErrEndExpected        = 37
+	ErrInExpression       = 42
+	ErrDoExpected         = 50
+	ErrOfExpected         = 54
+	ErrInterfaceExpected  = 55
+	ErrThenExpected       = 57
+	ErrToDowntoExpected   = 58
+	ErrImplExpected       = 73
 	ErrConstOutOfRange    = 76
+	ErrSemicolonExpected  = 85
+	ErrColonExpected      = 86
+	ErrCommaExpected      = 87
+	ErrLParenExpected     = 88
+	ErrRParenExpected     = 89
+	ErrEqExpected         = 90
+	ErrAssignExpected     = 91
+	ErrLBrackExpected     = 92
+	ErrRBrackExpected     = 93
+	ErrDotExpected        = 94
+	ErrDotDotExpected     = 95
+	ErrInStatement        = 113
 
-	ErrInvalidUTF8 = 900
-	ErrNonASCII    = 901
+	ErrInvalidUTF8  = 900
+	ErrNonASCII     = 901
+	ErrNotSupported = 902
 )
 
 var messages = map[int]string{
+	ErrIdentExpected:      "Identifier expected",
+	ErrTypeIdentExpected:  "Type identifier expected",
+	ErrInType:             "Error in type",
+	ErrBeginExpected:      "BEGIN expected",
+	ErrEndExpected:        "END expected",
+	ErrInExpression:       "Error in expression",
+	ErrDoExpected:         "DO expected",
+	ErrOfExpected:         "OF expected",
+	ErrInterfaceExpected:  "INTERFACE expected",
+	ErrThenExpected:       "THEN expected",
+	ErrToDowntoExpected:   "TO or DOWNTO expected",
+	ErrImplExpected:       "IMPLEMENTATION expected",
+	ErrSemicolonExpected:  `";" expected`,
+	ErrColonExpected:      `":" expected`,
+	ErrCommaExpected:      `"," expected`,
+	ErrLParenExpected:     `"(" expected`,
+	ErrRParenExpected:     `")" expected`,
+	ErrEqExpected:         `"=" expected`,
+	ErrAssignExpected:     `":=" expected`,
+	ErrLBrackExpected:     `"[" expected`,
+	ErrRBrackExpected:     `"]" expected`,
+	ErrDotExpected:        `"." expected`,
+	ErrDotDotExpected:     `".." expected`,
+	ErrInStatement:        "Error in statement",
+	ErrNotSupported:       "Not supported by WasmPascal",
 	ErrSyntax:             "Syntax error",
 	ErrRealConst:          "Error in real constant",
 	ErrIntConst:           "Error in integer constant",

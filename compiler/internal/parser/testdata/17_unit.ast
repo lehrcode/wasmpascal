@@ -1,0 +1,28 @@
+(unit geometrie
+  (interface
+    (uses crt)
+    (const pi2 (* 2 pi))
+    (type tpunkt (record (field (x y) real)))
+    (var (zaehler) integer)
+    (function abstand (params (const (a b) tpunkt)) (result real))
+    (procedure verschiebe (params (var (p) tpunkt) (value (dx dy) real))))
+  (implementation
+    (uses dos)
+    (const epsilon 1E-9)
+    (function quadrat
+      (params (value (x) real))
+      (result real)
+      (begin (:= quadrat (* x x))))
+    (function abstand
+      (params (const (a b) tpunkt))
+      (result real)
+      (begin
+        (call inc zaehler)
+        (:= abstand
+          (call sqrt
+            (+
+              (call quadrat (- (. a x) (. b x)))
+              (call quadrat (- (. a y) (. b y))))))))
+    (procedure verschiebe
+      (begin (:= (. p x) (+ (. p x) dx)) (:= (. p y) (+ (. p y) dy)))))
+  (init (:= zaehler 0)))

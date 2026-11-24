@@ -1,0 +1,18 @@
+(program forward
+  (function istgerade (params (value (n) integer)) (result boolean) forward)
+  (function istungerade
+    (params (value (n) integer))
+    (result boolean)
+    (begin
+      (if
+        (= n 0)
+        (:= istungerade false)
+        (:= istungerade (call istgerade (- n 1))))))
+  (function istgerade
+    (begin
+      (if (= n 0) (:= istgerade true) (:= istgerade (call istungerade (- n 1))))))
+  (procedure ausgabe (params (value (x) integer)) forward)
+  (procedure ausgabe
+    (params (value (x) integer))
+    (begin (call writeln x " gerade: " (call istgerade x))))
+  (begin (call ausgabe 10) (call ausgabe 7)))

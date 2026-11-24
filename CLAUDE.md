@@ -58,3 +58,6 @@ bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichung
 
 `go test ./...` führt jedes `testdata/**/*.pas` mit einer zugehörigen `*.out` oder `*.err` aus (Details in
 `testdata/README.md`). `go test . -update` schreibt die erwarteten Ausgaben neu.
+
+Parser-Golden-Tests: `compiler/internal/parser/testdata/*.pas` → `*.ast`, neu schreiben mit
+`go test ./compiler/internal/parser -update`.

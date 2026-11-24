@@ -1,0 +1,19 @@
+(program fibonacci
+  (const anzahl 20)
+  (var (a b c) longint)
+  (var (i) integer)
+  (function fibrek
+    (params (value (n) integer))
+    (result longint)
+    (begin
+      (if
+        (< n 2)
+        (:= fibrek n)
+        (:= fibrek (+ (call fibrek (- n 1)) (call fibrek (- n 2)))))))
+  (begin
+    (:= a 0)
+    (:= b 1)
+    (for i 1 to anzahl
+      (begin (call write a " ") (:= c (+ a b)) (:= a b) (:= b c)))
+    (call writeln)
+    (call writeln "fib(20) rekursiv: " (call fibrek 20))))

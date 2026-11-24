@@ -1,0 +1,18 @@
+(program fakultaet
+  (var (i) integer)
+  (function fak
+    (params (value (n) integer))
+    (result longint)
+    (begin (if (<= n 1) (:= fak 1) (:= fak (* n (call fak (- n 1)))))))
+  (function fakiterativ
+    (params (value (n) integer))
+    (result longint)
+    (var (k) integer)
+    (begin (:= result 1) (for k 2 to n (:= result (* result k)))))
+  (begin
+    (for i 0 to 12
+      (call writeln
+        (fmt i 2)
+        "! = "
+        (fmt (call fak i) 10)
+        (fmt (call fakiterativ i) 10)))))

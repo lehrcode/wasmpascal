@@ -1,0 +1,42 @@
+(program varianterecords
+  (type tform (enum kreis rechteck dreieck))
+  (type tfigur
+    (record
+      (field (x y) real)
+      (case art tform
+        ((kreis) (field (radius) real))
+        ((rechteck) (field (breite hoehe) real))
+        ((dreieck) (field (a b c) real)))))
+  (type twandler
+    (record
+      (case _ integer
+        ((0) (field (l) longint))
+        ((1) (field (b) (array ((.. 0 3)) byte)))
+        ((2)
+          (field (w1 w2) word)
+          (case _ boolean ((true) (field (z) char)) ((false)))))))
+  (var (f) tfigur)
+  (var (w) twandler)
+  (function flaeche
+    (params (const (f) tfigur))
+    (result real)
+    (var (s) real)
+    (begin
+      (case
+        (. f art)
+        (arm (kreis) (:= flaeche (* pi (call sqr (. f radius)))))
+        (arm (rechteck) (:= flaeche (* (. f breite) (. f hoehe))))
+        (arm
+          (dreieck)
+          (begin
+            (:= s (/ (+ (+ (. f a) (. f b)) (. f c)) 2))
+            (:= flaeche
+              (call sqrt
+                (* (* (* s (- s (. f a))) (- s (. f b))) (- s (. f c))))))))))
+  (begin
+    (:= (. f art) rechteck)
+    (:= (. f breite) 3.0)
+    (:= (. f hoehe) 4.5)
+    (call writeln (fmt (call flaeche f) 0 2))
+    (:= (. w l) $01020304)
+    (call writeln (index (. w b) 0) " " (index (. w b) 3))))

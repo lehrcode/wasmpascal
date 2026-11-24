@@ -1,0 +1,17 @@
+(program ggt
+  (var (a b) integer)
+  (function ggt
+    (params (value (a b) integer))
+    (result integer)
+    (var (r) integer)
+    (begin
+      (repeat (:= r (mod a b)) (:= a b) (:= b r) (until (= r 0)))
+      (:= ggt a)))
+  (function kgv
+    (params (value (a b) integer))
+    (result longint)
+    (begin (:= kgv (div (* (call longint a) b) (call ggt a b)))))
+  (begin
+    (call write "Zwei Zahlen: ")
+    (call readln a b)
+    (call writeln "ggT = " (call ggt a b) ", kgV = " (call kgv a b))))

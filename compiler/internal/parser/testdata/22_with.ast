@@ -1,0 +1,18 @@
+(program withanweisung
+  (type tdatum (record (field (tag monat jahr) integer)))
+  (type tperson (record (field (name) string) (field (geburt) tdatum)))
+  (type pperson (^ tperson))
+  (var (p) tperson)
+  (var (q) pperson)
+  (var (liste) (array ((.. 1 3)) tperson))
+  (var (i) integer)
+  (begin
+    (with
+      (p)
+      (begin
+        (:= name "Ada")
+        (with (geburt) (begin (:= tag 10) (:= monat 12) (:= jahr 1815)))))
+    (with (p geburt) (call writeln name " " tag "." monat "." jahr))
+    (call new q)
+    (with ((^ q) geburt) (:= jahr 1906))
+    (for i 1 to 3 (with ((. (index liste i) geburt)) (:= jahr (+ 2000 i))))))

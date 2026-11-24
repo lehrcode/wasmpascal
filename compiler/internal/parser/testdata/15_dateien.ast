@@ -1,0 +1,25 @@
+(program textdateien
+  (var (f) text)
+  (var (zeile) string)
+  (var (n) integer)
+  (begin
+    (call assign f "test.txt")
+    (call rewrite f)
+    (for n 1 to 3 (call writeln f "Zeile " n))
+    (call close f)
+    (call append f)
+    (call write f "angehaengt")
+    (call writeln f)
+    (call close f)
+    (io-off (call reset f))
+    (if (<> ioresult 0) (begin (call writeln "Datei fehlt") (call halt 1)))
+    (:= n 0)
+    (while
+      (not (call eof f))
+      (begin
+        (call readln f zeile)
+        (call inc n)
+        (call writeln (fmt n 3) ": " zeile)))
+    (call close f)
+    (io-off (call erase f))
+    (:= n ioresult)))

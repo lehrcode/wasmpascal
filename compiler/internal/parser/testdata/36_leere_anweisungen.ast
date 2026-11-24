@@ -1,0 +1,14 @@
+(program leer
+  (var (x) integer)
+  (begin
+    (empty)
+    (empty)
+    (begin (empty))
+    (if (> x 0) (empty) (:= x 1))
+    (if (> x 0) (empty))
+    (while (> x 10) (empty))
+    (repeat (empty) (until true))
+    (case x (arm (1) (empty)))
+    (for x 1 to 3 (empty))
+    (with (output) (empty))
+    (empty)))

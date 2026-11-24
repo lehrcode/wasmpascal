@@ -1,0 +1,28 @@
+(program mengen
+  (type tziffern (set-of (.. 0 9)))
+  (type tbuchstaben (set-of char))
+  (var (gerade prim beide) tziffern)
+  (var (vokale gesehen) tbuchstaben)
+  (var (c) char)
+  (var (i) integer)
+  (var (s) string)
+  (begin
+    (:= gerade (set 0 2 4 6 8))
+    (:= prim (set 2 3 5 7))
+    (:= beide (* gerade prim))
+    (:= gerade (- (+ gerade (set (- 10 1))) (set 0)))
+    (if (= beide (set 2)) (call writeln "nur die 2"))
+    (if (<= (set 2) prim) (call writeln "Teilmenge"))
+    (for i 0 to 9 (if (in i (+ gerade prim)) (call write i)))
+    (call writeln)
+    (:= vokale (set "a" "e" "i" "o" "u" (.. "A" "Z")))
+    (:= gesehen (set))
+    (:= s "Mengenlehre")
+    (for i 1 to
+      (call length s)
+      (begin
+        (:= c (index s i))
+        (if
+          (and (in c vokale) (not (in c gesehen)))
+          (begin (:= gesehen (+ gesehen (set c))) (call write c)))))
+    (call writeln)))

@@ -1,0 +1,33 @@
+(program verketteteliste
+  (type pknoten (^ tknoten))
+  (type tknoten (record (field (wert) integer) (field (naechster) pknoten)))
+  (var (kopf p q) pknoten)
+  (var (i) integer)
+  (procedure vorne
+    (params (var (kopf) pknoten) (value (w) integer))
+    (var (neu) pknoten)
+    (begin
+      (call new neu)
+      (:= (. (^ neu) wert) w)
+      (:= (. (^ neu) naechster) kopf)
+      (:= kopf neu)))
+  (function laenge
+    (params (value (p) pknoten))
+    (result integer)
+    (var (n) integer)
+    (begin
+      (:= n 0)
+      (while (<> p nil) (begin (call inc n) (:= p (. (^ p) naechster))))
+      (:= laenge n)))
+  (begin
+    (:= kopf nil)
+    (for i 1 to 5 (call vorne kopf (* i i)))
+    (:= p kopf)
+    (while
+      (<> p nil)
+      (begin (call write (. (^ p) wert) " ") (:= p (. (^ p) naechster))))
+    (call writeln "(" (call laenge kopf) " Elemente)")
+    (:= p kopf)
+    (while
+      (<> p nil)
+      (begin (:= q (. (^ p) naechster)) (call dispose p) (:= p q)))))

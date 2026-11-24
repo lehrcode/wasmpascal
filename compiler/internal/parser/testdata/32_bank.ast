@@ -1,0 +1,44 @@
+(program bank
+  (type tbuchung (record (field (betrag) real) (field (text) (string 40))))
+  (type tkonto
+    (record
+      (field (nummer) longint)
+      (field (inhaber) (record (field (vorname nachname) (string 20))))
+      (field (saldo) real)
+      (field (anzahl) integer)
+      (field (buchungen) (array ((.. 1 50)) tbuchung))))
+  (var (konten) (array ((.. 1 10)) tkonto))
+  (var (zins) real)
+  (procedure buche
+    (params (var (k) tkonto) (value (betrag) real) (const (text) string))
+    (begin
+      (with
+        (k)
+        (begin
+          (call inc anzahl)
+          (:= (. (index buchungen anzahl) betrag) betrag)
+          (:= (. (index buchungen anzahl) text) text)
+          (:= saldo (+ saldo betrag))))))
+  (function zinsen
+    (params (const (k) tkonto) (value (satz) real) (value (jahre) integer))
+    (result real)
+    (var (i) integer)
+    (var (b) real)
+    (begin
+      (:= b (. k saldo))
+      (for i 1 to jahre (:= b (* b (+ 1 (/ satz 100)))))
+      (:= zinsen (- b (. k saldo)))))
+  (begin
+    (:= (. (index konten 1) nummer) 4711)
+    (:= (. (. (index konten 1) inhaber) vorname) "Grace")
+    (:= (. (index konten 1) saldo) 0)
+    (:= (. (index konten 1) anzahl) 0)
+    (call buche (index konten 1) 1.5E3 "Gehalt")
+    (call buche (index konten 1) (- 250.75) "Miete")
+    (:= zins (call zinsen (index konten 1) 2.5 10))
+    (call writeln
+      (. (. (index konten 1) inhaber) vorname)
+      ": "
+      (fmt (. (index konten 1) saldo) 10 2)
+      " +"
+      (fmt zins 8 2))))

@@ -1,0 +1,5 @@
+(program mitinclude
+  (const version "1.0")
+  (const anzahl 3)
+  (var (i) integer)
+  (begin (call writeln "Version " version) (for i 1 to anzahl (call write i))))

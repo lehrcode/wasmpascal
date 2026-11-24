@@ -1,0 +1,40 @@
+(program typisiertedateien
+  (type teintrag
+    (record
+      (field (nr) integer)
+      (field (name) (string 30))
+      (field (preis) real)))
+  (var (f) (file-of teintrag))
+  (var (g) file)
+  (var (e) teintrag)
+  (var (puffer) (array ((.. 1 512)) byte))
+  (var (gelesen) word)
+  (var (i) integer)
+  (begin
+    (call assign f "artikel.dat")
+    (call rewrite f)
+    (for i 1 to 3
+      (begin
+        (:= (. e nr) i)
+        (:= (. e name) "Artikel")
+        (:= (. e preis) (* i 9.99))
+        (call write f e)))
+    (call seek f 1)
+    (call read f e)
+    (call writeln
+      (. e nr)
+      " "
+      (. e name)
+      " "
+      (fmt (. e preis) 0 2)
+      " von "
+      (call filesize f)
+      " an "
+      (call filepos f))
+    (call close f)
+    (call assign g "artikel.dat")
+    (call reset g 1)
+    (call blockread g puffer (call sizeof puffer) gelesen)
+    (call writeln gelesen " Bytes")
+    (call close g)
+    (call rename g "alt.dat")))

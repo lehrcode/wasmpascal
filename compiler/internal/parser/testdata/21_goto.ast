@@ -1,0 +1,11 @@
+(program sprung
+  (label 1 99 fertig)
+  (var (i j) integer)
+  (begin
+    (:= i 0)
+    (labeled 1 (call inc i))
+    (for j 1 to 10
+      (begin (if (> (* i j) 50) (goto fertig)) (if (= j i) (goto 1))))
+    (goto 99)
+    (labeled fertig (call writeln "fertig bei " i " " j))
+    (labeled 99 (empty))))

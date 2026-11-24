@@ -1,0 +1,11 @@
+(program qualifiziert
+  (uses crt dos)
+  (type tfarbe crt.byte)
+  (var (std min sek hs) word)
+  (var (writeln) integer)
+  (begin
+    (call (. system writeln) "qualifiziert")
+    (call (. crt textcolor) (. crt red))
+    (call (. dos gettime) std min sek hs)
+    (:= writeln 3)
+    (call (. system writeln) writeln " " (fmt std 2) ":" (fmt min 2))))

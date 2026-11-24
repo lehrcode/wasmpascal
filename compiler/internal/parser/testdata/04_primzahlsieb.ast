@@ -1,0 +1,26 @@
+(program primzahlsieb
+  (const max 1000)
+  (var (prim) (array ((.. 2 max)) boolean))
+  (var (i j anzahl) integer)
+  (begin
+    (for i 2 to max (:= (index prim i) true))
+    (:= i 2)
+    (while
+      (<= (* i i) max)
+      (begin
+        (if
+          (index prim i)
+          (begin
+            (:= j (* i i))
+            (while (<= j max) (begin (:= (index prim j) false) (:= j (+ j i))))))
+        (call inc i)))
+    (:= anzahl 0)
+    (for i 2 to max
+      (if
+        (index prim i)
+        (begin
+          (call write (fmt i 5))
+          (:= anzahl (+ anzahl 1))
+          (if (= (mod anzahl 10) 0) (call writeln)))))
+    (call writeln)
+    (call writeln anzahl " Primzahlen bis " max)))

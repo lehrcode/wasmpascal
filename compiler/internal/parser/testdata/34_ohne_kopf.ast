@@ -1,0 +1,4 @@
+(program _
+  (uses crt)
+  (var (i) integer)
+  (begin (for i 10 downto 1 (call write i " ")) (call writeln "Start!")))

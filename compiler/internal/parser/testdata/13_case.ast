@@ -1,0 +1,23 @@
+(program caseanweisung
+  (var (n) integer)
+  (var (c) char)
+  (begin
+    (call readln n)
+    (case n
+      (arm (0) (call writeln "null"))
+      (arm (1 3 5 7 9) (call writeln "ungerade Ziffer"))
+      (arm (2 4 6 8) (call writeln "gerade Ziffer"))
+      (arm ((.. 10 99)) (call writeln "zweistellig"))
+      (arm ((.. (- 9) (- 1))) (empty))
+      (else (call writeln "sonstwas") (call writeln "wirklich")))
+    (call readln c)
+    (case
+      (call upcase c)
+      (arm ((.. "A" "Z")) (call writeln "Buchstabe"))
+      (arm ((.. "0" "9")) (call writeln "Ziffer"))
+      (arm (" " "\t") (call writeln "Leerraum"))
+      (arm ("\r" "\n") (call writeln "Zeilenende")))
+    (case
+      (mod n 3)
+      (arm (0) (begin (call writeln "durch 3 teilbar") (:= n (div n 3))))
+      (arm (1 2) (empty)))))

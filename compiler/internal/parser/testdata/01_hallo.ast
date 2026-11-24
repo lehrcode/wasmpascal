@@ -1,0 +1,1 @@
+(program hallo (begin (call writeln "Hallo, Welt!")))

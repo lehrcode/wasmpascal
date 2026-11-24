@@ -1,0 +1,21 @@
+(unit stapel
+  (interface
+    (type tstapel
+      (record
+        (field (daten) (array ((.. 1 100)) integer))
+        (field (oben) integer)))
+    (procedure init (params (var (s) tstapel)))
+    (procedure push (params (var (s) tstapel) (value (x) integer)))
+    (function pop (params (var (s) tstapel)) (result integer))
+    (function leer (params (const (s) tstapel)) (result boolean)))
+  (implementation
+    (procedure init (params (var (s) tstapel)) (begin (:= (. s oben) 0)))
+    (procedure push
+      (params (var (s) tstapel) (value (x) integer))
+      (begin (call inc (. s oben)) (:= (index (. s daten) (. s oben)) x)))
+    (function pop
+      (begin (:= pop (index (. s daten) (. s oben))) (call dec (. s oben))))
+    (function leer
+      (params (const (s) tstapel))
+      (result boolean)
+      (begin (:= leer (= (. s oben) 0))))))

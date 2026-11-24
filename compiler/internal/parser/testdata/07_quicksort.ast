@@ -1,0 +1,47 @@
+(program quicksort
+  (type tperson (record (field (name) (string 20)) (field (alter) integer)))
+  (type tliste (array ((.. 1 100)) tperson))
+  (var (liste) tliste)
+  (var (anzahl) integer)
+  (procedure sortiere
+    (params (var (a) tliste) (value (n) integer))
+    (procedure quick
+      (params (value (links rechts) integer))
+      (var (i j) integer)
+      (var (pivot) integer)
+      (var (h) tperson)
+      (begin
+        (:= i links)
+        (:= j rechts)
+        (:= pivot (. (index a (div (+ links rechts) 2)) alter))
+        (repeat
+          (while (< (. (index a i) alter) pivot) (call inc i))
+          (while (< pivot (. (index a j) alter)) (call dec j))
+          (if
+            (<= i j)
+            (begin
+              (:= h (index a i))
+              (:= (index a i) (index a j))
+              (:= (index a j) h)
+              (call inc i)
+              (call dec j)))
+          (until (> i j)))
+        (if (< links j) (call quick links j))
+        (if (< i rechts) (call quick i rechts))))
+    (begin (if (> n 1) (call quick 1 n))))
+  (procedure neu
+    (params (const (name) string) (value (alter) integer))
+    (begin
+      (call inc anzahl)
+      (:= (. (index liste anzahl) name) name)
+      (:= (. (index liste anzahl) alter) alter)))
+  (var (i) integer)
+  (begin
+    (:= anzahl 0)
+    (call neu "Anna" 34)
+    (call neu "Bernd" 21)
+    (call neu "Clara" 56)
+    (call neu "Dieter" 18)
+    (call sortiere liste anzahl)
+    (for i 1 to anzahl
+      (with ((index liste i)) (call writeln (fmt name 20) (fmt alter 4))))))

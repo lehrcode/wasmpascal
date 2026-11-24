@@ -1,0 +1,21 @@
+(program grossundklein
+  (const maxwert $7FFF)
+  (const minimum (- (- maxwert) 1))
+  (const mitte (div (+ maxwert minimum) 2))
+  (type tbereich (.. minimum maxwert))
+  (type tklein (.. "a" "z"))
+  (type tindex (.. 1 10))
+  (type tdatei (file-of tbereich))
+  (type tfeld (array (tindex boolean tklein) byte))
+  (type tsatz (packed-record (field (a) byte) (field (b) char)))
+  (type tmenge (packed-set-of tklein))
+  (var (wert) tbereich)
+  (var (zeichen) tklein)
+  (begin
+    (:= wert mitte)
+    (:= zeichen "q")
+    (if
+      (>= wert maxwert)
+      (call writeln "max")
+      (if (<= wert minimum) (call writeln "min")))
+    (call writeln wert zeichen)))

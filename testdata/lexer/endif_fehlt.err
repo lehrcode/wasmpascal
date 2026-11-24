@@ -1,1 +1,1 @@
-lexer/endif_fehlt.pas(6,1): Error 10: Unexpected end of file (missing {$ENDIF} for directive at 2,1)
+lexer/endif_fehlt.pas(6,1): Error 10: Unexpected end of file (missing {$ENDIF} for directive at 3,1)

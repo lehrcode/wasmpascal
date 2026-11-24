@@ -1,5 +1,5 @@
 program EndifFehlt;
-{$IFDEF VER40}
 begin
-  WriteLn('TP 4.0')
+{$IFDEF NIE_DEFINIERT}
+  WriteLn('wird uebersprungen, samt end.')
 end.

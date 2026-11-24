@@ -1,0 +1,30 @@
+(program aufzaehlung
+  (type ttag (enum mo di mi do_ fr sa so))
+  (type twerktag (.. mo fr))
+  (type tampel (enum rot gelb gruen))
+  (const namen
+    (array (ttag) (string 10))
+    (list "Montag" "Dienstag" "Mittwoch" "Donnerstag" "Freitag" "Samstag" "Sonntag"))
+  (var (t) ttag)
+  (var (w) twerktag)
+  (var (a) tampel)
+  (begin
+    (for t mo to so
+      (begin
+        (call write (call ord t) " " (index namen t))
+        (if (in t (set sa so)) (call write " (Wochenende)"))
+        (call writeln)))
+    (:= w fr)
+    (:= t (call pred w))
+    (call writeln (index namen (call succ t)))
+    (:= a rot)
+    (repeat
+      (case a
+        (arm (rot) (call writeln "Halt"))
+        (arm (gelb) (call writeln "Achtung"))
+        (arm (gruen) (call writeln "Fahren")))
+      (if
+        (= a (call high tampel))
+        (:= a (call low tampel))
+        (:= a (call succ a)))
+      (until (= a rot)))))
