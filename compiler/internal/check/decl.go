@@ -426,7 +426,7 @@ func (c *checker) procDecl(d *ast.ProcDecl, intf bool) {
 	var p *types.Proc
 	// Definition einer forward- oder Interface-Prozedur?
 	if old, sc := c.scope.Lookup(d.Name.Name); old != nil && d.Block != nil &&
-		(sc == c.scope || (c.info.Impl == c.scope && sc == c.info.Root)) {
+		(sc == c.scope || (c.unitImpl == c.scope && sc == c.unitIntf)) {
 		if op, ok := old.(*types.Proc); ok && op.Forward && !op.Defined && op.IsFunc == d.IsFunc {
 			p = op
 			if d.Params != nil || d.Result != nil {

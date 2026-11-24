@@ -7,8 +7,8 @@ Pascal-Testprogramme für den Test-Harness (`harness_test.go` im Wurzelverzeichn
   `{$I}`-Includes) werden nicht als eigenes Programm übersetzt.
 - `name.out`: erwartete Ausgabe. stdout und stderr landen gemeinsam darin.
   Ein Laufzeitfehler erscheint als eigene Zeile
-  (`Runtime error 200 at name.pas(12) in Proc`), ein Exit-Code ungleich 0 als
-  letzte Zeile `[Exit-Code N]`.
+  (`Runtime error 200 at name.pas(12) in Proc`), sonst ein Exit-Code ungleich 0
+  als letzte Zeile `[Exit-Code N]`.
 - `name.err`: erwartete Compilermeldung, z. B.
   `fehler/semikolon.pas(3,9): Error 85: ";" expected`. Pfade sind relativ zu `testdata/`.
 - `name.in` (optional): Eingabe auf stdin.

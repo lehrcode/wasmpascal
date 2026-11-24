@@ -3,6 +3,7 @@ package ir
 import (
 	"encoding/binary"
 	"math"
+	"strings"
 
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/check"
@@ -13,20 +14,36 @@ import (
 // Options steuert das Lowering.
 type Options struct {
 	StackSize int64
+	// NoLines lässt die Vormerkung der Quelltextstellen weg (-nolines).
+	NoLines bool
 }
+
+// Laufzeitfehler (TP-Nummern).
+const (
+	ErrDivByZero    = 200
+	ErrStackOver    = 202
+	ErrHeapOver     = 203
+	ErrInvalidPtr   = 204
+	ErrNilPointer   = 216 // WasmPascal prüft jede Dereferenzierung (PLAN.md)
+	ErrInvalidFloat = 207
+)
 
 type bailout struct{ err error }
 
-// Lower übersetzt ein geprüftes Programm in die IR. Sprachmittel, die die
-// Codegenerierung noch nicht beherrscht, ergeben Error 902 mit Angabe der
-// Etappe.
-func Lower(prog *ast.Program, info *check.Info, opts Options) (m *Module, err error) {
+// Lower übersetzt ein geprüftes Programm samt System-Unit in die IR.
+// Sprachmittel, die die Codegenerierung noch nicht beherrscht, ergeben
+// Error 902 mit Angabe der Etappe.
+func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) (m *Module, err error) {
 	l := &lowerer{
 		info:    info,
+		opts:    opts,
 		m:       &Module{StackSize: opts.StackSize},
 		funcs:   map[*types.Proc]*Func{},
-		globals: map[*types.Var]*Var{},
+		vars:    map[*types.Var]*Var{},
 		strs:    map[string]int64{},
+		sets:    map[[4]uint64]int64{},
+		files:   map[string]int{},
+		copyIns: map[*Func][]copyIn{},
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -37,39 +54,90 @@ func Lower(prog *ast.Program, info *check.Info, opts Options) (m *Module, err er
 			m, err = nil, b.err
 		}
 	}()
-	main := &Func{Name: "main"}
+	name := "main"
+	if prog.Name != nil {
+		name = prog.Name.Text
+	}
+	main := &Func{Name: "main", Display: name, Pos: l.pos(prog.Pos())}
 	l.m.Main = main
 	l.m.Funcs = append(l.m.Funcs, main)
-	l.declare(info.Root, "")
-	l.body(main, nil, prog.Block.Body)
-	for _, d := range l.procDecls(prog.Block.Decls) {
-		l.procBody(d)
+	var bodies []*ast.ProcDecl
+	if system != nil {
+		l.declare(info.SystemIntf, nil, "")
+		l.declare(info.SystemImpl, nil, "")
+		bodies = append(bodies, procDecls(system.Impl)...)
+	}
+	l.declare(info.Root, nil, "")
+	bodies = append(bodies, procDecls(prog.Block.Decls)...)
+
+	// Hauptprogramm: zuerst die Initialisierung der System-Unit
+	var init []ast.Stmt
+	if system != nil && system.Init != nil {
+		init = system.Init.Stmts
+	}
+	l.body(main, nil, append(init, prog.Block.Body.Stmts...))
+	for _, d := range bodies {
+		p := info.Procs[d]
+		l.body(l.funcs[p], p, d.Block.Body.Stmts)
 	}
 	return l.m, nil
 }
 
 type lowerer struct {
 	info    *check.Info
+	opts    Options
 	m       *Module
 	funcs   map[*types.Proc]*Func
-	globals map[*types.Var]*Var
+	vars    map[*types.Var]*Var
 	strs    map[string]int64
+	sets    map[[4]uint64]int64
+	files   map[string]int
+	copyIns map[*Func][]copyIn
+}
+
+// copyIn ist ein Wertparameter vom Aggregattyp: Der Aufgerufene kopiert ihn
+// beim Eintritt von der übergebenen Adresse in seinen Frame.
+type copyIn struct {
+	dst, src *Var
 }
 
 func unsupported(pos source.Pos, what string) {
 	panic(bailout{source.Errorf(pos, source.ErrNotSupported, "%s", what)})
 }
 
+func (l *lowerer) pos(p source.Pos) Pos {
+	i, ok := l.files[p.File]
+	if !ok {
+		i = len(l.m.Files)
+		l.files[p.File] = i
+		l.m.Files = append(l.m.Files, p.File)
+	}
+	return Pos{File: i, Line: p.Line}
+}
+
 // procDecls sammelt alle Prozedurdeklarationen mit Rumpf, auch verschachtelte.
-func (l *lowerer) procDecls(ds []ast.Decl) []*ast.ProcDecl {
+func procDecls(ds []ast.Decl) []*ast.ProcDecl {
 	var out []*ast.ProcDecl
 	for _, d := range ds {
 		if pd, ok := d.(*ast.ProcDecl); ok && pd.Block != nil {
 			out = append(out, pd)
-			out = append(out, l.procDecls(pd.Block.Decls)...)
+			out = append(out, procDecls(pd.Block.Decls)...)
 		}
 	}
 	return out
+}
+
+// rtl liefert eine Routine der System-Unit.
+func (l *lowerer) rtl(name string) *Func {
+	for _, s := range []*types.Scope{l.info.SystemImpl, l.info.SystemIntf} {
+		if s == nil {
+			continue
+		}
+		if p, ok := s.Syms[strings.ToLower(name)].(*types.Proc); ok {
+			return l.funcs[p]
+		}
+	}
+	panic("ir: Laufzeitroutine " + name + " fehlt in rtl/system.pas")
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +145,10 @@ func (l *lowerer) procDecls(ds []ast.Decl) []*ast.ProcDecl {
 
 // scalar liefert Wert- und Speicherdarstellung eines skalaren Typs.
 func scalar(t types.Type) (vt ValType, mem MemType, ok bool) {
+	switch t.(type) {
+	case *types.Pointer, types.NilType:
+		return I32, MemI32, true
+	}
 	switch {
 	case types.IsReal(t):
 		if types.Is(t, types.Single) {
@@ -101,13 +173,9 @@ func checkSupported(t types.Type, pos source.Pos) {
 	case *types.Array:
 		checkSupported(t.Elem, pos)
 	case *types.Record:
-		unsupported(pos, "records are supported from stage 5")
-	case *types.String:
-		unsupported(pos, "string variables are supported from stage 5")
-	case *types.Set:
-		unsupported(pos, "set variables are supported from stage 5")
-	case *types.Pointer, types.NilType:
-		unsupported(pos, "pointers are supported from stage 5")
+		for _, f := range t.Fields {
+			checkSupported(f.Type, pos)
+		}
 	case *types.File:
 		unsupported(pos, "files are supported from stage 6")
 	}
@@ -119,6 +187,11 @@ func newVar(name string, t types.Type) *Var {
 		v.VT, v.Mem, v.Scalar = scalar(t)
 	}
 	return v
+}
+
+// addrVar ist ein Hilfswert, der eine Adresse hält.
+func addrVar(name string) *Var {
+	return &Var{Name: name, Type: types.LongInt, Scalar: true, VT: I32, Mem: MemI32, Param: -1}
 }
 
 // alloc reserviert Platz im Datensegment und liefert die absolute Adresse.
@@ -143,6 +216,20 @@ func (l *lowerer) stringAddr(s string) int64 {
 	return a
 }
 
+// setAddr legt eine konstante Menge im Datensegment ab.
+func (l *lowerer) setConstAddr(v [4]uint64) int64 {
+	if a, ok := l.sets[v]; ok {
+		return a
+	}
+	b := make([]byte, 32)
+	for i, w := range v {
+		binary.LittleEndian.PutUint64(b[i*8:], w)
+	}
+	a := l.alloc(32, 4, b)
+	l.sets[v] = a
+	return a
+}
+
 // encode schreibt einen Konstantenwert im Speicherformat des Typs t.
 func encode(t types.Type, v *types.Value) []byte {
 	b := make([]byte, t.Size())
@@ -157,6 +244,10 @@ func put(b []byte, t types.Type, v *types.Value) {
 	switch t := t.(type) {
 	case *types.Array:
 		es := t.Elem.Size()
+		if v.Kind == types.VString { // packed array of Char aus einem String
+			copy(b, v.Str)
+			return
+		}
 		for i, e := range v.Elems {
 			put(b[int64(i)*es:], t.Elem, e)
 		}
@@ -198,8 +289,8 @@ func put(b []byte, t types.Type, v *types.Value) {
 // Deklarationen
 
 // declare legt globale Variablen und typisierte Konstanten an und erzeugt für
-// jede Prozedur eine Func. prefix ist der Name der umschließenden Prozedur.
-func (l *lowerer) declare(s *types.Scope, prefix string) {
+// jede Prozedur eine Func. parent ist die umschließende Funktion.
+func (l *lowerer) declare(s *types.Scope, parent *Func, prefix string) {
 	for _, sym := range s.Order {
 		switch sym := sym.(type) {
 		case *types.Var:
@@ -209,7 +300,7 @@ func (l *lowerer) declare(s *types.Scope, prefix string) {
 				v := newVar(sym.Text(), sym.Type)
 				v.Storage = Global
 				v.Offset = l.alloc(sym.Type.Size(), sym.Type.Align(), nil)
-				l.globals[sym] = v
+				l.vars[sym] = v
 				l.m.Globals = append(l.m.Globals, v)
 			case types.TypedConst:
 				checkSupported(sym.Type, sym.Pos())
@@ -217,42 +308,49 @@ func (l *lowerer) declare(s *types.Scope, prefix string) {
 				v.Storage = Global
 				v.Init = encode(sym.Type, sym.Val)
 				v.Offset = l.alloc(sym.Type.Size(), sym.Type.Align(), v.Init)
-				l.globals[sym] = v
+				l.vars[sym] = v
 				l.m.Globals = append(l.m.Globals, v)
 			}
 		case *types.Proc:
+			if _, done := l.funcs[sym]; done {
+				continue // Interface-Kopf, bereits angelegt
+			}
 			name := sym.Text()
 			if prefix != "" {
 				name = prefix + "." + name
 			}
-			l.newFunc(sym, name)
-			if sym.Scope != nil {
-				l.declare(sym.Scope, name)
-			}
+			l.newFunc(sym, parent, name)
 		}
 	}
 }
 
-// newFunc legt die Func einer Prozedur mit ihren Parametern an.
-func (l *lowerer) newFunc(p *types.Proc, name string) *Func {
-	f := &Func{Name: name, Proc: p}
+// newFunc legt die Func einer Prozedur mit Parametern und Locals an.
+func (l *lowerer) newFunc(p *types.Proc, parent *Func, name string) *Func {
+	f := &Func{Name: name, Display: p.Text(), Proc: p, Parent: parent, Pos: l.pos(p.Pos())}
 	l.funcs[p] = f
 	l.m.Funcs = append(l.m.Funcs, f)
-	param := func(v *Var) {
+	param := func(v *Var) *Var {
 		v.Param = len(f.Params)
 		f.Params = append(f.Params, v)
-		f.NewVar(v)
+		return f.NewVar(v)
+	}
+	if parent != nil {
+		parent.HasNested = true
+		sl := addrVar("$link")
+		sl.Addressed = true // liegt immer im Frame
+		f.StaticLink = param(sl)
 	}
 	if p.IsFunc {
 		checkSupported(p.Sig.Result, p.Pos())
 		r := newVar("Result", p.Sig.Result)
-		if !r.Scalar {
+		if r.Scalar {
+			f.NewVar(r)
+		} else {
 			r.Storage = Indirect
 			param(r)
-		} else {
-			f.NewVar(r)
 		}
 		f.Result = r
+		l.vars[p.Result] = r
 	}
 	for _, prm := range p.Sig.Params {
 		if prm.Type != nil {
@@ -260,14 +358,27 @@ func (l *lowerer) newFunc(p *types.Proc, name string) *Func {
 		}
 		v := newVar(prm.Name, prm.Type)
 		switch {
-		case prm.Mode == types.ByVar || prm.Type == nil:
+		case prm.Mode == types.ByVar || prm.Type == nil || (!v.Scalar && prm.Mode == types.ByConst):
 			v.Storage = Indirect
-		case !v.Scalar && prm.Mode == types.ByConst:
-			v.Storage = Indirect
+			param(v)
 		case !v.Scalar:
-			v.CopyIn = true
+			// Wertparameter vom Aggregattyp: Adresse kommt herein, Kopie im Frame
+			src := param(addrVar("$" + prm.Name))
+			f.NewVar(v)
+			l.copyIns[f] = append(l.copyIns[f], copyIn{dst: v, src: src})
+		default:
+			param(v)
 		}
-		param(v)
+		l.vars[prm.Var] = v
+	}
+	if p.Scope != nil {
+		for _, sym := range p.Scope.Order {
+			if v, ok := sym.(*types.Var); ok && v.Kind == types.LocalVar {
+				checkSupported(v.Type, v.Pos())
+				l.vars[v] = f.NewVar(newVar(v.Text(), v.Type))
+			}
+		}
+		l.declare(p.Scope, f, name)
 	}
 	return f
 }
@@ -281,44 +392,30 @@ type fnState struct {
 	fn        *Func
 	proc      *types.Proc
 	cur       *Block
-	vars      map[*types.Var]*Var
 	exit      *Block
 	breaks    []*Block
 	continues []*Block
+	withs     map[ast.Expr]*Var // with-Record → Hilfswert mit seiner Adresse
+	at        Pos               // aktuelle Quelltextstelle
 	tmp       int
 }
 
-func (l *lowerer) procBody(d *ast.ProcDecl) {
-	p := l.info.Procs[d]
-	l.body(l.funcs[p], p, d.Block.Body)
-}
-
-func (l *lowerer) body(f *Func, p *types.Proc, body *ast.CompoundStmt) {
-	s := &fnState{l: l, fn: f, proc: p, vars: map[*types.Var]*Var{}}
-	if p != nil {
-		i := 0
-		if f.Result != nil {
-			s.vars[p.Result] = f.Result
-			if !f.Result.Scalar {
-				i = 1
-			}
-		}
-		for _, prm := range p.Sig.Params {
-			s.vars[prm.Var] = f.Params[i]
-			i++
-		}
-		for _, sym := range p.Scope.Order {
-			if v, ok := sym.(*types.Var); ok && v.Kind == types.LocalVar {
-				checkSupported(v.Type, v.Pos())
-				s.vars[v] = f.NewVar(newVar(v.Text(), v.Type))
-			}
-		}
-	}
+func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt) {
+	s := &fnState{l: l, fn: f, proc: p, withs: map[ast.Expr]*Var{}, at: f.Pos}
 	f.Entry = f.NewBlock()
 	s.cur = f.Entry
 	s.exit = f.NewBlock()
 	s.exit.Term = Return{}
-	s.compound(body)
+	for _, ci := range l.copyIns[f] {
+		if st, ok := ci.dst.Type.(*types.String); ok {
+			s.callRtl("_StrAssign", nil, Addr{Var: ci.dst}, Get{Var: ci.src}, IntConst{V: int32(st.Max)})
+		} else {
+			s.emit(Copy{Dst: Addr{Var: ci.dst}, Src: Get{Var: ci.src}, N: IntConst{V: int32(ci.dst.Type.Size())}})
+		}
+	}
+	for _, st := range stmts {
+		s.stmt(st)
+	}
 	s.jump(s.exit)
 }
 
@@ -337,6 +434,14 @@ func (s *fnState) branch(c Expr, then, els *Block) {
 	s.terminate(Branch{Cond: c, Then: then, Else: els})
 }
 
+// check bricht mit Laufzeitfehler code ab, wenn fail ungleich 0 ist.
+func (s *fnState) check(fail Expr, code int) {
+	trap, ok := s.fn.NewBlock(), s.fn.NewBlock()
+	trap.Term = Trap{Code: code, Pos: s.at}
+	s.branch(fail, trap, ok)
+	s.cur = ok
+}
+
 func (s *fnState) temp(t types.Type) *Var {
 	s.tmp++
 	v := newVar("t"+itoa(s.tmp), t)
@@ -346,6 +451,30 @@ func (s *fnState) temp(t types.Type) *Var {
 	return s.fn.NewVar(v)
 }
 
+// tempAddr ist ein Hilfswert für eine Adresse.
+func (s *fnState) tempAddr() *Var {
+	s.tmp++
+	v := addrVar("a" + itoa(s.tmp))
+	v.Temp = true
+	return s.fn.NewVar(v)
+}
+
+// keep legt einen Ausdruck in einem Hilfswert ab, damit er nur einmal
+// ausgewertet wird.
+func (s *fnState) keep(e Expr) Expr {
+	switch e.(type) {
+	case IntConst, FloatConst, Get, HeapBase:
+		return e
+	}
+	t := types.Type(types.LongInt)
+	if e.VT() == F64 {
+		t = types.Real
+	}
+	v := s.temp(t)
+	s.emit(Set{Var: v, Val: e})
+	return Get{Var: v}
+}
+
 func itoa(i int) string {
 	if i < 10 {
 		return string(rune('0' + i))
@@ -353,35 +482,38 @@ func itoa(i int) string {
 	return itoa(i/10) + string(rune('0'+i%10))
 }
 
-// variable liefert die IR-Variable zu einer Pascal-Variable.
+// variable liefert die IR-Variable zu einer Pascal-Variable. Gehört sie einer
+// umschließenden Prozedur, muss sie im Frame liegen (Zugriff über Static Link).
 func (s *fnState) variable(v *types.Var, pos source.Pos) *Var {
-	if g, ok := s.l.globals[v]; ok {
-		return g
+	iv, ok := s.l.vars[v]
+	if !ok {
+		if v.Kind == types.BuiltinVar {
+			unsupported(pos, v.Text()+" is supported from stage 6")
+		}
+		panic("ir: Variable " + v.Name() + " nicht angelegt")
 	}
-	if iv, ok := s.vars[v]; ok {
-		return iv
+	if iv.Owner != nil && iv.Owner != s.fn {
+		iv.Addressed = true
 	}
-	if v.Kind == types.BuiltinVar {
-		unsupported(pos, v.Text()+" is supported from stage 6")
-	}
-	unsupported(pos, "access to locals of an enclosing procedure is supported from stage 5")
-	return nil
+	return iv
 }
 
 // ---------------------------------------------------------------------------
 // Anweisungen
 
-func (s *fnState) compound(c *ast.CompoundStmt) {
-	for _, st := range c.Stmts {
-		s.stmt(st)
-	}
-}
-
 func (s *fnState) stmt(st ast.Stmt) {
+	if _, isCompound := st.(*ast.CompoundStmt); !isCompound {
+		s.at = s.l.pos(st.Pos())
+		if !s.l.opts.NoLines {
+			s.emit(Line{Pos: s.at})
+		}
+	}
 	switch st := st.(type) {
 	case *ast.EmptyStmt:
 	case *ast.CompoundStmt:
-		s.compound(st)
+		for _, b := range st.Stmts {
+			s.stmt(b)
+		}
 	case *ast.LabeledStmt:
 		s.stmt(st.Stmt)
 	case *ast.AssignStmt:
@@ -433,7 +565,12 @@ func (s *fnState) stmt(st ast.Stmt) {
 	case *ast.CaseStmt:
 		s.caseStmt(st)
 	case *ast.WithStmt:
-		unsupported(st.Pos(), "with is supported from stage 5")
+		for _, r := range st.Records {
+			a := s.tempAddr()
+			s.emit(Set{Var: a, Val: s.designator(r)})
+			s.withs[r] = a
+		}
+		s.stmt(st.Body)
 	case *ast.GotoStmt:
 		unsupported(st.Pos(), "goto is supported from stage 8")
 	default:
@@ -452,57 +589,72 @@ func (s *fnState) loop(brk, cont *Block, body func()) {
 func (s *fnState) typeOf(e ast.Expr) types.Type { return s.l.info.Types[e].Type }
 
 func (s *fnState) assign(st *ast.AssignStmt) {
-	// Zuweisung an den Funktionsnamen
+	// Zuweisung an den Funktionsnamen (auch einer umschließenden Funktion)
 	if id, ok := st.Lhs.(*ast.Ident); ok {
 		if p, ok := s.l.info.Uses[id].(*types.Proc); ok {
-			if p != s.proc {
-				unsupported(id.Pos(), "assigning the result of an enclosing function is supported from stage 5")
-			}
-			s.assignTo(s.fn.Result, st.Rhs)
+			r := s.variable(p.Result, id.Pos())
+			s.assignTo(r.Type, Addr{Var: r}, r, st.Rhs)
 			return
 		}
 	}
 	t := s.typeOf(st.Lhs)
-	if _, _, ok := scalar(t); !ok {
-		s.emit(Copy{Dst: s.addr(st.Lhs), Src: s.addr(st.Rhs), Size: t.Size()})
+	if v, ok := s.directVar(st.Lhs); ok && v.Scalar {
+		s.emit(Set{Var: v, Val: s.value(st.Rhs, t)})
 		return
 	}
-	val := s.value(st.Rhs, t)
-	s.store(st.Lhs, val)
-}
-
-// assignTo weist einer IR-Variable zu.
-func (s *fnState) assignTo(v *Var, rhs ast.Expr) {
-	if !v.Scalar {
-		s.emit(Copy{Dst: Addr{Var: v}, Src: s.addr(rhs), Size: v.Type.Size()})
+	if _, mem, ok := scalar(t); ok {
+		val := s.value(st.Rhs, t)
+		s.emit(Store{Addr: s.designator(st.Lhs), Mem: mem, Val: val})
 		return
 	}
-	s.emit(Set{Var: v, Val: s.value(rhs, v.Type)})
+	s.assignTo(t, s.designator(st.Lhs), nil, st.Rhs)
 }
 
-// store schreibt einen skalaren Wert in eine Variable oder ein Element.
-func (s *fnState) store(lhs ast.Expr, val Expr) {
-	if v, ok := s.directVar(lhs); ok {
-		s.emit(Set{Var: v, Val: val})
+// assignTo weist rhs an ein Ziel vom Typ t zu: skalar über v (falls gesetzt)
+// oder an die Adresse dst.
+func (s *fnState) assignTo(t types.Type, dst Expr, v *Var, rhs ast.Expr) {
+	if _, mem, ok := scalar(t); ok {
+		if v != nil && v.Scalar {
+			s.emit(Set{Var: v, Val: s.value(rhs, t)})
+		} else {
+			s.emit(Store{Addr: dst, Mem: mem, Val: s.value(rhs, t)})
+		}
 		return
 	}
-	_, mem, _ := scalar(s.typeOf(lhs))
-	s.emit(Store{Addr: s.addr(lhs), Mem: mem, Val: val})
+	switch tt := t.(type) {
+	case *types.String:
+		s.callRtl("_StrAssign", nil, dst, s.strAddr(rhs), IntConst{V: int32(tt.Max)})
+	case *types.Set:
+		s.emit(Copy{Dst: dst, Src: s.setAddr(rhs), N: IntConst{V: 32}})
+	case *types.Array:
+		if tv := s.l.info.Types[rhs]; tv.Mode == check.Constant && tv.Val.Kind == types.VString {
+			a := s.l.stringAddr(tv.Val.Str)
+			s.emit(Copy{Dst: dst, Src: IntConst{V: int32(a + 1)}, N: IntConst{V: int32(len(tv.Val.Str))}})
+			return
+		}
+		s.emit(Copy{Dst: dst, Src: s.addr(rhs), N: IntConst{V: int32(t.Size())}})
+	default:
+		s.emit(Copy{Dst: dst, Src: s.addr(rhs), N: IntConst{V: int32(t.Size())}})
+	}
 }
 
-// directVar liefert die Variable, wenn e ein einfacher Variablenbezeichner ist.
+// directVar liefert die Variable, wenn e ein einfacher Variablenbezeichner
+// (ohne with-Feld) ist.
 func (s *fnState) directVar(e ast.Expr) (*Var, bool) {
 	var id *ast.Ident
 	switch e := e.(type) {
 	case *ast.Ident:
 		id = e
 	case *ast.SelectorExpr:
+		if _, isField := s.l.info.Fields[e.Sel]; isField {
+			return nil, false
+		}
 		id = e.Sel
 	default:
 		return nil, false
 	}
 	if _, isField := s.l.info.Fields[id]; isField {
-		unsupported(id.Pos(), "records are supported from stage 5")
+		return nil, false
 	}
 	v, ok := s.l.info.Uses[id].(*types.Var)
 	if !ok {
@@ -523,7 +675,7 @@ func (s *fnState) forStmt(st *ast.ForStmt) {
 	if st.Down {
 		cmp, inc = GeI, SubI
 	}
-	s.branch(Bin{Op: cmp, X: Get{Var: v}, Y: Get{Var: end}}, body, exit)
+	s.branch(Bin{Op: cmp, X: Get{Var: from}, Y: Get{Var: end}}, body, exit)
 	s.cur = body
 	s.loop(exit, incr, func() { s.stmt(st.Body) })
 	s.jump(incr)
@@ -535,27 +687,60 @@ func (s *fnState) forStmt(st *ast.ForStmt) {
 	s.cur = exit
 }
 
+// forIn läuft über Array-Elemente, String-Zeichen oder Mengenelemente.
 func (s *fnState) forIn(st *ast.ForInStmt) {
 	v := s.variable(s.l.info.Uses[st.Var].(*types.Var), st.Var.Pos())
-	arr, ok := s.typeOf(st.In).(*types.Array)
-	if !ok {
-		unsupported(st.In.Pos(), "for-in over strings and sets is supported from stage 5")
-	}
-	base := s.temp(types.LongInt)
-	s.emit(Set{Var: base, Val: s.addr(st.In)})
+	coll := s.typeOf(st.In)
 	idx := s.temp(types.LongInt)
-	s.emit(Set{Var: idx, Val: IntConst{V: 0}})
+	end := s.temp(types.LongInt)
+	base := s.tempAddr()
+	var elemT types.Type
+	var elemAddr func() Expr
+	var skip func() Expr // nicht 0: Element überspringen (Mengen)
+	switch t := coll.(type) {
+	case *types.Array:
+		s.emit(Set{Var: base, Val: s.designator(st.In)})
+		s.emit(Set{Var: idx, Val: IntConst{V: 0}})
+		s.emit(Set{Var: end, Val: IntConst{V: int32(t.Len() - 1)}})
+		elemT = t.Elem
+		elemAddr = func() Expr {
+			return Bin{Op: AddI, X: Get{Var: base}, Y: Bin{Op: MulI, X: Get{Var: idx}, Y: IntConst{V: int32(t.Elem.Size())}}}
+		}
+	case *types.Set:
+		// Über eine Kopie der Menge, damit der Rumpf sie ändern darf.
+		cp := s.temp(t)
+		s.emit(Copy{Dst: Addr{Var: cp}, Src: s.setAddr(st.In), N: IntConst{V: 32}})
+		s.emit(Set{Var: base, Val: Addr{Var: cp}})
+		lo, hi := int64(0), int64(255)
+		if t.Elem != nil {
+			lo, hi = types.Bounds(t.Elem)
+		}
+		s.emit(Set{Var: idx, Val: IntConst{V: int32(max(lo, 0))}})
+		s.emit(Set{Var: end, Val: IntConst{V: int32(min(hi, 255))}})
+		elemT = v.Type
+		skip = func() Expr { return Un{Op: EqzI, X: s.bitTest(Get{Var: base}, Get{Var: idx})} }
+	default: // String oder Char
+		s.emit(Set{Var: base, Val: s.strAddr(st.In)})
+		s.emit(Set{Var: idx, Val: IntConst{V: 1}})
+		s.emit(Set{Var: end, Val: Load{Addr: Get{Var: base}, Mem: MemU8}})
+		elemT = types.Char
+		elemAddr = func() Expr { return Bin{Op: AddI, X: Get{Var: base}, Y: Get{Var: idx}} }
+	}
 	head, body, next, exit := s.fn.NewBlock(), s.fn.NewBlock(), s.fn.NewBlock(), s.fn.NewBlock()
 	s.jump(head)
 	s.cur = head
-	s.branch(Bin{Op: LtI, X: Get{Var: idx}, Y: IntConst{V: int32(arr.Len())}}, body, exit)
+	s.branch(Bin{Op: LeI, X: Get{Var: idx}, Y: Get{Var: end}}, body, exit)
 	s.cur = body
-	elemAddr := Bin{Op: AddI, X: Get{Var: base}, Y: Bin{Op: MulI, X: Get{Var: idx}, Y: IntConst{V: int32(arr.Elem.Size())}}}
-	if v.Scalar {
-		_, mem, _ := scalar(arr.Elem)
-		s.emit(Set{Var: v, Val: s.coerce(Load{Addr: elemAddr, Mem: mem}, arr.Elem, v.Type)})
+	if skip != nil {
+		take := s.fn.NewBlock()
+		s.branch(skip(), next, take)
+		s.cur = take
+		s.emit(Set{Var: v, Val: Get{Var: idx}})
+	} else if v.Scalar {
+		_, mem, _ := scalar(elemT)
+		s.emit(Set{Var: v, Val: s.coerce(Load{Addr: elemAddr(), Mem: mem}, elemT, v.Type)})
 	} else {
-		s.emit(Copy{Dst: Addr{Var: v}, Src: elemAddr, Size: arr.Elem.Size()})
+		s.emit(Copy{Dst: Addr{Var: v}, Src: elemAddr(), N: IntConst{V: int32(elemT.Size())}})
 	}
 	s.loop(exit, next, func() { s.stmt(st.Body) })
 	s.jump(next)
@@ -655,7 +840,7 @@ func (s *fnState) boolValue(e ast.Expr) Expr {
 	return Get{Var: t}
 }
 
-// ifElse verzweigt über eine Bedingung (für Abs, Round).
+// ifElse verzweigt über eine Bedingung.
 func (s *fnState) ifElse(c Expr, then, els func()) {
 	tb, eb, join := s.fn.NewBlock(), s.fn.NewBlock(), s.fn.NewBlock()
 	s.branch(c, tb, eb)

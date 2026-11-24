@@ -4,9 +4,9 @@
 // GOOS=wasip1. Quelltexte werden ausschließlich über Options.FS gelesen, damit
 // sie im Browser aus dem Speicher kommen können.
 //
-// Stand Etappe 4: Compile erzeugt WASI-Module für Programme mit Ganzzahlen,
-// Reals, Boolean, Char, Arrays, Prozeduren und Funktionen. Noch nicht
-// übersetzbare Sprachmittel melden Error 902 mit der Etappe, in der sie folgen.
+// Die System-Unit (rtl/system.pas, eingebettet über das Paket rtl) wird
+// implizit mitgeprüft und mitübersetzt. Noch nicht übersetzbare Sprachmittel
+// melden Error 902 mit der Etappe, in der sie folgen.
 package compiler
 
 import (
@@ -22,6 +22,7 @@ import (
 	"github.com/lehrcode/wasmpascal/compiler/internal/lexer"
 	"github.com/lehrcode/wasmpascal/compiler/internal/parser"
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
+	"github.com/lehrcode/wasmpascal/rtl"
 )
 
 // Target wählt die Ziel-ABI des erzeugten Moduls.
@@ -125,12 +126,15 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if err != nil {
 		return nil, diagnostic(err)
 	}
-	// Stand Etappe 3: Der Quelltext wird geparst und typgeprüft.
 	file, err := parser.Parse(lx)
 	if err != nil {
 		return nil, diagnostic(err)
 	}
-	info, err := check.Check(file, check.Config{})
+	system, err := parseSystem()
+	if err != nil {
+		return nil, err
+	}
+	info, err := check.Check(file, check.Config{System: system})
 	if err != nil {
 		return nil, diagnostic(err)
 	}
@@ -151,14 +155,28 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if stack == 0 {
 		stack = 1 << 20
 	}
-	m, err := ir.Lower(prog, info, ir.Options{StackSize: stack})
+	m, err := ir.Lower(prog, system, info, ir.Options{StackSize: stack, NoLines: opts.NoLines})
 	if err != nil {
 		return nil, diagnostic(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Result{Wasm: codegen.Generate(m, codegen.Options{ForceFrame: opts.forceFrame})}, nil
+	return &Result{Wasm: codegen.Generate(m, codegen.Options{ForceFrame: opts.forceFrame, NoLines: opts.NoLines})}, nil
+}
+
+// parseSystem liest die System-Unit aus rtl.FS. Fehler darin sind Fehler des
+// Compilers selbst und werden als interne Fehler gemeldet.
+func parseSystem() (*ast.Unit, error) {
+	lx, err := lexer.New(source.NewLoader(rtl.FS, nil), "system.pas", source.NewDefines())
+	if err != nil {
+		return nil, fmt.Errorf("compiler: rtl/system.pas: %w", err)
+	}
+	f, err := parser.Parse(lx)
+	if err != nil {
+		return nil, fmt.Errorf("compiler: rtl/system.pas: %w", err)
+	}
+	return f.(*ast.Unit), nil
 }
 
 // diagnostic wandelt interne Compilerfehler in *Diagnostic um.

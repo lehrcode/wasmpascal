@@ -121,7 +121,7 @@ func TestCompilerBuildsForWasm(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, imp := range strings.Fields(string(out)) {
-			if !strings.HasPrefix(imp, "github.com/lehrcode/wasmpascal/compiler") {
+			if !strings.HasPrefix(imp, "github.com/lehrcode/wasmpascal/") {
 				t.Errorf("compiler hängt von %s ab; erlaubt ist nur die Standardbibliothek", imp)
 			}
 		}

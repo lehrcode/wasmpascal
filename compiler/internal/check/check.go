@@ -63,12 +63,19 @@ type Info struct {
 	// Root ist der Scope des Programms bzw. des Interface-Teils einer Unit;
 	// Impl der des Implementation-Teils.
 	Root, Impl *types.Scope
-	// Universe ist der Scope der System-Unit.
+	// Universe ist der Scope der vordefinierten Bezeichner.
 	Universe *types.Scope
+	// SystemIntf und SystemImpl sind die Scopes der System-Unit (rtl/system.pas),
+	// falls sie mitgeprüft wurde.
+	SystemIntf, SystemImpl *types.Scope
 }
 
 // Config steuert die Prüfung.
-type Config struct{}
+type Config struct {
+	// System ist die System-Unit. Sie wird vor dem Programm geprüft, ihr
+	// Interface umschließt den Programm-Scope.
+	System *ast.Unit
+}
 
 // Check prüft ein Programm oder eine Unit.
 func Check(file ast.File, conf Config) (info *Info, err error) {
@@ -94,11 +101,16 @@ func Check(file ast.File, conf Config) (info *Info, err error) {
 		}
 	}()
 	c.info.Universe = newUniverse()
+	outer := c.info.Universe
+	if conf.System != nil {
+		c.info.SystemIntf, c.info.SystemImpl = c.unit(conf.System, outer)
+		outer = c.info.SystemIntf
+	}
 	switch f := file.(type) {
 	case *ast.Program:
-		c.program(f)
+		c.program(f, outer)
 	case *ast.Unit:
-		c.unit(f)
+		c.info.Root, c.info.Impl = c.unit(f, outer)
 	}
 	return c.info, nil
 }
@@ -122,6 +134,8 @@ type checker struct {
 	readOnly map[*types.Var]bool  // for-in-Variablen im Rumpf
 	pending  []*pendingPointer    // Zeigertypen mit Vorwärtsverweis im type-Teil
 	enclosed map[*types.Proc]bool // Funktionen, deren Rumpf gerade geprüft wird
+
+	unitIntf, unitImpl *types.Scope // Scopes der Unit, die gerade geprüft wird
 }
 
 type pendingPointer struct {
@@ -169,8 +183,8 @@ func (c *checker) lookup(id *ast.Ident) types.Symbol {
 // ---------------------------------------------------------------------------
 // Programm und Unit
 
-func (c *checker) program(p *ast.Program) {
-	c.scope = c.info.Universe
+func (c *checker) program(p *ast.Program, outer *types.Scope) {
+	c.scope = outer
 	root := c.openScope(types.ProgramScope, nil)
 	c.info.Root = root
 	c.info.Scopes[p] = root
@@ -178,15 +192,15 @@ func (c *checker) program(p *ast.Program) {
 	c.block(p.Block)
 }
 
-func (c *checker) unit(u *ast.Unit) {
-	c.scope = c.info.Universe
-	intf := c.openScope(types.UnitScope, nil)
-	c.info.Root = intf
+// unit prüft eine Unit und liefert die Scopes von Interface und Implementation.
+func (c *checker) unit(u *ast.Unit, outer *types.Scope) (intf, impl *types.Scope) {
+	c.scope = outer
+	intf = c.openScope(types.UnitScope, nil)
 	c.info.Scopes[u] = intf
 	c.uses(u.IntfUses)
 	c.decls(u.Intf, true)
-	impl := c.openScope(types.UnitScope, nil)
-	c.info.Impl = impl
+	impl = c.openScope(types.UnitScope, nil)
+	c.unitIntf, c.unitImpl = intf, impl
 	c.uses(u.ImplUses)
 	c.decls(u.Impl, false)
 	c.checkForwards(intf)
@@ -194,6 +208,8 @@ func (c *checker) unit(u *ast.Unit) {
 	if u.Init != nil {
 		c.compound(u.Init)
 	}
+	c.unitIntf, c.unitImpl = nil, nil
+	return intf, impl
 }
 
 // uses löst Unit-Namen auf. Stand Etappe 3 gibt es nur die System-Unit;

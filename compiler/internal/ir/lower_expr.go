@@ -15,6 +15,21 @@ const (
 	lexNot = lexer.Not
 )
 
+func add(a Expr, off int64) Expr {
+	if off == 0 {
+		return a
+	}
+	if c, ok := a.(IntConst); ok {
+		return IntConst{V: c.V + int32(off)}
+	}
+	return Bin{Op: AddI, X: a, Y: IntConst{V: int32(off)}}
+}
+
+func memOf(t types.Type) MemType {
+	_, m, _ := scalar(t)
+	return m
+}
+
 // value übersetzt e und passt das Ergebnis an den Zieltyp want an.
 func (s *fnState) value(e ast.Expr, want types.Type) Expr {
 	return s.coerce(s.expr(e), s.typeOf(e), want)
@@ -40,11 +55,10 @@ func (s *fnState) coerce(x Expr, from, to types.Type) Expr {
 
 // narrow kürzt einen Ordinalwert auf die Speicherbreite von t.
 func narrow(x Expr, t types.Type) Expr {
-	_, mem, ok := scalar(t)
-	if !ok {
+	if !types.IsOrdinal(t) {
 		return x
 	}
-	switch mem {
+	switch memOf(t) {
 	case MemU8:
 		if c, ok := x.(IntConst); ok {
 			return IntConst{V: int32(uint8(c.V))}
@@ -59,7 +73,7 @@ func narrow(x Expr, t types.Type) Expr {
 	return x
 }
 
-// constant übersetzt einen Konstantenwert.
+// constant übersetzt einen skalaren Konstantenwert.
 func constant(tv check.TypeAndValue) Expr {
 	switch tv.Val.Kind {
 	case types.VInt:
@@ -80,58 +94,54 @@ func (s *fnState) expr(e ast.Expr) Expr {
 		if c := constant(tv); c != nil {
 			return c
 		}
-		unsupported(e.Pos(), "string values are supported from stage 5")
-	}
-	if _, _, ok := scalar(tv.Type); !ok && tv.Type != nil {
-		checkSupported(tv.Type, e.Pos())
 	}
 	switch e := e.(type) {
 	case *ast.Ident:
 		if call := s.l.info.Calls[e]; call != nil {
 			return s.call(e, call, nil)
 		}
-		if v, ok := s.directVar(e); ok {
+		if v, ok := s.directVar(e); ok && v.Scalar {
 			return Get{Var: v}
 		}
+		return Load{Addr: s.designator(e), Mem: memOf(tv.Type)}
 	case *ast.SelectorExpr:
 		if call := s.l.info.Calls[e.Sel]; call != nil {
 			return s.call(e.Sel, call, nil)
 		}
-		if v, ok := s.directVar(e); ok {
+		if v, ok := s.directVar(e); ok && v.Scalar {
 			return Get{Var: v}
 		}
-		unsupported(e.Pos(), "records are supported from stage 5")
-	case *ast.IndexExpr:
-		_, mem, _ := scalar(tv.Type)
-		return Load{Addr: s.addr(e), Mem: mem}
+		return Load{Addr: s.designator(e), Mem: memOf(tv.Type)}
+	case *ast.IndexExpr, *ast.DerefExpr:
+		return Load{Addr: s.designator(e), Mem: memOf(tv.Type)}
 	case *ast.CallExpr:
 		call := s.l.info.Calls[e]
 		if call.Kind == check.CallTypecast {
-			return s.typecast(e, call.Type)
+			return s.typecast(e, tv)
 		}
 		return s.call(e, call, e.Args)
 	case *ast.UnaryExpr:
 		return s.unary(e)
 	case *ast.BinaryExpr:
 		return s.binary(e)
-	case *ast.DerefExpr:
-		unsupported(e.Pos(), "pointers are supported from stage 5")
-	case *ast.SetLit:
-		unsupported(e.Pos(), "sets are supported from stage 5")
 	}
-	panic("ir: unerwarteter Ausdruck")
+	panic("ir: unerwarteter skalarer Ausdruck")
 }
 
-func (s *fnState) typecast(e *ast.CallExpr, t types.Type) Expr {
-	x := s.expr(e.Args[0])
+func (s *fnState) typecast(e *ast.CallExpr, tv check.TypeAndValue) Expr {
 	from := s.typeOf(e.Args[0])
-	if !types.IsOrdinal(t) || !types.IsOrdinal(from) {
-		unsupported(e.Pos(), "this typecast is supported from stage 5")
+	if _, _, ok := scalar(from); !ok || tv.Mode == check.Variable && !(types.IsOrdinal(tv.Type) && types.IsOrdinal(from)) {
+		// Variablenumwandlung: an derselben Adresse mit dem Zieltyp lesen
+		return Load{Addr: s.designator(e.Args[0]), Mem: memOf(tv.Type)}
 	}
-	if types.Is(t, types.Word) {
+	x := s.expr(e.Args[0])
+	switch {
+	case types.Is(tv.Type, types.Word):
 		return Bin{Op: AndI, X: x, Y: IntConst{V: 0xFFFF}}
+	case types.IsOrdinal(tv.Type):
+		return narrow(x, tv.Type)
 	}
-	return narrow(x, t)
+	return x // Zeiger ↔ Zeiger, Zeiger ↔ LongInt
 }
 
 func (s *fnState) unary(e *ast.UnaryExpr) Expr {
@@ -152,8 +162,7 @@ func (s *fnState) unary(e *ast.UnaryExpr) Expr {
 	case lexer.Plus:
 		return s.expr(e.X)
 	}
-	unsupported(e.Pos(), "@ is supported from stage 5")
-	return nil
+	return s.designator(e.X) // @x
 }
 
 var intOps = map[lexer.Kind]Op{
@@ -167,116 +176,254 @@ var realOps = map[lexer.Kind]Op{
 	lexer.Eq: EqF, lexer.Ne: NeF, lexer.Lt: LtF, lexer.Le: LeF, lexer.Gt: GtF, lexer.Ge: GeF,
 }
 
+func isSet(t types.Type) bool { _, ok := t.(*types.Set); return ok }
+
 func (s *fnState) binary(e *ast.BinaryExpr) Expr {
 	if _, ok := isBoolOp(e, s.l.info); ok {
 		return s.boolValue(e)
 	}
-	xt, yt := s.typeOf(e.X), s.typeOf(e.Y)
 	if e.Op == lexer.In {
 		return s.inSet(e)
 	}
-	ordinal := types.IsOrdinal(xt) && types.IsOrdinal(yt)
-	numeric := types.IsNumeric(xt) && types.IsNumeric(yt)
+	xt, yt := s.typeOf(e.X), s.typeOf(e.Y)
 	switch {
-	case ordinal && e.Op != lexer.Slash:
+	case isSet(xt):
+		a, b := s.setAddr(e.X), s.setAddr(e.Y)
+		switch e.Op {
+		case lexer.Eq:
+			return SetCmp{Op: SetEq, A: a, B: b}
+		case lexer.Ne:
+			return Un{Op: EqzI, X: SetCmp{Op: SetEq, A: a, B: b}}
+		case lexer.Le:
+			return SetCmp{Op: SetSub, A: a, B: b}
+		default: // >=
+			return SetCmp{Op: SetSub, A: b, B: a}
+		}
+	case types.IsString(xt) || types.IsString(yt):
+		r := s.temp(types.Integer)
+		s.callRtl("_StrCmp", r, s.strAddr(e.X), s.strAddr(e.Y))
+		return Bin{Op: intOps[e.Op], X: Get{Var: r}, Y: IntConst{V: 0}}
+	case types.IsOrdinal(xt) && types.IsOrdinal(yt) && e.Op != lexer.Slash,
+		!types.IsNumeric(xt) && !types.IsNumeric(yt): // Zeiger
 		x, y := s.expr(e.X), s.expr(e.Y)
+		if e.Op == lexer.Div || e.Op == lexer.Mod {
+			if c, ok := y.(IntConst); !ok || c.V == 0 {
+				y = s.keep(y)
+				s.check(Un{Op: EqzI, X: y}, ErrDivByZero)
+			}
+		}
 		return Bin{Op: intOps[e.Op], X: x, Y: y}
-	case numeric:
+	default:
 		x, y := s.value(e.X, types.Real), s.value(e.Y, types.Real)
+		if e.Op == lexer.Slash {
+			if c, ok := y.(FloatConst); !ok || c.V == 0 {
+				y = s.keep(y)
+				s.check(Bin{Op: EqF, X: y, Y: FloatConst{V: 0}}, ErrDivByZero)
+			}
+		}
 		return Bin{Op: realOps[e.Op], X: x, Y: y}
 	}
-	unsupported(e.OpPos, "this operator is supported from stage 5")
-	return nil
 }
 
-// inSet übersetzt x in [konstante Menge] als Vergleich mit den Bereichen der
-// Menge; allgemeine Mengen folgen in Etappe 5.
+// bitTest prüft das Element x (0..255) in der Menge an Adresse set.
+func (s *fnState) bitTest(set, x Expr) Expr {
+	b := Load{Addr: Bin{Op: AddI, X: set, Y: Bin{Op: ShrI, X: x, Y: IntConst{V: 3}}}, Mem: MemU8}
+	return Bin{Op: AndI, X: Bin{Op: ShrI, X: b, Y: Bin{Op: AndI, X: x, Y: IntConst{V: 7}}}, Y: IntConst{V: 1}}
+}
+
+// inSet übersetzt x in Menge.
 func (s *fnState) inSet(e *ast.BinaryExpr) Expr {
-	tv := s.l.info.Types[e.Y]
-	if tv.Mode != check.Constant {
-		unsupported(e.Y.Pos(), "sets are supported from stage 5")
+	x := s.keep(s.expr(e.X))
+	if tv := s.l.info.Types[e.Y]; tv.Mode == check.Constant {
+		// konstante Menge: Vergleich mit ihren Bereichen
+		var test Expr = IntConst{V: 0}
+		for v := int64(0); v < 256; v++ {
+			if !tv.Val.SetHas(v) {
+				continue
+			}
+			hi := v
+			for hi+1 < 256 && tv.Val.SetHas(hi+1) {
+				hi++
+			}
+			var t Expr = Bin{Op: EqI, X: x, Y: IntConst{V: int32(v)}}
+			if hi > v {
+				t = Bin{Op: AndI,
+					X: Bin{Op: GeI, X: x, Y: IntConst{V: int32(v)}},
+					Y: Bin{Op: LeI, X: x, Y: IntConst{V: int32(hi)}}}
+			}
+			test = Bin{Op: OrI, X: test, Y: t}
+			v = hi
+		}
+		return test
 	}
-	x := s.temp(types.LongInt)
-	s.emit(Set{Var: x, Val: s.expr(e.X)})
-	var test Expr = IntConst{V: 0}
-	for v := int64(0); v < 256; v++ {
-		if !tv.Val.SetHas(v) {
-			continue
-		}
-		hi := v
-		for hi+1 < 256 && tv.Val.SetHas(hi+1) {
-			hi++
-		}
-		var t Expr = Bin{Op: EqI, X: Get{Var: x}, Y: IntConst{V: int32(v)}}
-		if hi > v {
-			t = Bin{Op: AndI,
-				X: Bin{Op: GeI, X: Get{Var: x}, Y: IntConst{V: int32(v)}},
-				Y: Bin{Op: LeI, X: Get{Var: x}, Y: IntConst{V: int32(hi)}}}
-		}
-		test = Bin{Op: OrI, X: test, Y: t}
-		v = hi
-	}
-	return test
+	set := s.keep(s.setAddr(e.Y))
+	inRange := Un{Op: EqzI, X: Bin{Op: AndI, X: x, Y: IntConst{V: ^255}}}
+	return Bin{Op: AndI, X: inRange, Y: s.bitTest(set, Bin{Op: AndI, X: x, Y: IntConst{V: 255}})}
 }
 
 // ---------------------------------------------------------------------------
 // Adressen
 
-// addr liefert die Adresse einer Variable, eines Elements oder eines
-// Aggregatwerts (bei Funktionsergebnissen eine Hilfsvariable im Frame).
+// addr liefert die Adresse eines Aggregatwerts: Strings und Mengen über
+// strAddr/setAddr (Ausdrücke landen in Hilfsvariablen), sonst designator.
 func (s *fnState) addr(e ast.Expr) Expr {
+	switch s.typeOf(e).(type) {
+	case *types.String:
+		return s.strAddr(e)
+	case *types.Set:
+		return s.setAddr(e)
+	}
+	return s.designator(e)
+}
+
+// designator liefert die Adresse einer Variable, eines Feldes, Elements oder
+// dereferenzierten Zeigers, einer Typumwandlung einer Variable oder eines
+// Aggregat-Funktionsergebnisses (in einer Hilfsvariable).
+func (s *fnState) designator(e ast.Expr) Expr {
 	switch e := e.(type) {
-	case *ast.Ident, *ast.SelectorExpr:
-		var id *ast.Ident
-		if sel, ok := e.(*ast.SelectorExpr); ok {
-			id = sel.Sel
-		} else {
-			id = e.(*ast.Ident)
+	case *ast.Ident:
+		if call := s.l.info.Calls[e]; call != nil {
+			return s.aggregateCall(call, nil)
 		}
-		if call := s.l.info.Calls[id]; call != nil {
-			return s.aggregateCall(id, call, nil)
+		if f, ok := s.l.info.Fields[e]; ok { // Feld über with
+			return add(Get{Var: s.withs[s.l.info.WithRecs[e]]}, f.Offset)
 		}
-		v, ok := s.directVar(e)
-		if !ok {
-			unsupported(e.Pos(), "records are supported from stage 5")
+		v, _ := s.directVar(e)
+		return Addr{Var: s.addressed(v)}
+	case *ast.SelectorExpr:
+		if f, ok := s.l.info.Fields[e.Sel]; ok {
+			return add(s.addr(e.X), f.Offset)
 		}
-		if v.Scalar && v.Storage != Global && v.Storage != Indirect {
-			v.Addressed = true
+		if call := s.l.info.Calls[e.Sel]; call != nil {
+			return s.aggregateCall(call, nil)
 		}
-		return Addr{Var: v}
+		v, _ := s.directVar(e)
+		return Addr{Var: s.addressed(v)}
 	case *ast.IndexExpr:
 		base := s.addr(e.X)
 		t := s.typeOf(e.X)
 		for _, ie := range e.Indices {
-			arr, ok := t.(*types.Array)
-			if !ok {
-				unsupported(ie.Pos(), "string indexing is supported from stage 5")
+			if _, ok := t.(*types.String); ok {
+				base = Bin{Op: AddI, X: base, Y: s.expr(ie)}
+				t = types.Char
+				continue
 			}
-			size := int32(arr.Elem.Size())
+			arr := t.(*types.Array)
+			size := arr.Elem.Size()
 			if tv := s.l.info.Types[ie]; tv.Mode == check.Constant {
-				base = Bin{Op: AddI, X: base, Y: IntConst{V: int32(tv.Val.Int-arr.Lo) * size}}
+				base = add(base, (tv.Val.Int-arr.Lo)*size)
 			} else {
 				i := Bin{Op: SubI, X: s.expr(ie), Y: IntConst{V: int32(arr.Lo)}}
-				base = Bin{Op: AddI, X: base, Y: Bin{Op: MulI, X: i, Y: IntConst{V: size}}}
+				base = Bin{Op: AddI, X: base, Y: Bin{Op: MulI, X: i, Y: IntConst{V: int32(size)}}}
 			}
 			t = arr.Elem
 		}
 		return base
+	case *ast.DerefExpr:
+		p := s.keep(s.expr(e.X))
+		s.check(Un{Op: EqzI, X: p}, ErrNilPointer)
+		return p
 	case *ast.CallExpr:
 		call := s.l.info.Calls[e]
-		if call.Kind == check.CallProc {
-			return s.aggregateCall(e, call, e.Args)
+		switch call.Kind {
+		case check.CallProc:
+			return s.aggregateCall(call, e.Args)
+		case check.CallTypecast:
+			return s.designator(e.Args[0])
 		}
 	}
-	unsupported(e.Pos(), "this expression is supported from stage 5")
-	return nil
+	panic("ir: Ausdruck hat keine Adresse")
+}
+
+// addressed markiert eine skalare Variable als adressiert (sie muss dann im
+// Speicher liegen).
+func (s *fnState) addressed(v *Var) *Var {
+	if v.Scalar && v.Storage != Global && v.Storage != Indirect {
+		v.Addressed = true
+	}
+	return v
+}
+
+// strAddr liefert die Adresse eines String-Werts; Zeichen und Ausdrücke
+// landen in Hilfsvariablen.
+func (s *fnState) strAddr(e ast.Expr) Expr {
+	tv := s.l.info.Types[e]
+	if tv.Mode == check.Constant {
+		if tv.Val.Kind == types.VString {
+			return IntConst{V: int32(s.l.stringAddr(tv.Val.Str))}
+		}
+		return IntConst{V: int32(s.l.stringAddr(string([]byte{byte(tv.Val.Int)})))}
+	}
+	if types.Is(tv.Type, types.Char) {
+		t := s.temp(types.StringType)
+		s.emit(Store{Addr: Addr{Var: t}, Mem: MemU8, Val: IntConst{V: 1}})
+		s.emit(Store{Addr: Addr{Var: t}, Off: 1, Mem: MemU8, Val: s.expr(e)})
+		return Addr{Var: t}
+	}
+	switch e := e.(type) {
+	case *ast.BinaryExpr: // Verkettung
+		t := s.temp(types.StringType)
+		s.callRtl("_StrConcat", nil, Addr{Var: t}, s.strAddr(e.X), s.strAddr(e.Y))
+		return Addr{Var: t}
+	case *ast.CallExpr:
+		if call := s.l.info.Calls[e]; call.Kind == check.CallBuiltin {
+			switch call.Builtin.ID {
+			case check.BCopy:
+				t := s.temp(types.StringType)
+				s.callRtl("_StrCopy", nil, Addr{Var: t}, s.strAddr(e.Args[0]), s.expr(e.Args[1]), s.expr(e.Args[2]))
+				return Addr{Var: t}
+			case check.BConcat:
+				acc := s.strAddr(e.Args[0])
+				for _, a := range e.Args[1:] {
+					t := s.temp(types.StringType)
+					s.callRtl("_StrConcat", nil, Addr{Var: t}, acc, s.strAddr(a))
+					acc = Addr{Var: t}
+				}
+				return acc
+			}
+			unsupported(e.Pos(), call.Builtin.Text()+" is supported from stage 6")
+		}
+	}
+	return s.designator(e)
+}
+
+// setAddr liefert die Adresse eines Mengenwerts.
+func (s *fnState) setAddr(e ast.Expr) Expr {
+	tv := s.l.info.Types[e]
+	if tv.Mode == check.Constant {
+		return IntConst{V: int32(s.l.setConstAddr(tv.Val.Set))}
+	}
+	switch e := e.(type) {
+	case *ast.SetLit:
+		t := s.temp(tv.Type)
+		dst := Addr{Var: t}
+		s.emit(Fill{Dst: dst, Val: IntConst{V: 0}, N: IntConst{V: 32}})
+		for _, el := range e.Elems {
+			lo := s.expr(el.Lo)
+			if el.Hi != nil {
+				s.callRtl("_SetRange", nil, dst, lo, s.expr(el.Hi))
+				continue
+			}
+			x := s.keep(Bin{Op: AndI, X: lo, Y: IntConst{V: 255}})
+			byteAddr := s.keep(Bin{Op: AddI, X: dst, Y: Bin{Op: ShrI, X: x, Y: IntConst{V: 3}}})
+			bit := Bin{Op: ShlI, X: IntConst{V: 1}, Y: Bin{Op: AndI, X: x, Y: IntConst{V: 7}}}
+			s.emit(Store{Addr: byteAddr, Mem: MemU8, Val: Bin{Op: OrI, X: Load{Addr: byteAddr, Mem: MemU8}, Y: bit}})
+		}
+		return dst
+	case *ast.BinaryExpr:
+		t := s.temp(tv.Type)
+		op := map[lexer.Kind]SetOpKind{lexer.Plus: SetUnion, lexer.Star: SetInter, lexer.Minus: SetDiff}[e.Op]
+		s.emit(SetOp{Op: op, Dst: Addr{Var: t}, A: s.setAddr(e.X), B: s.setAddr(e.Y)})
+		return Addr{Var: t}
+	}
+	return s.designator(e)
 }
 
 // aggregateCall ruft eine Funktion mit Aggregat-Ergebnis auf; das Ergebnis
 // landet in einer Hilfsvariable, deren Adresse zurückkommt.
-func (s *fnState) aggregateCall(at ast.Node, call *check.Call, args []ast.Expr) Expr {
+func (s *fnState) aggregateCall(call *check.Call, args []ast.Expr) Expr {
 	tmp := s.temp(call.Proc.Sig.Result)
-	s.emitCall(at, call.Proc, args, tmp)
+	s.emitCall(call.Proc, args, tmp)
 	return Addr{Var: tmp}
 }
 
@@ -286,19 +433,21 @@ func (s *fnState) aggregateCall(at ast.Node, call *check.Call, args []ast.Expr) 
 // call übersetzt einen Aufruf in Wertposition.
 func (s *fnState) call(at ast.Node, call *check.Call, args []ast.Expr) Expr {
 	if call.Kind == check.CallBuiltin {
-		return s.builtin(at, call.Builtin, args, true)
+		return s.builtin(at, call.Builtin, args)
 	}
-	res := call.Proc.Sig.Result
-	tmp := s.temp(res)
-	s.emitCall(at, call.Proc, args, tmp)
+	tmp := s.temp(call.Proc.Sig.Result)
+	s.emitCall(call.Proc, args, tmp)
 	return Get{Var: tmp}
 }
 
 // emitCall erzeugt den Aufruf; dst nimmt das Ergebnis auf (bei Aggregaten
 // über die versteckte Ergebnisadresse) oder ist nil.
-func (s *fnState) emitCall(at ast.Node, p *types.Proc, args []ast.Expr, dst *Var) {
+func (s *fnState) emitCall(p *types.Proc, args []ast.Expr, dst *Var) {
 	f := s.l.funcs[p]
 	var in []Expr
+	if f.Parent != nil {
+		in = append(in, FrameBase{F: f.Parent})
+	}
 	if f.Result != nil && !f.Result.Scalar {
 		if dst == nil {
 			dst = s.temp(p.Sig.Result)
@@ -307,19 +456,31 @@ func (s *fnState) emitCall(at ast.Node, p *types.Proc, args []ast.Expr, dst *Var
 		dst = nil
 	}
 	for i, prm := range p.Sig.Params {
-		a := args[i]
-		switch {
-		case prm.Mode == types.ByVar || prm.Type == nil:
-			in = append(in, s.addr(a))
-		default:
-			if _, _, ok := scalar(prm.Type); ok {
-				in = append(in, s.value(a, prm.Type))
-			} else {
-				in = append(in, s.addr(a))
-			}
-		}
+		in = append(in, s.arg(args[i], prm.Mode, prm.Type))
 	}
-	s.emit(Call{Fn: f, Args: in, Dst: dst})
+	s.emit(Call{Fn: f, Args: in, Dst: dst, Pos: s.at})
+}
+
+// arg übersetzt ein Argument für einen Parameter der Art mode und des Typs t.
+func (s *fnState) arg(a ast.Expr, mode types.ParamMode, t types.Type) Expr {
+	if mode == types.ByVar || t == nil {
+		return s.designator(a)
+	}
+	if _, _, ok := scalar(t); ok {
+		return s.value(a, t)
+	}
+	switch t.(type) { // nach dem Parametertyp: auch ein Char wird zum String
+	case *types.String:
+		return s.strAddr(a)
+	case *types.Set:
+		return s.setAddr(a)
+	}
+	return s.addr(a)
+}
+
+// callRtl ruft eine Routine der System-Unit mit fertigen Argumenten auf.
+func (s *fnState) callRtl(name string, dst *Var, args ...Expr) {
+	s.emit(Call{Fn: s.l.rtl(name), Args: args, Dst: dst, Pos: s.at})
 }
 
 func (s *fnState) callStmt(e ast.Expr) {
@@ -340,10 +501,10 @@ func (s *fnState) callStmt(e ast.Expr) {
 	}
 	call := s.l.info.Calls[key]
 	if call.Kind == check.CallBuiltin {
-		s.builtin(at, call.Builtin, args, false)
+		s.builtin(at, call.Builtin, args)
 		return
 	}
-	s.emitCall(e, call.Proc, args, nil)
+	s.emitCall(call.Proc, args, nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -353,9 +514,16 @@ func (s *fnState) host(h *Host, dst *Var, args ...Expr) {
 	s.emit(HostCall{Fn: h, Args: args, Dst: dst})
 }
 
-// builtin übersetzt eine Standardroutine. Ist wantValue gesetzt, wird ihr
-// Ergebnis geliefert.
-func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr, wantValue bool) Expr {
+// pointee liefert die Größe des Typs, auf den ein Zeiger zeigt.
+func pointee(t types.Type) int64 {
+	if p, ok := t.(*types.Pointer); ok && p.Elem != nil {
+		return p.Elem.Size()
+	}
+	return 0
+}
+
+// builtin übersetzt eine Standardroutine und liefert gegebenenfalls ihr Ergebnis.
+func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 	arg := func(i int) Expr { return s.expr(args[i]) }
 	switch b.ID {
 	case check.BWrite, check.BWriteLn:
@@ -371,14 +539,12 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr, wantVa
 			n = arg(1)
 		}
 		t := s.typeOf(args[0])
-		if v, ok := s.directVar(args[0]); ok {
+		if v, ok := s.directVar(args[0]); ok && v.Scalar {
 			s.emit(Set{Var: v, Val: narrow(Bin{Op: op, X: Get{Var: v}, Y: n}, t)})
 			return nil
 		}
-		a := s.temp(types.LongInt)
-		s.emit(Set{Var: a, Val: s.addr(args[0])})
-		_, mem, _ := scalar(t)
-		s.emit(Store{Addr: Get{Var: a}, Mem: mem, Val: Bin{Op: op, X: Load{Addr: Get{Var: a}, Mem: mem}, Y: n}})
+		a := s.keep(s.designator(args[0]))
+		s.emit(Store{Addr: a, Mem: memOf(t), Val: Bin{Op: op, X: Load{Addr: a, Mem: memOf(t)}, Y: n}})
 		return nil
 	case check.BHalt:
 		var code Expr = IntConst{V: 0}
@@ -397,6 +563,81 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr, wantVa
 	case check.BContinue:
 		s.jump(s.continues[len(s.continues)-1])
 		return nil
+
+	// Heap
+	case check.BNew, check.BGetMem:
+		var n Expr = IntConst{V: int32(pointee(s.typeOf(args[0])))}
+		if b.ID == check.BGetMem {
+			n = arg(1)
+		}
+		p := s.temp(types.LongInt)
+		s.callRtl("_GetMem", p, n)
+		s.check(Un{Op: EqzI, X: Get{Var: p}}, ErrHeapOver)
+		s.storeTo(args[0], Get{Var: p})
+		return nil
+	case check.BDispose, check.BFreeMem:
+		var n Expr = IntConst{V: int32(pointee(s.typeOf(args[0])))}
+		if b.ID == check.BFreeMem {
+			n = arg(1)
+		}
+		p := s.keep(arg(0))
+		s.check(Un{Op: EqzI, X: p}, ErrInvalidPtr)
+		s.callRtl("_FreeMem", nil, p, n)
+		return nil
+	case check.BMark:
+		s.callRtl("_Mark", nil, s.designator(args[0]))
+		return nil
+	case check.BRelease:
+		s.callRtl("_Release", nil, arg(0))
+		return nil
+	case check.BMemAvail, check.BMaxAvail:
+		r := s.temp(types.LongInt)
+		name := "_MemAvail"
+		if b.ID == check.BMaxAvail {
+			name = "_MaxAvail"
+		}
+		s.callRtl(name, r)
+		return Get{Var: r}
+
+	// Speicher
+	case check.BFillChar:
+		s.emit(Fill{Dst: s.designator(args[0]), Val: arg(2), N: arg(1)})
+		return nil
+	case check.BMove:
+		s.emit(Copy{Dst: s.designator(args[1]), Src: s.designator(args[0]), N: arg(2)})
+		return nil
+	case check.BAddr, check.BOfs:
+		return s.designator(args[0])
+	case check.BPtr:
+		return arg(1)
+	case check.BMemGrow:
+		r := s.temp(types.LongInt)
+		s.emit(Grow{Pages: arg(0), Dst: r})
+		return Get{Var: r}
+	case check.BMemSize:
+		return MemSize{}
+	case check.BHeapBase:
+		return HeapBase{}
+
+	// Strings
+	case check.BLength:
+		if types.Is(s.typeOf(args[0]), types.Char) {
+			return IntConst{V: 1}
+		}
+		return Load{Addr: s.strAddr(args[0]), Mem: MemU8}
+	case check.BPos:
+		r := s.temp(types.Integer)
+		s.callRtl("_StrPos", r, s.strAddr(args[0]), s.strAddr(args[1]))
+		return Get{Var: r}
+	case check.BDelete:
+		s.callRtl("_StrDelete", nil, s.designator(args[0]), arg(1), arg(2))
+		return nil
+	case check.BInsert:
+		limit := s.typeOf(args[1]).(*types.String).Max
+		s.callRtl("_StrInsert", nil, s.strAddr(args[0]), s.designator(args[1]), arg(2), IntConst{V: int32(limit)})
+		return nil
+
+	// Ordinal und Arithmetik
 	case check.BOrd:
 		return arg(0)
 	case check.BChr:
@@ -414,24 +655,20 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr, wantVa
 	case check.BLo:
 		return Bin{Op: AndI, X: arg(0), Y: IntConst{V: 255}}
 	case check.BSwap:
-		x := s.temp(types.LongInt)
-		s.emit(Set{Var: x, Val: arg(0)})
-		g := Get{Var: x}
+		g := s.keep(arg(0))
 		return Bin{Op: OrI,
 			X: Bin{Op: AndI, X: g, Y: IntConst{V: ^0xFFFF}},
 			Y: Bin{Op: OrI,
 				X: Bin{Op: ShlI, X: Bin{Op: AndI, X: g, Y: IntConst{V: 255}}, Y: IntConst{V: 8}},
 				Y: Bin{Op: AndI, X: Bin{Op: ShrI, X: g, Y: IntConst{V: 8}}, Y: IntConst{V: 255}}}}
 	case check.BSqr:
-		x := s.temp(s.typeOf(args[0]))
-		s.emit(Set{Var: x, Val: arg(0)})
+		x := s.keep(arg(0))
 		if types.IsReal(s.typeOf(args[0])) {
-			return Bin{Op: MulF, X: Get{Var: x}, Y: Get{Var: x}}
+			return Bin{Op: MulF, X: x, Y: x}
 		}
-		return Bin{Op: MulI, X: Get{Var: x}, Y: Get{Var: x}}
+		return Bin{Op: MulI, X: x, Y: x}
 	case check.BAbs:
-		t := s.typeOf(args[0])
-		if types.IsReal(t) {
+		if types.IsReal(s.typeOf(args[0])) {
 			return Un{Op: AbsF, X: arg(0)}
 		}
 		x := s.temp(types.LongInt)
@@ -460,15 +697,23 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr, wantVa
 	case check.BPi:
 		return FloatConst{V: math.Pi}
 	case check.BUpCase:
-		c := s.temp(types.Char)
-		s.emit(Set{Var: c, Val: arg(0)})
+		c := s.keep(arg(0))
 		isLower := Bin{Op: AndI,
-			X: Bin{Op: GeI, X: Get{Var: c}, Y: IntConst{V: 'a'}},
-			Y: Bin{Op: LeI, X: Get{Var: c}, Y: IntConst{V: 'z'}}}
-		return Bin{Op: SubI, X: Get{Var: c}, Y: Bin{Op: MulI, X: isLower, Y: IntConst{V: 32}}}
+			X: Bin{Op: GeI, X: c, Y: IntConst{V: 'a'}},
+			Y: Bin{Op: LeI, X: c, Y: IntConst{V: 'z'}}}
+		return Bin{Op: SubI, X: c, Y: Bin{Op: MulI, X: isLower, Y: IntConst{V: 32}}}
 	}
 	unsupported(at.Pos(), b.Text()+" is supported from stage 6")
 	return nil
+}
+
+// storeTo schreibt einen skalaren Wert in die Variable oder das Element e.
+func (s *fnState) storeTo(e ast.Expr, val Expr) {
+	if v, ok := s.directVar(e); ok && v.Scalar {
+		s.emit(Set{Var: v, Val: val})
+		return
+	}
+	s.emit(Store{Addr: s.designator(e), Mem: memOf(s.typeOf(e)), Val: val})
 }
 
 // write übersetzt Write/WriteLn auf die Standardausgabe über die vorläufigen
@@ -488,12 +733,11 @@ func (s *fnState) write(args []ast.Expr, ln bool) {
 				unsupported(a.Pos(), "files are supported from stage 6")
 			}
 		}
-		tv := s.l.info.Types[x]
-		t := tv.Type
+		t := s.typeOf(x)
 		switch {
-		case tv.Mode == check.Constant && tv.Val.Kind == types.VString:
-			addr := s.l.stringAddr(tv.Val.Str)
-			s.host(HostWriteStr, nil, IntConst{V: int32(addr + 1)}, IntConst{V: int32(len(tv.Val.Str))}, width)
+		case types.IsString(t):
+			p := s.keep(s.strAddr(x))
+			s.host(HostWriteStr, nil, add(p, 1), Load{Addr: p, Mem: MemU8}, width)
 		case types.IsReal(t):
 			if _, isFmt := a.(*ast.FormatArg); !isFmt {
 				width = IntConst{V: -1}
@@ -503,10 +747,8 @@ func (s *fnState) write(args []ast.Expr, ln bool) {
 			s.host(HostWriteChar, nil, s.expr(x), width)
 		case types.Is(t, types.Boolean):
 			s.host(HostWriteBool, nil, s.expr(x), width)
-		case types.IsInteger(t):
-			s.host(HostWriteInt, nil, s.expr(x), width)
 		default:
-			unsupported(x.Pos(), "writing this type is supported from stage 5")
+			s.host(HostWriteInt, nil, s.expr(x), width)
 		}
 	}
 	if ln {

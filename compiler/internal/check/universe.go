@@ -91,6 +91,10 @@ const (
 	BAddr
 	BOfs
 	BSeg
+	// Intrinsics für die Laufzeit in rtl/system.pas
+	BMemGrow
+	BMemSize
+	BHeapBase
 	bUnsupported
 )
 
@@ -122,6 +126,7 @@ var builtinProcs = []struct {
 	{"MemAvail", BMemAvail, true}, {"MaxAvail", BMaxAvail, true}, {"ParamCount", BParamCount, true},
 	{"ParamStr", BParamStr, true}, {"Random", BRandom, true}, {"Pi", BPi, true},
 	{"Ptr", BPtr, true}, {"Addr", BAddr, true}, {"Ofs", BOfs, true}, {"Seg", BSeg, true},
+	{"_MemGrow", BMemGrow, true}, {"_MemSize", BMemSize, true}, {"_HeapBase", BHeapBase, true},
 }
 
 // unsupported sind Bezeichner der System-Unit von TP 4.0, die es wegen des

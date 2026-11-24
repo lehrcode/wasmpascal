@@ -76,11 +76,13 @@ type Var struct {
 	Addressed bool
 	// Temp: Hilfswert der Übersetzung; liegt immer in einem WASM-Local.
 	Temp bool
-	// Param ist der Index des WASM-Parameters, über den der Wert (bei Indirect
-	// und Aggregat-Wertparametern: die Adresse) hereinkommt, sonst -1.
+	// Param ist der Index des WASM-Parameters, über den der Wert (bei Indirect:
+	// die Adresse) hereinkommt, sonst -1.
 	Param int
-	// CopyIn: Aggregat-Wertparameter, den der Aufgerufene in seinen Frame kopiert.
-	CopyIn bool
+	// Owner ist die Funktion, in deren Frame bzw. Locals die Variable liegt
+	// (nil bei globalen). Greift eine innere Prozedur zu, geht es über den
+	// Static Link.
+	Owner *Func
 	// Init sind die Anfangsbytes globaler typisierter Konstanten.
 	Init []byte
 }
@@ -175,6 +177,31 @@ var opNames = [...]string{
 
 func (o Op) String() string { return opNames[o] }
 
+// FrameBase ist die Frame-Adresse der (umschließenden) Funktion F, aus der
+// aktuellen Funktion über die Kette der Static Links erreicht.
+type FrameBase struct{ F *Func }
+
+// HeapBase ist die erste Adresse hinter dem Schatten-Stack (Beginn des Heaps).
+type HeapBase struct{}
+
+// MemSize ist die aktuelle Speichergröße in Seiten zu 64 KB.
+type MemSize struct{}
+
+// SetCmpOp vergleicht zwei Mengen.
+type SetCmpOp int
+
+// Mengenvergleiche.
+const (
+	SetEq  SetCmpOp = iota // A = B
+	SetSub                 // A ⊆ B
+)
+
+// SetCmp vergleicht die 32-Byte-Mengen an den Adressen A und B.
+type SetCmp struct {
+	Op   SetCmpOp
+	A, B Expr
+}
+
 // Bin ist ein zweistelliger Operator.
 type Bin struct {
 	Op   Op
@@ -186,6 +213,15 @@ type Un struct {
 	Op Op
 	X  Expr
 }
+
+func (FrameBase) VT() ValType      { return I32 }
+func (HeapBase) VT() ValType       { return I32 }
+func (MemSize) VT() ValType        { return I32 }
+func (SetCmp) VT() ValType         { return I32 }
+func (f FrameBase) String() string { return "frame(" + f.F.Name + ")" }
+func (HeapBase) String() string    { return "heapbase" }
+func (MemSize) String() string     { return "memsize" }
+func (s SetCmp) String() string    { return fmt.Sprintf("setcmp%d(%s, %s)", s.Op, s.A, s.B) }
 
 func (IntConst) VT() ValType   { return I32 }
 func (FloatConst) VT() ValType { return F64 }
@@ -239,17 +275,53 @@ type Store struct {
 	Val  Expr
 }
 
-// Copy kopiert Size Bytes (memory.copy).
+// Copy kopiert N Bytes (memory.copy, Überlappung erlaubt).
 type Copy struct {
 	Dst, Src Expr
-	Size     int64
+	N        Expr
 }
 
-// Call ruft eine Funktion auf; Dst nimmt ein skalares Ergebnis auf.
+// Fill füllt N Bytes mit Val (memory.fill).
+type Fill struct {
+	Dst, Val, N Expr
+}
+
+// SetOpKind ist eine Mengenoperation.
+type SetOpKind int
+
+// Mengenoperationen.
+const (
+	SetUnion SetOpKind = iota
+	SetInter
+	SetDiff
+)
+
+// SetOp verknüpft die 32-Byte-Mengen A und B nach Dst (v128).
+type SetOp struct {
+	Op        SetOpKind
+	Dst, A, B Expr
+}
+
+// Grow vergrößert den Speicher um Pages Seiten; Dst erhält die alte Größe
+// oder -1 (memory.grow).
+type Grow struct {
+	Pages Expr
+	Dst   *Var
+}
+
+// Pos ist eine Quelltextstelle: Index in Module.Files und Zeile.
+type Pos struct{ File, Line int }
+
+// Line merkt die aktuelle Quelltextstelle für Laufzeitfehler vor.
+type Line struct{ Pos Pos }
+
+// Call ruft eine Funktion auf; Dst nimmt ein skalares Ergebnis auf. Pos ist
+// die Stelle des Aufrufs; sie wird nach der Rückkehr wieder vorgemerkt.
 type Call struct {
 	Fn   *Func
 	Args []Expr
 	Dst  *Var
+	Pos  Pos
 }
 
 // Host ist eine importierte Funktion.
@@ -270,8 +342,12 @@ func (s Set) String() string { return fmt.Sprintf("%s := %s", s.Var.Name, s.Val)
 func (s Store) String() string {
 	return fmt.Sprintf("store%d(%s+%d) := %s", s.Mem, s.Addr, s.Off, s.Val)
 }
-func (c Copy) String() string { return fmt.Sprintf("copy(%s, %s, %d)", c.Dst, c.Src, c.Size) }
-func (c Call) String() string { return callString(c.Dst, c.Fn.Name, c.Args) }
+func (c Copy) String() string  { return fmt.Sprintf("copy(%s, %s, %s)", c.Dst, c.Src, c.N) }
+func (f Fill) String() string  { return fmt.Sprintf("fill(%s, %s, %s)", f.Dst, f.Val, f.N) }
+func (s SetOp) String() string { return fmt.Sprintf("setop%d(%s, %s, %s)", s.Op, s.Dst, s.A, s.B) }
+func (g Grow) String() string  { return fmt.Sprintf("%s := grow(%s)", g.Dst.Name, g.Pages) }
+func (l Line) String() string  { return fmt.Sprintf("line %d:%d", l.Pos.File, l.Pos.Line) }
+func (c Call) String() string  { return callString(c.Dst, c.Fn.Name, c.Args) }
 func (c HostCall) String() string {
 	return callString(c.Dst, c.Fn.Module+"."+c.Fn.Name, c.Args)
 }
@@ -309,12 +385,19 @@ type Return struct{}
 // Unreachable beendet einen Block, der nie fortgesetzt wird (nach Halt).
 type Unreachable struct{}
 
+// Trap bricht mit dem Laufzeitfehler Code an der Stelle Pos ab.
+type Trap struct {
+	Code int
+	Pos  Pos
+}
+
 func (j Jump) String() string { return fmt.Sprintf("jump b%d", j.To.ID) }
 func (b Branch) String() string {
 	return fmt.Sprintf("branch %s b%d b%d", b.Cond, b.Then.ID, b.Else.ID)
 }
 func (Return) String() string      { return "return" }
 func (Unreachable) String() string { return "unreachable" }
+func (t Trap) String() string      { return fmt.Sprintf("trap %d", t.Code) }
 
 // Block ist ein Basisblock.
 type Block struct {
@@ -336,9 +419,19 @@ func (b *Block) Succs() []*Block {
 
 // Func ist eine übersetzte Prozedur, Funktion oder das Hauptprogramm.
 type Func struct {
-	Name   string
-	Proc   *types.Proc // nil beim Hauptprogramm
-	Params []*Var      // WASM-Parameter in Reihenfolge
+	Name string
+	// Display ist der Name in Laufzeitfehlermeldungen; Pos die Deklaration.
+	Display string
+	Pos     Pos
+	Proc    *types.Proc // nil beim Hauptprogramm
+	// Parent ist die umschließende Funktion bei verschachtelten Prozeduren.
+	// Dann ist StaticLink der versteckte erste Parameter: die Frame-Adresse
+	// von Parent. Er liegt immer im Frame, damit tiefere Ebenen ihn finden.
+	Parent     *Func
+	StaticLink *Var
+	// HasNested: Es gibt innere Prozeduren; die Funktion braucht einen Frame.
+	HasNested bool
+	Params    []*Var // WASM-Parameter in Reihenfolge
 	// Result ist die Ergebnisvariable: skalar → Rückgabewert; Aggregat →
 	// Indirect über den versteckten ersten Parameter.
 	Result *Var
@@ -354,8 +447,9 @@ func (f *Func) NewBlock() *Block {
 	return b
 }
 
-// NewVar legt eine Variable an.
+// NewVar legt eine Variable der Funktion an.
 func (f *Func) NewVar(v *Var) *Var {
+	v.Owner = f
 	f.Vars = append(f.Vars, v)
 	return v
 }
@@ -396,7 +490,8 @@ const DataBase = 65536
 
 // Module ist das übersetzte Programm.
 type Module struct {
-	Funcs     []*Func // alle Funktionen; Main ist enthalten
+	Files     []string // Dateinamen für Pos.File
+	Funcs     []*Func  // alle Funktionen; Main ist enthalten
 	Main      *Func
 	Globals   []*Var // im Datensegment, Offset = absolute Adresse
 	Data      []byte // Inhalt des Datensegments ab DataBase

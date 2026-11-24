@@ -136,3 +136,27 @@ func (c *Code) MemoryCopy() { c.B = append(c.B, opPrefixFC, 0x0A, 0x00, 0x00) }
 
 // MemoryFill hängt memory.fill (Ziel, Wert, Länge) an.
 func (c *Code) MemoryFill() { c.B = append(c.B, opPrefixFC, 0x0B, 0x00) }
+
+// SIMD-Opcodes (Präfix 0xFD).
+const (
+	SimdV128Load    uint32 = 0x00
+	SimdV128Store   uint32 = 0x0B
+	SimdV128And     uint32 = 0x4E
+	SimdV128AndNot  uint32 = 0x4F
+	SimdV128Or      uint32 = 0x50
+	SimdV128Xor     uint32 = 0x51
+	SimdV128AnyTrue uint32 = 0x53
+)
+
+// SIMD hängt eine v128-Instruktion ohne Operanden an.
+func (c *Code) SIMD(op uint32) {
+	c.B = append(c.B, 0xFD)
+	c.B = AppendU32(c.B, op)
+}
+
+// SIMDMem hängt v128.load oder v128.store mit Ausrichtung und Offset an.
+func (c *Code) SIMDMem(op uint32, alignLog2, offset uint32) {
+	c.SIMD(op)
+	c.B = AppendU32(c.B, alignLog2)
+	c.B = AppendU32(c.B, offset)
+}

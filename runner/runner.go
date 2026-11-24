@@ -59,8 +59,9 @@ func (e *RuntimeError) Error() string {
 }
 
 // Run führt ein mit compiler.TargetWASI erzeugtes Modul aus und liefert den
-// Exit-Code (Halt). Ein Abbruch von ctx beendet das Programm; Run liefert dann
-// ctx.Err().
+// Exit-Code (Halt). Ein Laufzeitfehler kommt als *RuntimeError zurück; der
+// Exit-Code ist dann die Fehlernummer, wie in TP. Ein Abbruch von ctx beendet
+// das Programm; Run liefert dann ctx.Err().
 func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -103,17 +104,30 @@ func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err erro
 		cfg = cfg.WithStderr(opts.Stderr)
 	}
 
-	mod, err := rt.InstantiateWithConfig(ctx, wasm, cfg)
+	// _start selbst aufrufen: Nach einem Trap bleibt das Modul so lesbar
+	// (Laufzeitfehler-Globalen).
+	mod, err := rt.InstantiateWithConfig(ctx, wasm, cfg.WithStartFunctions())
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return 0, ctxErr
-		}
-		var exitErr *sys.ExitError
-		if errors.As(err, &exitErr) {
-			return int(exitErr.ExitCode()), nil
-		}
 		return 0, fmt.Errorf("runner: %w", err)
 	}
-	_ = mod.Close(ctx)
-	return 0, nil
+	defer mod.Close(context.WithoutCancel(ctx))
+	start := mod.ExportedFunction("_start")
+	if start == nil {
+		return 0, errors.New("runner: Modul exportiert kein _start")
+	}
+	_, err = start.Call(ctx)
+	if err == nil {
+		return 0, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return 0, ctxErr
+	}
+	var exitErr *sys.ExitError
+	if errors.As(err, &exitErr) {
+		return int(exitErr.ExitCode()), nil
+	}
+	if rte := runtimeError(mod, wasm, err); rte != nil {
+		return rte.Code, rte
+	}
+	return 0, fmt.Errorf("runner: %w", err)
 }

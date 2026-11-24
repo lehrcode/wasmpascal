@@ -393,6 +393,15 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 		count(0, 0)
 		return val(types.LongInt)
 
+	// ---------------------------------------------------------------- Intrinsics
+	case BMemGrow:
+		count(1, 1)
+		c.intExpr(args[0])
+		return val(types.LongInt)
+	case BMemSize, BHeapBase:
+		count(0, 0)
+		return val(types.LongInt)
+
 	// ---------------------------------------------------------------- Adressen
 	case BPtr:
 		count(2, 2)

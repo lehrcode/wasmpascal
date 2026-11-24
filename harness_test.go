@@ -144,6 +144,7 @@ func (h harness) result(ctx context.Context, file string) (got, kind string, err
 		}
 		endLine(&out)
 		out.WriteString(rte.Error() + "\n")
+		code = 0 // die Fehlernummer steht schon in der Meldung
 	}
 	if code != 0 {
 		endLine(&out)

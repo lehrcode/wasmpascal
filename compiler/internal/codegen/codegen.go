@@ -1,6 +1,6 @@
 // Package codegen übersetzt die IR in ein WebAssembly-Modul für das Ziel
-// wasi: Ablage der Variablen, Frames auf dem Schatten-Stack, strukturierter
-// Kontrollfluss und Speicheraufteilung.
+// wasi: Ablage der Variablen, Frames auf dem Schatten-Stack, Static Links,
+// strukturierter Kontrollfluss, Speicheraufteilung und Laufzeitfehler.
 package codegen
 
 import (
@@ -15,26 +15,40 @@ type Options struct {
 	// Das prüft, dass jede Variable auslagerbar ist (Voraussetzung für die
 	// anhaltefähigen Prozeduren aus Etappe 8).
 	ForceFrame bool
+	// NoLines lässt Name Section und wasmpascal.lines weg.
+	NoLines bool
 }
 
-// Globale des Moduls.
-const globalSP = 0 // Schatten-Stack-Zeiger
+// Globale des Moduls. Die Laufzeitfehler-Globalen werden exportiert; der
+// Runner und der Browser-Loader lesen sie nach einem Trap.
+const (
+	globalSP   = 0 // Schatten-Stack-Zeiger
+	globalCode = 1 // Nummer des Laufzeitfehlers (0: echter WASM-Trap)
+	globalFile = 2 // Datei der aktuellen Anweisung (Index in wasmpascal.lines)
+	globalLine = 3 // Zeile der aktuellen Anweisung
+	globalFunc = 4 // Funktionsindex der aktuellen Prozedur
+)
+
+// Namen der exportierten Laufzeitfehler-Globalen.
+var GlobalExports = [...]string{"", "__rt_code", "__rt_file", "__rt_line", "__rt_func"}
 
 // Generate erzeugt das Binärmodul.
 //
 // Speicher (PLAN.md): Seite 0 bleibt frei, ab ir.DataBase liegt das
-// Datensegment, danach der Schatten-Stack, der von seinem Ende nach unten wächst.
+// Datensegment, danach der Schatten-Stack, der von seinem Ende nach unten
+// wächst, dahinter der Heap (rtl/system.pas, wächst mit memory.grow).
 func Generate(m *ir.Module, opts Options) []byte {
 	mod := &wasm.Module{}
-	gen := &generator{m: m, mod: mod, opts: opts, funcIndex: map[*ir.Func]uint32{}, hostIndex: map[*ir.Host]uint32{}}
+	g := &generator{m: m, mod: mod, opts: opts, funcIndex: map[*ir.Func]uint32{}, hostIndex: map[*ir.Host]uint32{},
+		spill: map[*ir.Var]int64{}, frameSize: map[*ir.Func]int64{}}
 
 	// Importe in Reihenfolge der ersten Verwendung
 	for _, f := range m.Funcs {
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
 				if hc, ok := in.(ir.HostCall); ok {
-					if _, seen := gen.hostIndex[hc.Fn]; !seen {
-						gen.hostIndex[hc.Fn] = uint32(len(mod.Imports))
+					if _, seen := g.hostIndex[hc.Fn]; !seen {
+						g.hostIndex[hc.Fn] = uint32(len(mod.Imports))
 						mod.Imports = append(mod.Imports, wasm.Import{
 							Module: hc.Fn.Module, Name: hc.Fn.Name,
 							Type: mod.TypeIndex(wasm.FuncType{Params: valTypes(hc.Fn.Params), Results: valTypes(hc.Fn.Result)}),
@@ -45,33 +59,52 @@ func Generate(m *ir.Module, opts Options) []byte {
 		}
 	}
 	for i, f := range m.Funcs {
-		gen.funcIndex[f] = uint32(len(mod.Imports) + i)
+		g.funcIndex[f] = uint32(len(mod.Imports) + i)
 	}
 
-	stackBase := types.AlignTo(ir.DataBase+int64(len(m.Data)), 16)
-	stackTop := stackBase + types.AlignTo(m.StackSize, 16)
-	mod.MemMin = uint32((stackTop + 65535) / 65536)
-	mod.Globals = []wasm.Global{{Type: wasm.I32, Mutable: true, Init: wasm.AppendS32([]byte{wasm.OpI32Const}, int32(stackTop))}}
+	g.stackBase = types.AlignTo(ir.DataBase+int64(len(m.Data)), 16)
+	g.stackTop = g.stackBase + types.AlignTo(m.StackSize, 16)
+	mod.MemMin = uint32((g.stackTop + 65535) / 65536)
+	i32 := func(v int64) wasm.Global {
+		return wasm.Global{Type: wasm.I32, Mutable: true, Init: wasm.AppendS32([]byte{wasm.OpI32Const}, int32(v))}
+	}
+	mod.Globals = []wasm.Global{i32(g.stackTop), i32(0), i32(0), i32(0), i32(0)}
 	if len(m.Data) > 0 {
 		mod.Data = []wasm.Data{{Offset: ir.DataBase, Bytes: m.Data}}
 	}
 
+	// Erst alle Frames anlegen, dann Code erzeugen: Zugriffe über den Static
+	// Link brauchen die Offsets fremder Frames.
 	for _, f := range m.Funcs {
-		mod.Funcs = append(mod.Funcs, gen.function(f))
+		g.layout(f)
+	}
+	for _, f := range m.Funcs {
+		mod.Funcs = append(mod.Funcs, g.function(f))
 	}
 	mod.Exports = []wasm.Export{
 		{Name: "memory", Kind: wasm.ExportMemory, Index: 0},
-		{Name: "_start", Kind: wasm.ExportFunc, Index: gen.funcIndex[m.Main]},
+		{Name: "_start", Kind: wasm.ExportFunc, Index: g.funcIndex[m.Main]},
+	}
+	for i := globalCode; i <= globalFunc; i++ {
+		mod.Exports = append(mod.Exports, wasm.Export{Name: GlobalExports[i], Kind: wasm.ExportGlobal, Index: uint32(i)})
+	}
+	if !opts.NoLines {
+		mod.Customs = append(mod.Customs, g.nameSection(), g.linesSection())
 	}
 	return mod.Encode()
 }
 
 type generator struct {
-	m         *ir.Module
-	mod       *wasm.Module
-	opts      Options
-	funcIndex map[*ir.Func]uint32
-	hostIndex map[*ir.Host]uint32
+	m                   *ir.Module
+	mod                 *wasm.Module
+	opts                Options
+	funcIndex           map[*ir.Func]uint32
+	hostIndex           map[*ir.Host]uint32
+	stackBase, stackTop int64
+	frameSize           map[*ir.Func]int64
+	// spill: Indirect-Variablen, auf die innere Prozeduren zugreifen; ihre
+	// Adresse liegt zusätzlich an diesem Offset im Frame.
+	spill map[*ir.Var]int64
 }
 
 func valType(t ir.ValType) wasm.ValType {
@@ -89,6 +122,44 @@ func valTypes(ts []ir.ValType) []wasm.ValType {
 	return out
 }
 
+// layout entscheidet die Ablage der Variablen und legt den Frame an.
+func (g *generator) layout(f *ir.Func) {
+	size := int64(0)
+	place := func(n, align int64) int64 {
+		off := types.AlignTo(size, max(align, 1))
+		size = off + n
+		return off
+	}
+	for _, v := range f.Vars {
+		switch v.Storage {
+		case ir.Undecided:
+			switch {
+			case v.Temp:
+				v.Storage = ir.Local
+			case !v.Scalar || v.Addressed || g.opts.ForceFrame:
+				v.Storage = ir.Frame
+			default:
+				v.Storage = ir.Local
+			}
+			if v.Storage == ir.Frame {
+				if v.Scalar {
+					v.Offset = place(v.Mem.Size(), v.Mem.Size())
+				} else {
+					v.Offset = place(v.Type.Size(), v.Type.Align())
+				}
+			}
+		case ir.Indirect:
+			if v.Addressed {
+				g.spill[v] = place(4, 4)
+			}
+		}
+	}
+	if size == 0 && f.HasNested {
+		size = 16 // innere Prozeduren brauchen eine Frame-Adresse
+	}
+	g.frameSize[f] = types.AlignTo(size, 16)
+}
+
 // funcGen erzeugt den Code einer Funktion.
 type funcGen struct {
 	g         *generator
@@ -101,43 +172,12 @@ type funcGen struct {
 }
 
 func (g *generator) function(f *ir.Func) *wasm.Func {
-	fg := &funcGen{g: g, fn: f, local: map[*ir.Var]uint32{}}
+	fg := &funcGen{g: g, fn: f, local: map[*ir.Var]uint32{}, frameSize: g.frameSize[f]}
 	nParams := uint32(len(f.Params))
 
-	// Ablage entscheiden und Frame anlegen
-	var frame []*ir.Var
-	for _, v := range f.Vars {
-		if v.Storage != ir.Undecided {
-			continue
-		}
-		switch {
-		case v.Temp:
-			v.Storage = ir.Local
-		case !v.Scalar || v.CopyIn || v.Addressed || g.opts.ForceFrame:
-			v.Storage = ir.Frame
-		default:
-			v.Storage = ir.Local
-		}
-		if v.Storage == ir.Frame {
-			frame = append(frame, v)
-		}
-	}
-	for _, v := range frame {
-		align := int64(4)
-		if v.Scalar {
-			align = v.Mem.Size()
-		} else {
-			align = max(v.Type.Align(), 1)
-		}
-		v.Offset = types.AlignTo(fg.frameSize, align)
-		fg.frameSize = v.Offset + v.Size()
-	}
-	fg.frameSize = types.AlignTo(fg.frameSize, 16)
-
-	// Parameter und Locals
 	var params []wasm.ValType
 	for _, p := range f.Params {
-		if p.Storage == ir.Indirect || p.CopyIn {
+		if p.Storage == ir.Indirect {
 			params = append(params, wasm.I32)
 		} else {
 			params = append(params, valType(p.VT))
@@ -166,28 +206,35 @@ func (g *generator) function(f *ir.Func) *wasm.Func {
 	}
 	typ := g.mod.TypeIndex(wasm.FuncType{Params: params, Results: results})
 
-	// Prolog: Frame reservieren, Parameter im Frame ablegen
 	c := &fg.code
+	if !g.opts.NoLines {
+		c.I32Const(int32(g.funcIndex[f]))
+		c.Index(wasm.OpGlobalSet, globalFunc)
+	}
+	// Prolog: Frame reservieren (mit Prüfung auf Überlauf), Parameter ablegen
 	if fg.frameSize > 0 {
 		c.Index(wasm.OpGlobalGet, globalSP)
 		c.I32Const(int32(fg.frameSize))
 		c.Op(wasm.OpI32Sub)
 		c.Index(wasm.OpLocalTee, fg.fp)
+		c.I32Const(int32(g.stackBase))
+		c.Op(wasm.OpI32LtU)
+		c.Block(wasm.OpIf, wasm.BlockEmpty)
+		fg.trap(ir.ErrStackOver, f.Pos)
+		c.Op(wasm.OpEnd)
+		c.Index(wasm.OpLocalGet, fg.fp)
 		c.Index(wasm.OpGlobalSet, globalSP)
-		for _, v := range frame {
-			if v.Param < 0 {
-				continue
-			}
-			if v.CopyIn {
-				fg.addrOf(v)
+		for _, v := range f.Vars {
+			switch {
+			case v.Param >= 0 && v.Storage == ir.Frame:
+				c.Index(wasm.OpLocalGet, fg.fp)
 				c.Index(wasm.OpLocalGet, uint32(v.Param))
-				c.I32Const(int32(v.Type.Size()))
-				c.MemoryCopy()
-				continue
+				fg.storeOp(v.Mem, v.Offset)
+			case v.Storage == ir.Indirect && v.Addressed:
+				c.Index(wasm.OpLocalGet, fg.fp)
+				c.Index(wasm.OpLocalGet, uint32(v.Param))
+				c.Mem(wasm.OpI32Store, 2, uint32(g.spill[v]))
 			}
-			c.Index(wasm.OpLocalGet, fg.fp)
-			c.Index(wasm.OpLocalGet, uint32(v.Param))
-			fg.storeOp(v.Mem, v.Offset)
 		}
 	}
 
@@ -197,7 +244,7 @@ func (g *generator) function(f *ir.Func) *wasm.Func {
 	return &wasm.Func{Type: typ, Locals: fg.locals, Code: c.B}
 }
 
-// ret erzeugt den Rücksprung: Frame freigeben, Ergebnis liefern.
+// ret erzeugt den Rücksprung: Ergebnis laden, Frame freigeben.
 func (fg *funcGen) ret() {
 	c := &fg.code
 	if _, ok := fg.fn.ResultVT(); ok {
@@ -210,6 +257,28 @@ func (fg *funcGen) ret() {
 		c.Index(wasm.OpGlobalSet, globalSP)
 	}
 	c.Op(wasm.OpReturn)
+}
+
+// trap bricht mit einem geprüften Laufzeitfehler ab.
+func (fg *funcGen) trap(code int, pos ir.Pos) {
+	c := &fg.code
+	c.I32Const(int32(code))
+	c.Index(wasm.OpGlobalSet, globalCode)
+	if !fg.g.opts.NoLines {
+		fg.setPos(pos)
+	}
+	c.Op(wasm.OpUnreachable)
+}
+
+// setPos merkt Datei, Zeile und Funktion für Laufzeitfehler vor.
+func (fg *funcGen) setPos(pos ir.Pos) {
+	c := &fg.code
+	c.I32Const(int32(pos.File))
+	c.Index(wasm.OpGlobalSet, globalFile)
+	c.I32Const(int32(pos.Line))
+	c.Index(wasm.OpGlobalSet, globalLine)
+	c.I32Const(int32(fg.g.funcIndex[fg.fn]))
+	c.Index(wasm.OpGlobalSet, globalFunc)
 }
 
 // ---------------------------------------------------------------------------
@@ -247,10 +316,37 @@ func (fg *funcGen) storeOp(m ir.MemType, off int64) {
 	}
 }
 
+// frameBase legt die Frame-Adresse der Funktion target auf den Stack: die
+// eigene oder, über die Kette der Static Links, die einer umschließenden.
+func (fg *funcGen) frameBase(target *ir.Func) {
+	c := &fg.code
+	if target == fg.fn {
+		c.Index(wasm.OpLocalGet, fg.fp)
+		return
+	}
+	sl := fg.fn.StaticLink
+	c.Index(wasm.OpLocalGet, fg.fp)
+	c.Mem(wasm.OpI32Load, 2, uint32(sl.Offset)) // Frame von Parent
+	for p := fg.fn.Parent; p != target; p = p.Parent {
+		c.Mem(wasm.OpI32Load, 2, uint32(p.StaticLink.Offset))
+	}
+}
+
 // base legt die Basisadresse einer Speichervariable auf den Stack und liefert
 // den Offset, der als Immediate dazukommt.
 func (fg *funcGen) base(v *ir.Var) int64 {
 	c := &fg.code
+	if v.Owner != nil && v.Owner != fg.fn {
+		fg.frameBase(v.Owner)
+		switch v.Storage {
+		case ir.Frame:
+			return v.Offset
+		case ir.Indirect:
+			c.Mem(wasm.OpI32Load, 2, uint32(fg.g.spill[v]))
+			return 0
+		}
+		panic("codegen: " + v.Name + " ist für innere Prozeduren nicht erreichbar")
+	}
 	switch v.Storage {
 	case ir.Frame:
 		c.Index(wasm.OpLocalGet, fg.fp)
@@ -308,7 +404,7 @@ func (fg *funcGen) expr(e ir.Expr) {
 		c.F64Const(e.V)
 	case ir.Get:
 		v := e.Var
-		if v.Storage == ir.Local {
+		if v.Storage == ir.Local && (v.Owner == nil || v.Owner == fg.fn) {
 			c.Index(wasm.OpLocalGet, fg.local[v])
 			return
 		}
@@ -326,15 +422,37 @@ func (fg *funcGen) expr(e ir.Expr) {
 	case ir.Un:
 		fg.expr(e.X)
 		c.Op(unOps[e.Op]...)
+	case ir.FrameBase:
+		fg.frameBase(e.F)
+	case ir.HeapBase:
+		c.I32Const(int32(fg.g.stackTop))
+	case ir.MemSize:
+		c.Op(wasm.OpMemorySize, 0)
+	case ir.SetCmp:
+		// Gleichheit: (A xor B) == 0; Teilmenge: (A andnot B) == 0, je 2 × 16 Byte
+		op := wasm.SimdV128Xor
+		if e.Op == ir.SetSub {
+			op = wasm.SimdV128AndNot
+		}
+		for half := uint32(0); half < 32; half += 16 {
+			fg.expr(e.A)
+			c.SIMDMem(wasm.SimdV128Load, 0, half)
+			fg.expr(e.B)
+			c.SIMDMem(wasm.SimdV128Load, 0, half)
+			c.SIMD(op)
+		}
+		c.SIMD(wasm.SimdV128Or)
+		c.SIMD(wasm.SimdV128AnyTrue)
+		c.Op(wasm.OpI32Eqz)
 	default:
 		panic("codegen: unbekannter Ausdruck")
 	}
 }
 
-// set weist einer Variable den Wert auf dem Stack zu; push legt ihn ab.
+// set weist einer Variable den Wert zu, den push auf den Stack legt.
 func (fg *funcGen) set(v *ir.Var, push func()) {
 	c := &fg.code
-	if v.Storage == ir.Local {
+	if v.Storage == ir.Local && (v.Owner == nil || v.Owner == fg.fn) {
 		push()
 		if v.Mem == ir.MemF32 {
 			c.Op(unOps[ir.RoundF32]...)
@@ -359,13 +477,42 @@ func (fg *funcGen) instr(in ir.Instr) {
 	case ir.Copy:
 		fg.expr(in.Dst)
 		fg.expr(in.Src)
-		c.I32Const(int32(in.Size))
+		fg.expr(in.N)
 		c.MemoryCopy()
+	case ir.Fill:
+		fg.expr(in.Dst)
+		fg.expr(in.Val)
+		fg.expr(in.N)
+		c.MemoryFill()
+	case ir.SetOp:
+		op := map[ir.SetOpKind]uint32{ir.SetUnion: wasm.SimdV128Or, ir.SetInter: wasm.SimdV128And, ir.SetDiff: wasm.SimdV128AndNot}[in.Op]
+		for half := uint32(0); half < 32; half += 16 {
+			fg.expr(in.Dst)
+			fg.expr(in.A)
+			c.SIMDMem(wasm.SimdV128Load, 0, half)
+			fg.expr(in.B)
+			c.SIMDMem(wasm.SimdV128Load, 0, half)
+			c.SIMD(op)
+			c.SIMDMem(wasm.SimdV128Store, 0, half)
+		}
+	case ir.Grow:
+		fg.set(in.Dst, func() {
+			fg.expr(in.Pages)
+			c.Op(wasm.OpMemoryGrow, 0)
+		})
+	case ir.Line:
+		if !fg.g.opts.NoLines {
+			c.I32Const(int32(in.Pos.File))
+			c.Index(wasm.OpGlobalSet, globalFile)
+			c.I32Const(int32(in.Pos.Line))
+			c.Index(wasm.OpGlobalSet, globalLine)
+		}
 	case ir.Call:
-		fg.call(in.Args, in.Dst, func() { c.Index(wasm.OpCall, fg.g.funcIndex[in.Fn]) }, func() bool {
-			_, ok := in.Fn.ResultVT()
-			return ok
-		}())
+		_, hasResult := in.Fn.ResultVT()
+		fg.call(in.Args, in.Dst, func() { c.Index(wasm.OpCall, fg.g.funcIndex[in.Fn]) }, hasResult)
+		if !fg.g.opts.NoLines {
+			fg.setPos(in.Pos) // nach der Rückkehr gilt wieder die eigene Stelle
+		}
 	case ir.HostCall:
 		fg.call(in.Args, in.Dst, func() { c.Index(wasm.OpCall, fg.g.hostIndex[in.Fn]) }, len(in.Fn.Result) > 0)
 	default:
@@ -398,4 +545,44 @@ func (fg *funcGen) call(args []ir.Expr, dst *ir.Var, emit func(), hasResult bool
 	default:
 		push()
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Custom Sections
+
+// nameSection erzeugt die standardisierte Name Section (Funktionsnamen).
+func (g *generator) nameSection() wasm.Custom {
+	var names []byte
+	names = wasm.AppendU32(names, uint32(len(g.m.Funcs)))
+	for _, f := range g.m.Funcs {
+		names = wasm.AppendU32(names, g.funcIndex[f])
+		names = appendName(names, f.Name)
+	}
+	b := []byte{1}
+	b = wasm.AppendU32(b, uint32(len(names)))
+	return wasm.Custom{Name: "name", Bytes: append(b, names...)}
+}
+
+// linesSection erzeugt wasmpascal.lines: Version, Dateinamen und je Funktion
+// Index, Anzeigename, Datei und Zeile der Deklaration. Der Runner übersetzt
+// damit die Laufzeitfehler-Globalen in eine Meldung.
+func (g *generator) linesSection() wasm.Custom {
+	b := wasm.AppendU32(nil, 1)
+	b = wasm.AppendU32(b, uint32(len(g.m.Files)))
+	for _, f := range g.m.Files {
+		b = appendName(b, f)
+	}
+	b = wasm.AppendU32(b, uint32(len(g.m.Funcs)))
+	for _, f := range g.m.Funcs {
+		b = wasm.AppendU32(b, g.funcIndex[f])
+		b = appendName(b, f.Display)
+		b = wasm.AppendU32(b, uint32(f.Pos.File))
+		b = wasm.AppendU32(b, uint32(f.Pos.Line))
+	}
+	return wasm.Custom{Name: "wasmpascal.lines", Bytes: b}
+}
+
+func appendName(b []byte, s string) []byte {
+	b = wasm.AppendU32(b, uint32(len(s)))
+	return append(b, s...)
 }
