@@ -33,6 +33,29 @@ begin
 end.
 ```
 
+## Umfang
+
+- **Sprache:** Turbo Pascal 4.0 ohne OOP, mit Units, `goto`, Mengen, Zeigern
+  und typisierten Konstanten; dazu `Result`, `Break`/`Continue`, `Low`/`High`,
+  `const`-Parameter, `for … in` und Funktionen mit Record- oder
+  Array-Ergebnis. `Integer` hat 32 Bit, Texte sind UTF-8.
+- **Units:** `System` (Ein- und Ausgabe, Text-, typisierte und untypisierte
+  Dateien samt `FileMode`, Verzeichnisse, Strings, Mathematik, Heap), `Crt`
+  (Farben, `ClrScr`, `GotoXY`, `Delay`, `ReadKey` zeilenweise) und `Dos`
+  (Datum und Uhrzeit). Alles Nutzbare beschreibt
+  [docs/units.md](docs/units.md); `WhereX`, `WhereY`, `Window` und
+  `KeyPressed` fehlen.
+- **Ziele:** WASI (CLI mit wazero, `node:wasi`, …) und `gojs` für Browser und
+  Node.js. Eingaben, `Delay` und lange Ausgaben halten das Programm an, statt
+  den Browser zu blockieren. Dateien gibt es unter beiden Zielen, unter `gojs`
+  über einen Datei-Host des Loaders.
+- **Robust für fremde Quelltexte:** einstellbare Grenzen für Quelltextmenge,
+  Schachtelung, Tokens, statische Daten und Stack, Abbruch über `ctx`,
+  geprüft mit Extremfällen und Fuzzing.
+
+Wo und warum WasmPascal von Turbo Pascal abweicht, steht in
+[docs/abweichungen.md](docs/abweichungen.md).
+
 ## Kommandozeile
 
 Voraussetzung ist Go 1.27.4 oder neuer. Im ausgecheckten Repository:
@@ -59,17 +82,19 @@ Zeilentabelle). Fehler erscheinen wie in Turbo Pascal, etwa
 Zeile 14 oder `Runtime error 200 at mittel.pas(23) in Mittelwert`, wenn die
 Abfrage `Anzahl > 0` fehlte und durch 0 geteilt würde.
 
+Das Programm sieht das Arbeitsverzeichnis als Wurzel: Pfade werden darin
+aufgelöst (`\` gilt als `/`, `..` über die Wurzel hinaus ist ein Fehler).
+Ob Groß-/Kleinschreibung in Dateinamen zählt, bestimmt das Dateisystem
+(unter Linux ja, anders als in TP); Units und `{$I}`-Dateien findet der
+Compiler unabhängig davon.
+
 ## In eigene Projekte einbinden
 
 ### Go
 
 Das Paket `compiler` braucht nur die Standardbibliothek, liest Quelltexte über
 ein `fs.FS` und baut auch für `GOOS=js` und `GOOS=wasip1`. Das Paket `runner`
-führt WASI-Module mit [wazero](https://wazero.io) aus. Quelltexte aus fremder
-Hand, etwa in einem Server, darf `compiler.Compile` direkt übersetzen: Arbeit
-und Speicher sind über `compiler.Options.Limits` begrenzt, und das Ergebnis
-ist immer ein Modul oder ein Fehler, nie ein Absturz (Abschnitt „Einbetten in
-Server“ in `go doc ./compiler`).
+führt WASI-Module mit [wazero](https://wazero.io) aus.
 
 ```go
 src := fstest.MapFS{"hallo.pas": {Data: []byte("program Hallo; begin WriteLn('Hallo!') end.")}}
@@ -100,6 +125,36 @@ default:
 
 Das Modul aus `compiler.Compile` (Standardziel WASI Preview 1) läuft auch
 ohne `runner`, z. B. mit `node:wasi`.
+
+Quelltexte aus fremder Hand darf `compiler.Compile` direkt übersetzen. Arbeit
+und Speicher begrenzt `compiler.Options.Limits`; der Nullwert sind sichere
+Voreinstellungen, jedes Feld lässt sich ändern oder mit −1 abschalten. Das
+Ergebnis ist ein Modul, ein `*compiler.Diagnostic`, `ctx.Err()` oder ein
+Fehler mit `compiler.ErrInternal` (abgefangene Panic im Compiler):
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+res, err := compiler.Compile(ctx, "hallo.pas", compiler.Options{
+	FS:     src,
+	Limits: compiler.Limits{MaxDepth: 100, MaxSourceBytes: 1 << 20},
+})
+var d *compiler.Diagnostic
+switch {
+case errors.As(err, &d):
+	fmt.Println(d.Code, d) // z. B. 904 hallo.pas(…): Error 904: Nesting too deep
+case errors.Is(err, compiler.ErrInternal):
+	log.Println("Fehler im Compiler:", err)
+case err != nil:
+	fmt.Println(err) // context.DeadlineExceeded, ungültige Optionen
+default:
+	fmt.Println(len(res.Wasm), "Byte")
+}
+```
+
+Was dabei garantiert ist und was nicht (keine harte Speichergrenze für den
+ganzen Prozess), steht im Abschnitt „Einbetten in Server“ von
+`go doc ./compiler`.
 
 ### Compiler-Server
 
@@ -204,8 +259,23 @@ GOOS=js GOARCH=wasm go build -ldflags=-s -trimpath -o web/compiler.wasm ./cmd/pa
 </script>
 ```
 
-`web/index.html` ist eine fertige Demo mit Editor und Terminal (xterm.js);
-`web/node-compile.js` und `web/node-run.js` machen dasselbe in Node.js. Bau,
+Dateizugriffe des Programms gehen unter `gojs` an die Option `files` von
+`WasmPascal.run`: einen synchronen Host mit einer Teilmenge der Node-API `fs`
+(`openSync`, `readSync`, `writeSync`, `statSync`, `mkdirSync`, …; Vertrag im
+Kopf von `web/loader.js`). Ohne `files` ergibt jeder Dateizugriff E/A-Fehler 5.
+In Node.js genügt:
+
+```bash
+pascal build -target gojs -o datei.wasm datei.pas
+```
+
+```bash
+node web/node-run.js --dir daten datei.wasm
+```
+
+`web/index.html` ist eine fertige Demo mit Editor und Terminal (xterm.js),
+`web/run.html` startet ein fertiges Modul; beide haben keinen Datei-Host.
+`web/node-compile.js` übersetzt in Node.js mit dem Browser-Compiler. Bau,
 Start und Schnittstellen beschreibt [web/README.md](web/README.md).
 
 ## Dokumentation
@@ -215,8 +285,8 @@ Start und Schnittstellen beschreibt [web/README.md](web/README.md).
 | [docs/units.md](docs/units.md) | Referenz der Units System, Crt und Dos: Typen, Routinen, Laufzeitfehler |
 | [docs/abweichungen.md](docs/abweichungen.md) | Wo und warum WasmPascal von Turbo Pascal 4.0 abweicht |
 | [PLAN.md](PLAN.md) | Sprachumfang, Erweiterungen, Typabbildung, Speichermodell, Architektur, Etappen |
-| [web/README.md](web/README.md) | Browser-Demo, Loader, `pascalCompile` |
-| [testdata/README.md](testdata/README.md) | Aufbau der Testprogramme |
+| [web/README.md](web/README.md) | Browser-Demo, Loader mit Datei-Host, `pascalCompile`, Node-Werkzeuge |
+| [testdata/README.md](testdata/README.md) | Aufbau der Testprogramme, Fuzzing |
 | [CLAUDE.md](CLAUDE.md) | Arbeitsregeln für die Weiterentwicklung |
 
 Die Go-Pakete sind mit Doku-Kommentaren und Beispielen versehen
@@ -230,8 +300,14 @@ go test ./...
 
 Jedes Programm unter `testdata/` wird übersetzt, ausgeführt und mit der
 erwarteten Ausgabe verglichen. Ist `node` installiert, laufen die Programme
-zusätzlich mit dem Ziel `gojs`, und der Browser-Compiler muss byte-gleiche
-Module liefern.
+zusätzlich mit dem Ziel `gojs` (auch die Programme mit Dateien), und der
+Browser-Compiler muss byte-gleiche Module liefern. `compiler/limits_test.go`
+prüft die Grenzen mit Extremfällen (tiefe Schachtelung, riesige Arrays, lange
+Zeilen, Abbruch über `ctx`). Fuzzing des Compilers:
+
+```bash
+go test ./compiler -run '^$' -fuzz=FuzzCompile -fuzztime=10m
+```
 
 ## Lizenz
 
