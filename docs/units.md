@@ -93,6 +93,15 @@ es nicht. Pfade, die die Wurzel verlassen, ergeben E/A-Fehler 5. Stellt
 der Host unter `gojs` kein Dateisystem bereit (so in der Browser-Demo),
 ergibt jeder Dateizugriff E/A-Fehler 5.
 
+**Groß-/Kleinschreibung** in Datei- und Verzeichnisnamen bestimmt das
+Dateisystem des Rechners, auf dem das Programm läuft (**Abweichung:** TP
+kannte keinen Unterschied). Unter Windows und macOS (Standardeinstellung)
+findet `Assign(F, 'DATEN.TXT')` auch `daten.txt`, unter Linux nicht (E/A-Fehler
+2, bei `ChDir` 3). Wer Programme auf allen Systemen gleich laufen lassen will,
+schreibt Dateinamen genau so, wie sie auf der Platte heißen. Units und
+`{$I}`-Dateien findet der Compiler dagegen immer unabhängig von der
+Schreibweise.
+
 | Signatur | Beschreibung |
 | --- | --- |
 | `Assign(var F; Name: string)` | Verbindet die Dateivariable mit einem Dateinamen. `Assign(F, '')` steht für Standardein- bzw. -ausgabe. |
