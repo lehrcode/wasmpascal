@@ -4,6 +4,7 @@
 package check
 
 import (
+	"context"
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
 	"github.com/lehrcode/wasmpascal/compiler/internal/types"
@@ -91,7 +92,16 @@ type Config struct {
 	Units map[string]*ast.Unit
 	// Embedded kennzeichnet Units aus rtl.FS (Laufzeit, ohne Positionspflege).
 	Embedded map[*ast.Unit]bool
+	// MaxStaticData begrenzt die Summe aller globalen Variablen und
+	// typisierten Konstanten in Byte (Error 49); 0 heißt DefaultMaxStaticData,
+	// eine negative Zahl schaltet die Grenze ab.
+	MaxStaticData int64
+	// Ctx bricht die Prüfung ab (geprüft je Routine); nil = nie.
+	Ctx context.Context
 }
+
+// DefaultMaxStaticData ist die Voreinstellung für Config.MaxStaticData.
+const DefaultMaxStaticData = 256 << 20
 
 // Check prüft ein Programm oder eine Unit.
 func Check(file ast.File, conf Config) (info *Info, err error) {
@@ -106,6 +116,11 @@ func Check(file ast.File, conf Config) (info *Info, err error) {
 			Procs:    map[*ast.ProcDecl]*types.Proc{},
 			Scopes:   map[ast.Node]*types.Scope{},
 		},
+		maxStaticData: conf.MaxStaticData,
+		ctx:           conf.Ctx,
+	}
+	if c.maxStaticData == 0 {
+		c.maxStaticData = DefaultMaxStaticData
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -170,6 +185,29 @@ type checker struct {
 
 	unitIntf, unitImpl *types.Scope // Scopes der Unit, die gerade geprüft wird
 	units              map[string]*unitState
+
+	staticData, maxStaticData int64 // statische Daten bisher und Grenze (<0: keine)
+	ctx                       context.Context
+}
+
+// canceled bricht die Prüfung ab, wenn ctx abgelaufen ist; Check liefert
+// dann ctx.Err().
+func (c *checker) canceled() {
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			panic(bailout{err})
+		}
+	}
+}
+
+// addStatic zählt size Byte statischer Daten (globale Variable oder
+// typisierte Konstante) und meldet Error 49 an pos, wenn die Grenze
+// überschritten ist – bevor ir dafür Speicher belegt.
+func (c *checker) addStatic(pos source.Pos, size int64) {
+	c.staticData += size
+	if c.maxStaticData >= 0 && c.staticData > c.maxStaticData {
+		c.fail(pos, source.ErrDataTooLarge, "")
+	}
 }
 
 // unitState ist der Prüfstand einer Unit.
@@ -341,6 +379,7 @@ func (c *checker) initOrder(roots []*ast.Ident) []*unitState {
 }
 
 func (c *checker) block(b *ast.Block) {
+	c.canceled()
 	c.decls(b.Decls, false)
 	c.checkForwards(c.scope)
 	c.compound(b.Body)

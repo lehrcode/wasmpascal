@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,11 +30,13 @@ func (f *File) Position(off int) Pos {
 	return Pos{File: f.Name, Line: line, Col: utf8.RuneCount(f.Data[start:end]) + 1}
 }
 
-// Grenzen für die Quelltextmenge einer Übersetzung. Sie verhindern, dass sich
-// Dateien über {$I} vervielfachen (jede Einbindung zählt erneut).
+// Voreinstellungen der Grenzen für die Quelltextmenge einer Übersetzung. Sie
+// verhindern, dass sich Dateien über {$I} vervielfachen (jede Einbindung
+// zählt erneut), und begrenzen mit den Tokens auch die Größe des AST.
 const (
-	MaxIncludes    = 1000     // {$I}-Direktiven insgesamt
-	MaxSourceBytes = 16 << 20 // gelesene Quelltextbytes insgesamt (16 MB)
+	DefaultMaxIncludes    = 1000      // {$I}-Direktiven insgesamt
+	DefaultMaxSourceBytes = 16 << 20  // gelesene Quelltextbytes insgesamt (16 MB)
+	DefaultMaxTokens      = 2_000_000 // Tokens aller Dateien
 )
 
 // Loader liest Quelldateien aus einem fs.FS und merkt sich bereits geladene.
@@ -43,9 +46,27 @@ type Loader struct {
 	FS           fs.FS
 	IncludePaths []string
 	files        map[string]*File
-	includes     int // bisherige {$I}-Einbindungen
-	bytes        int // bisher gelesene Quelltextbytes, mit Wiederholungen
+	// Grenzen der Übersetzung; 0 heißt Voreinstellung (Default…), eine
+	// negative Zahl keine Grenze. MaxStackSize prüft der Lexer bei {$M}.
+	MaxIncludes, MaxSourceBytes, MaxTokens, MaxStackSize int
+	// Ctx bricht die Übersetzung ab (geprüft alle 4096 Tokens); nil = nie.
+	Ctx context.Context
+
+	includes int // bisherige {$I}-Einbindungen
+	bytes    int // bisher gelesene Quelltextbytes, mit Wiederholungen
+	tokens   int // bisher gelesene Tokens
 }
+
+// limit liefert die wirksame Grenze: v, die Voreinstellung def für 0, oder
+// -1 für keine Grenze.
+func limit(v, def int) int {
+	if v == 0 {
+		return def
+	}
+	return v
+}
+
+func over(n, max int) bool { return max >= 0 && n > max }
 
 // Use zählt f als gelesen, include gibt an, ob es über {$I} geschieht. Ist
 // eine Grenze überschritten, liefert Use den Grund für die Fehlermeldung
@@ -53,15 +74,42 @@ type Loader struct {
 func (l *Loader) Use(f *File, include bool) string {
 	if include {
 		l.includes++
-		if l.includes > MaxIncludes {
-			return fmt.Sprintf("more than %d {$I} directives", MaxIncludes)
+		if max := limit(l.MaxIncludes, DefaultMaxIncludes); over(l.includes, max) {
+			return fmt.Sprintf("more than %d {$I} directives", max)
 		}
 	}
 	l.bytes += len(f.Data)
-	if l.bytes > MaxSourceBytes {
-		return fmt.Sprintf("more than %d MB of source text", MaxSourceBytes>>20)
+	if max := limit(l.MaxSourceBytes, DefaultMaxSourceBytes); over(l.bytes, max) {
+		if max%(1<<20) == 0 {
+			return fmt.Sprintf("more than %d MB of source text", max>>20)
+		}
+		return fmt.Sprintf("more than %d bytes of source text", max)
 	}
 	return ""
+}
+
+// DefaultMaxStackSize ist die Voreinstellung für die größte Stackgröße.
+const DefaultMaxStackSize = 256 << 20
+
+// StackLimit liefert die wirksame Grenze für die Stackgröße ({$M}), -1 für keine.
+func (l *Loader) StackLimit() int { return limit(l.MaxStackSize, DefaultMaxStackSize) }
+
+// TokenLimit liefert die wirksame Grenze für die Anzahl der Tokens.
+func (l *Loader) TokenLimit() int { return limit(l.MaxTokens, DefaultMaxTokens) }
+
+// Token zählt ein gelesenes Token und meldet, ob die Grenze für die Anzahl
+// der Tokens überschritten ist (ErrProgramTooLarge).
+func (l *Loader) Token() bool {
+	l.tokens++
+	return over(l.tokens, limit(l.MaxTokens, DefaultMaxTokens))
+}
+
+// Canceled liefert alle 4096 Tokens Ctx.Err(), sonst nil.
+func (l *Loader) Canceled() error {
+	if l.Ctx == nil || l.tokens%4096 != 0 {
+		return nil
+	}
+	return l.Ctx.Err()
 }
 
 // NewLoader erzeugt einen Loader für fsys mit zusätzlichen Suchpfaden.

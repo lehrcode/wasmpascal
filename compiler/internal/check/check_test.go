@@ -1,6 +1,7 @@
 package check
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"os"
@@ -361,5 +362,23 @@ func TestErrors(t *testing.T) {
 		if got := errorOf(t, err); got != tt.want {
 			t.Errorf("%s:\n got: %s\nwant: %s", tt.name, got, tt.want)
 		}
+	}
+}
+
+// Ein abgelaufener ctx bricht die Prüfung ab; Check liefert ctx.Err().
+func TestCheckCanceled(t *testing.T) {
+	fsys := fstest.MapFS{"p.pas": {Data: []byte("program P; procedure Q; begin end; begin Q end.")}}
+	lx, err := lexer.New(source.NewLoader(fsys, nil), "p.pas", source.NewDefines())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := parser.Parse(lx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Check(f, Config{System: system, Ctx: ctx}); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }

@@ -43,7 +43,7 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
 | Records, Arrays | Adresse | natürliche Ausrichtung, Varianten als Union |
 | Dateivariablen | Adresse | Laufzeit-Record |
 
-- **Linearer Speicher:** Seite ab Adresse 0 bleibt frei; jedes `p^` prüft auf `nil` (Runtime error 216) → Datensegment (Globale, typisierte Konstanten) →
+- **Linearer Speicher:** Seite ab Adresse 0 bleibt frei; jedes `p^` prüft auf `nil` (Runtime error 216) → Datensegment (typisierte Konstanten, im Modul) → BSS (globale Variablen, nicht im Modul) →
   Schatten-Stack (wächst nach unten, Standard 1 MB, `-stack`/`{$M}`, Überlauf = Runtime error 202) →
   Heap (Free-List, `memory.grow`, erschöpft = Runtime error 203).
 - Einzelne Struktur höchstens 2 GB; die 64-KB-Grenze von TP entfällt.

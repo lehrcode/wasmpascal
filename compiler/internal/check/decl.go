@@ -52,6 +52,7 @@ func (c *checker) constDecl(d *ast.ConstDecl) {
 	if f, ok := t.(*types.File); ok {
 		c.fail(d.Type.Pos(), source.ErrInvalidFileType, "%s", f)
 	}
+	c.addStatic(d.Name.Pos(), t.Size()) // vor dem Auswerten des Werts
 	val := c.typedConst(t, d.Value)
 	v := types.NewVar(d.Name.Name, d.Name.Text, d.Name.Pos(), types.TypedConst, t)
 	v.ReadOnly, v.Val, v.Owner = true, val, c.proc
@@ -371,6 +372,9 @@ func (c *checker) varDecl(d *ast.VarDecl) {
 		kind = types.LocalVar
 	}
 	for _, id := range d.Names {
+		if kind == types.GlobalVar {
+			c.addStatic(id.Pos(), t.Size())
+		}
 		v := types.NewVar(id.Name, id.Text, id.Pos(), kind, t)
 		v.Owner = c.proc
 		c.declare(id, v)
@@ -471,6 +475,7 @@ func (c *checker) procDecl(d *ast.ProcDecl, intf bool) {
 }
 
 func (c *checker) procBody(p *types.Proc, d *ast.ProcDecl) {
+	c.canceled()
 	saveProc, saveWiths, saveLoops := c.proc, c.withs, c.loops
 	c.proc, c.withs, c.loops = p, nil, 0
 	scope := c.openScope(types.ProcScope, p)

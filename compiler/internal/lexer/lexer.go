@@ -23,6 +23,10 @@ type fileState struct {
 	off       int
 	line      int
 	lineStart int
+	// zuletzt berechnete Spalte: Offset und Spalte in der Zeile ab colLine;
+	// posAt zählt von dort weiter statt ab Zeilenanfang (sonst wäre eine
+	// lange Zeile quadratisch teuer)
+	colLine, colOff, col int
 }
 
 func (s *fileState) eof() bool {
@@ -95,11 +99,12 @@ func (l *Lexer) StackSize() int { return l.stackSize }
 func (l *Lexer) cur() *fileState { return l.files[len(l.files)-1] }
 
 func (l *Lexer) posAt(s *fileState, off int) source.Pos {
-	return source.Pos{
-		File: s.f.Name,
-		Line: s.line,
-		Col:  utf8.RuneCount(s.f.Data[s.lineStart:off]) + 1,
+	if s.colLine != s.lineStart || off < s.colOff || s.colOff < s.lineStart {
+		s.colLine, s.colOff, s.col = s.lineStart, s.lineStart, 0
 	}
+	s.col += utf8.RuneCount(s.f.Data[s.colOff:off])
+	s.colOff = off
+	return source.Pos{File: s.f.Name, Line: s.line, Col: s.col + 1}
 }
 
 func (l *Lexer) pos() source.Pos { s := l.cur(); return l.posAt(s, s.off) }
@@ -112,6 +117,12 @@ func (l *Lexer) errorf(code int, detail string, args ...any) error {
 func (l *Lexer) Next() (Token, error) {
 	tok, err := l.next()
 	if err != nil {
+		return Token{}, err
+	}
+	if tok.Kind != EOF && l.loader.Token() {
+		return Token{}, source.Errorf(tok.Pos, source.ErrProgramTooLarge, "more than %d tokens", l.loader.TokenLimit())
+	}
+	if err := l.loader.Canceled(); err != nil {
 		return Token{}, err
 	}
 	tok.IOChecks = l.switches['I']
@@ -469,6 +480,11 @@ func (l *Lexer) directive(text string, pos source.Pos) error {
 		v, ok := parseNumber(strings.TrimSpace(first))
 		if !ok || v <= 0 {
 			return bad("stack size expected")
+		}
+		// TP-ANNAHME: Ein zu großer Wert ist wie ein fehlender ein Fehler in
+		// der Direktive (Error 17).
+		if max := l.loader.StackLimit(); max >= 0 && v > max {
+			return bad("stack size above " + strconv.Itoa(max))
 		}
 		l.stackSize = v
 	}

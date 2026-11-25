@@ -78,7 +78,7 @@ func TestIncludeCount(t *testing.T) {
 	for _, tt := range []struct {
 		n    int
 		fail bool
-	}{{source.MaxIncludes, false}, {source.MaxIncludes + 1, true}} {
+	}{{source.DefaultMaxIncludes, false}, {source.DefaultMaxIncludes + 1, true}} {
 		files := fstest.MapFS{
 			"main.pas": {Data: []byte(strings.Repeat("{$I x.inc}\n", tt.n))},
 			"x.inc":    {Data: []byte("a")},

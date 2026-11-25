@@ -64,7 +64,11 @@ Abfrage `Anzahl > 0` fehlte und durch 0 geteilt würde.
 
 Das Paket `compiler` braucht nur die Standardbibliothek, liest Quelltexte über
 ein `fs.FS` und baut auch für `GOOS=js` und `GOOS=wasip1`. Das Paket `runner`
-führt WASI-Module mit [wazero](https://wazero.io) aus.
+führt WASI-Module mit [wazero](https://wazero.io) aus. Quelltexte aus fremder
+Hand, etwa in einem Server, darf `compiler.Compile` direkt übersetzen: Arbeit
+und Speicher sind über `compiler.Options.Limits` begrenzt, und das Ergebnis
+ist immer ein Modul oder ein Fehler, nie ein Absturz (Abschnitt „Einbetten in
+Server“ in `go doc ./compiler`).
 
 ```go
 src := fstest.MapFS{"hallo.pas": {Data: []byte("program Hallo; begin WriteLn('Hallo!') end.")}}

@@ -21,6 +21,18 @@ Node.js aus (`web/node-run.js --dir`) und erwartet dieselbe Ausgabe; auch dort
 bekommt jeder Testfall ein eigenes Verzeichnis als Wurzel. Ohne `node` wird
 der Test übersprungen.
 
+Fuzzing: `FuzzCompile` (in `compiler/fuzz_test.go`) nimmt alle Programme
+unter `testdata/` als Startkorpus und übersetzt veränderte Quelltexte mit den
+voreingestellten Grenzen. Befund ist ein interner Fehler, ein Hängen über 5 s
+oder ein Absturz:
+
+```bash
+go test ./compiler -run '^$' -fuzz=FuzzCompile -fuzztime=10m
+```
+
+Neue Befunde legt Go unter `compiler/testdata/fuzz/FuzzCompile/` ab; sie
+laufen danach bei jedem `go test` mit.
+
 Neuer Testfall: `name.pas` schreiben, eine leere `name.out` (oder `name.err`)
 anlegen und `go test . -run TestPrograms -update` ausführen. Danach den Inhalt
 der erzeugten Datei prüfen. `-update` ersetzt eine `.err` durch eine `.out`

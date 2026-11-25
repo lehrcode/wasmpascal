@@ -98,10 +98,16 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 		p := info.Procs[d]
 		l.body(l.funcs[p], p, d.Block.Body.Stmts)
 	}
+	// Erst jetzt steht das Datensegment fest: BSS-Adressen nachtragen.
+	l.m.BSSBase = types.AlignTo(DataBase+int64(len(l.m.Data)), 16)
+	for _, v := range l.bss {
+		v.Offset += l.m.BSSBase
+	}
 	return l.m, nil
 }
 
 type lowerer struct {
+	bss     []*Var // globale Variablen im BSS, Offset zunächst relativ zu BSSBase
 	info    *check.Info
 	opts    Options
 	m       *Module
@@ -215,12 +221,20 @@ func addrVar(name string) *Var {
 	return &Var{Name: name, Type: types.LongInt, Scalar: true, VT: I32, Mem: MemI32, Param: -1}
 }
 
+// allocBSS reserviert Platz für eine nicht initialisierte globale Variable
+// und liefert den Offset relativ zum Beginn des BSS (Lower trägt die Basis
+// am Ende nach).
+func (l *lowerer) allocBSS(size, align int64) int64 {
+	off := types.AlignTo(l.m.BSSSize, max(align, 1))
+	l.m.BSSSize = off + size
+	return off
+}
+
 // alloc reserviert Platz im Datensegment und liefert die absolute Adresse.
 func (l *lowerer) alloc(size, align int64, init []byte) int64 {
 	off := types.AlignTo(int64(len(l.m.Data)), max(align, 1))
-	need := off + size
-	for int64(len(l.m.Data)) < need {
-		l.m.Data = append(l.m.Data, 0)
+	if need := off + size; need > int64(len(l.m.Data)) {
+		l.m.Data = append(l.m.Data, make([]byte, need-int64(len(l.m.Data)))...)
 	}
 	copy(l.m.Data[off:], init)
 	return DataBase + off
@@ -320,7 +334,8 @@ func (l *lowerer) declare(s *types.Scope, parent *Func, prefix string) {
 				checkSupported(sym.Type, sym.Pos())
 				v := newVar(sym.Text(), sym.Type)
 				v.Storage = Global
-				v.Offset = l.alloc(sym.Type.Size(), sym.Type.Align(), nil)
+				v.Offset = l.allocBSS(sym.Type.Size(), sym.Type.Align())
+				l.bss = append(l.bss, v)
 				l.vars[sym] = v
 				l.m.Globals = append(l.m.Globals, v)
 			case types.TypedConst:

@@ -197,7 +197,7 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 **Speicheraufteilung (linearer Speicher):**
 
 1. Ab Adresse 0 eine freie Seite, die nie belegt wird. WASM kennt keinen Speicherschutz; deshalb prüft jede Dereferenzierung `p^` den Zeiger und bricht bei `nil` mit `Runtime error 216` ab.
-2. Globale Variablen und typisierte Konstanten (Datensegment).
+2. Typisierte Konstanten und Konstanten des Compilers (Strings, Mengen) im Datensegment, das im Modul steht; dahinter, auf 16 Byte ausgerichtet, die nicht initialisierten globalen Variablen (BSS). Das BSS steht nicht im Modul, weil frischer WASM-Speicher ohnehin 0 ist (seit Etappe 12).
 3. Schatten-Stack, wächst nach unten. Er nimmt Records, Arrays, Strings und Mengen als lokale Variablen auf, außerdem alle Locals, deren Adresse gebraucht wird (`var`-Argumente, `@x`), sowie die Frames anhaltefähiger Prozeduren.
 4. Heap für `New`/`Dispose`/`GetMem`/`FreeMem`/`Mark`/`Release`: ein einfacher Free-List-Allocator, wächst bei Bedarf mit `memory.grow`. `MemAvail`/`MaxAvail` liefern plausible Werte.
 
@@ -541,7 +541,7 @@ ohne Host verhalten sich gojs-Module wie bisher; `TestWebCompiler` bleibt
 grün (byte-gleiche Module).
 - *Erledigt (Nov 25, 2026).* Die Dateiroutinen der untersten Schicht (`SysOpen` … `SysRmDir`, dazu `WasiWrite`/`WasiRead`) sind gemeinsam; gojs-`SysWrite`/`SysRead` leiten Handles ≥ 3 an WASI weiter. `_Path` ist durch `NormPath`/`HostPath` ersetzt (`.`/`..` aufgelöst, `..` oberhalb der Wurzel: `ChDir` 3, sonst 5). `Reset` beachtet `FileMode`; die Zugriffsart steht im Feld `Access` von `TFileRec` (vorher `Reserved`), `CanRead`/`CanWrite` prüfen sie vor jedem Lesen bzw. Schreiben. `web/loader.js` stellt die elf WASI-Funktionen bereit (Handle-Tabelle je Lauf, Option `files`), `node-run.js --dir` den Host über Nodes `fs`. Tests: `testdata/etappe11/` (`verzeichnisse`, `dateien`, `filemode`, auch mit erzwungener Frame-Ablage), `TestReadOnlyFile` (schreibgeschützte Datei unter beiden Zielen); `TestProgramsGoJS` läuft jetzt ohne Ausschluss über alle 84 Testprogramme.
 
-### Etappe 12: Härtung für fremde Quelltexte
+### Etappe 12: Härtung für fremde Quelltexte ✅
 
 **Ziel:** `compiler.Compile` darf mit beliebigem Quelltext im Prozess eines
 Servers laufen: Er endet immer mit Ergebnis oder `*Diagnostic`, in
@@ -550,97 +550,127 @@ Absturz.
 
 #### Gefundene Schwachstellen
 
-| Stelle | Problem |
-| --- | --- |
-| `compiler/internal/parser/parser.go` | Recursive Descent ohne Tiefengrenze. Linkslastige Ketten (`a+b+c+…`), `else if`-Ketten, verschachtelte Klammern, Typen und Prozeduren erzeugen beliebig tiefe ASTs, über die auch `check`, `ir` und `codegen` rekursiv laufen. Folge: Go-Stack-Überlauf = `fatal error`, Prozess beendet. |
-| `compiler/internal/codegen/structure.go` (`push`) | Kopiert den Kontext je Ebene: quadratischer Aufwand in der Schachtelungstiefe. |
-| `compiler/internal/ir/lower.go` (`alloc`, `declare`) | Globale Variablen liegen im Datensegment und werden **Byte für Byte** angehängt; jede darf bis `MaxStructSize` (2 GB) groß sein, die Summe ist unbegrenzt. `encode` belegt für typisierte Konstanten `Size()` Bytes. Das Modul enthält alle Nullbytes. |
-| `compiler/internal/lexer/lexer.go` (`include`) | Nur die Tiefe ist begrenzt (16), nicht die Gesamtmenge. Eine Datei mit mehreren `{$I x}` auf sich selbst vervielfacht den Quelltext exponentiell. |
-| alle Phasen | `ctx` wird nur zwischen den Phasen und je Unit geprüft; eine laufende Phase lässt sich nicht abbrechen. |
+Gemessen am 25. 11. 2026 mit `pascal build` bzw. `check` und einem CPU-Profil:
 
-#### Änderungen
+| Stelle | Problem | Messung |
+| --- | --- | --- |
+| `compiler/internal/lexer/lexer.go` (`posAt`) | Die Spalte jedes Tokens wird ab Zeilenanfang neu gezählt (`utf8.RuneCount`): quadratischer Aufwand in der **Zeilenlänge**, ganz ohne Schachtelung. Die Tiefengrenze hilft dagegen nicht. | 400 KB flacher Code in einer Zeile: 19 s (auf viele Zeilen verteilt: 0,1 s); mit 16 MB in einer Zeile wären es Stunden |
+| `compiler/internal/ir/lower.go` (`alloc`, `declare`) | Globale Variablen liegen im Datensegment und werden **Byte für Byte** angehängt; jede darf bis `MaxStructSize` (2 GB) groß sein, die Summe ist unbegrenzt. Das Modul enthält alle Nullbytes. | `var A, B, C: array[1..2000000000] of Byte` → `fatal error: out of memory` (nicht abfangbar, Prozess beendet); ein 10-MB-Array ergibt ein 10-MB-Modul |
+| `compiler/internal/parser/parser.go` | Recursive Descent ohne Tiefengrenze. Linkslastige Ketten (`a+b+c+…`), `else if`-Ketten, verschachtelte Klammern, Typen und Prozeduren erzeugen beliebig tiefe ASTs, über die auch `check`, `ir` und `codegen` rekursiv laufen. Bei genügend Tiefe läuft der Go-Stack über (`fatal error`). | 20 000 Klammern 0,46 s (10 000: 0,14 s); 20 000 `else if` 34 s |
+| `compiler/internal/codegen/structure.go` (`push`) | Kopiert den Kontext je Ebene: quadratischer Aufwand in der Schachtelungstiefe. | Teil der 34 s bei `else if` |
+| `compiler/internal/lexer/lexer.go` (`include`) | *Erledigt (vorgezogen, siehe unten).* | |
+| alle Phasen | `ctx` wird nur zwischen den Phasen und je Unit geprüft; eine laufende Phase lässt sich nicht abbrechen. | |
 
-1. **Grenzen als Teil der API** (`compiler.Options.Limits`, Typ
-   `compiler.Limits`, mit Doku-Kommentar und `Example`). Nullwert = sichere
-   Voreinstellungen, die alle bisherigen Testprogramme zulassen; die CLI
-   bekommt keine neuen Flags (bei Bedarf später). Vorschlag:
+#### Grenzen
 
-   | Feld | Voreinstellung | Fehler |
-   | --- | --- | --- |
-   | `MaxDepth` – Schachtelung von Ausdrücken, Anweisungen, Typen, Prozeduren | 500 | 904 „Nesting too deep“ |
-   | `MaxSourceBytes` – alle gelesenen Quelltextbytes inkl. Units und Includes (ohne eingebettete RTL) | 16 MB | 905 „Source too large“ |
-   | `MaxIncludes` – Anzahl `{$I}` insgesamt | 1000 | 905 |
-   | `MaxNodes` – AST-Knoten insgesamt | 2 000 000 | 906 „Program too large“ |
-   | `MaxStaticData` – Summe aller globalen Variablen und typisierten Konstanten | 256 MB | 49 „Data segment too large“ (`// TP-ANNAHME:` Nummer wie TP 7) |
-   | `MaxStackSize` – `{$M}` bzw. `Options.StackSize` | 256 MB | 905er-Reihe oder passende TP-Nummer |
+Alle Grenzen kommen in `compiler.Options.Limits` (Typ `compiler.Limits`, mit
+Doku-Kommentar und `Example`). Ein Feld mit 0 bedeutet die Voreinstellung,
+−1 schaltet die Grenze ab. Die Voreinstellungen lassen alle bisherigen
+Testprogramme zu; die CLI bekommt keine neuen Flags (bei Bedarf später).
 
-   Fehlernummern ab 904 in `compiler/internal/source/error.go` und in
-   `docs/abweichungen.md` eintragen.
-2. **Tiefe im Parser zählen:** ein Zähler mit `enter()`/`leave()` in allen
-   rekursiven Produktionen (Ausdruck, Term, Faktor, Anweisung, Typ,
-   Prozedurblock). In den Schleifen für zweistellige Operatoren zählt jeder
-   weitere Operator eine Ebene, weil der Baum dort tiefer wird. Damit sind
-   auch die späteren Phasen begrenzt. `structure.go` beim Aufräumen auf
-   einen Stapel mit `append`/Kürzen umstellen (kein Kopieren je Ebene).
-3. **Datensegment ohne Nullbytes:**
-   - Nicht initialisierte globale Variablen in einen eigenen Bereich (BSS)
-     hinter dem Datensegment legen: `ir.Module` bekommt `BSSSize`, `alloc`
-     für Variablen vergibt nur Offsets, `codegen` setzt den Schatten-Stack
-     hinter Daten + BSS. Ins Modul kommen nur die initialisierten Bytes.
-   - `alloc` legt Platz auf einmal an (kein Anhängen in einer Schleife).
-   - `MaxStaticData` schon in der Typprüfung prüfen (an der Deklaration,
-     die die Grenze überschreitet), also bevor `encode` Speicher belegt.
-   - Speicherlayout in `PLAN.md` (Typabbildung und Speichermodell) und
-     `CLAUDE.md` nachziehen.
-4. **Quelltextmenge begrenzen:** Lexer bzw. `source.Loader` zählen gelesene
-   Bytes und `{$I}` über alle Dateien eines `Compile`-Aufrufs (Zähler im
-   Aufruf, nicht global).
-   *Vorgezogen und erledigt (Nov 25, 2026):* `source.Loader` zählt je
-   Übersetzung jede Einbindung und ihre Bytes erneut (`MaxIncludes` = 1000,
-   `MaxSourceBytes` = 16 MB, eingebettete Laufzeit ausgenommen) → Error 905
-   „Source too large“. Zusätzlich erkennt der Lexer Include-Zyklen sofort
-   (Error 9 „circular include of …“). Pfade in `{$I}` bleiben wie in TP
-   erlaubt (eine Beschränkung auf Dateinamen hilft gegen die Vervielfachung
-   nicht und bräche TP-Quelltexte). Offen für Etappe 12: die Grenzen in
-   `compiler.Limits` übernehmen.
-5. **Abbruch über `ctx` in allen Phasen:** `ctx` über die Config-Strukturen
-   durchreichen (kein globaler Zustand) und prüfen: im Lexer alle 4096
-   Tokens, im Parser je Deklaration und Anweisung, in `check` je Routine und
-   Anweisung, in `ir.Lower`, `analysis` und `codegen` je Funktion. Ergebnis
-   ist dann `ctx.Err()`, kein `Diagnostic`.
-6. **Panics:** `recover` in `compile` bleibt. Interne Fehler zusätzlich mit
-   einem Kennzeichen versehen (z. B. `errors.Is(err, compiler.ErrInternal)`),
-   damit ein Server sie von Quelltextfehlern unterscheiden und protokollieren
-   kann.
-7. **Tests** (`compiler/limits_test.go`), jeweils mit `ctx`-Timeout von 2 s
-   und Prüfung des Speicherverbrauchs (`runtime.MemStats` vorher/nachher,
-   z. B. < 64 MB):
-   - 100 000 verschachtelte Klammern, `a+a+…+a` mit 100 000 Operanden,
-     100 000 `else if`, 10 000 verschachtelte `begin`, tief verschachtelte
-     Typen (`array … of array …`, Records) und Prozeduren → 904 bzw. 906.
-   - Datei, die sich zehnmal selbst per `{$I}` einbindet → 9 oder 905,
-     schnell.
-   - `var a, b, c: array[1..2000000000] of Byte;` → 49, ohne großen
-     Speicherverbrauch.
-   - Ein Programm mit 1 MB globaler Variablen: Modul bleibt klein (BSS).
-   - Abbruch: großer, gültiger Quelltext mit sofort abgelaufenem `ctx` →
-     `context.Canceled` bzw. `DeadlineExceeded`.
-   - Alle bisherigen Tests unverändert grün, `TestWebCompiler` byte-gleich.
-8. **Fuzzing:** `FuzzCompile` im Paket `compiler` mit den Testprogrammen
-   aus `testdata/` als Startkorpus. Jeder Aufruf mit Timeout-`ctx` und den
-   Voreinstellungen; ein interner Fehler (`ErrInternal`) oder ein Hängen
-   gilt als Befund. In `testdata/README.md` beschreiben, wie man es laufen
-   lässt (`go test ./compiler -fuzz=FuzzCompile -fuzztime=10m`).
+| Feld | Voreinstellung | Fehler |
+| --- | --- | --- |
+| `MaxDepth` – Schachtelung von Ausdrücken, Anweisungen, Typen, Prozeduren | 500 | 904 „Nesting too deep“ |
+| `MaxSourceBytes` – alle gelesenen Quelltextbytes inkl. Units und Includes, jede Einbindung erneut (ohne eingebettete RTL) | 16 MB | 905 „Source too large“ (*vorhanden*) |
+| `MaxIncludes` – Anzahl `{$I}` insgesamt | 1000 | 905 (*vorhanden*) |
+| `MaxTokens` – Tokens aller Dateien einer Übersetzung (statt `MaxNodes`: ein Zähler an einer Stelle, begrenzt die AST-Größe ebenso) | 2 000 000 | 906 „Program too large“ |
+| `MaxStaticData` – Summe aller globalen Variablen und typisierten Konstanten | 256 MB | 49 „Data segment too large“ (`// TP-ANNAHME:` Nummer wie TP 7) |
+| `MaxStackSize` – `{$M}` bzw. `Options.StackSize` | 256 MB | 905er-Reihe oder passende TP-Nummer |
+
+Fehlernummern ab 904 in `compiler/internal/source/error.go` und in
+`docs/abweichungen.md` eintragen.
+
+#### Änderungen in dieser Reihenfolge
+
+Geordnet nach Nutzen und Aufwand: Die Punkte 1 bis 4 sind klein und beheben
+alle gemessenen Abstürze und das quadratische Verhalten; die übrigen bringen
+Einstellbarkeit und Komfort für den Einsatz im Server.
+
+1. **Spalte im Lexer schrittweise mitführen** (Nutzen sehr hoch, Aufwand
+   sehr gering): Je Datei die zuletzt berechnete Stelle (Offset, Spalte)
+   merken und nur ab dort weiterzählen; bei einem Zeilenwechsel neu
+   beginnen. Positionen und Meldungen bleiben byte-gleich.
+2. **`MaxStaticData` in der Typprüfung** (hoch, gering): Größen der globalen
+   Variablen und typisierten Konstanten je Übersetzung aufsummieren und an
+   der Deklaration, die die Grenze überschreitet, Error 49 melden – bevor
+   `ir` Speicher belegt. `alloc` legt den Platz auf einmal an (kein Anhängen
+   in einer Schleife).
+3. **Tiefengrenze im Parser** (hoch, gering bis mittel): ein Zähler mit
+   `enter()`/`leave()` in den rekursiven Produktionen (Ausdruck, Term,
+   Faktor, Anweisung, Typ, Prozedurblock). In den Schleifen für zweistellige
+   Operatoren zählt jeder weitere Operator eine Ebene, weil der Baum dort
+   tiefer wird. Damit sind auch die späteren Phasen begrenzt. `structure.go`
+   dabei auf einen Stapel mit `append`/Kürzen umstellen (kein Kopieren je
+   Ebene).
+4. **`ErrInternal` und `MaxTokens`** (mittel, sehr gering): Das `recover`
+   in `compile` bleibt; interne Fehler bekommen ein Kennzeichen
+   (`errors.Is(err, compiler.ErrInternal)`), damit ein Server sie von
+   Quelltextfehlern unterscheiden und protokollieren kann. Die Token-Grenze
+   zählt wie die Include-Grenzen im `source.Loader` über alle Dateien.
+5. **`compiler.Limits`** (mittel, gering bis mittel): die Grenzen oben als
+   API; Weitergabe an Loader, Lexer, Parser und `check`; die festen
+   Konstanten aus `source` (`MaxIncludes`, `MaxSourceBytes`) ablösen.
+6. **Datensegment ohne Nullbytes (BSS)** (mittel, mittel bis hoch):
+   Nicht initialisierte globale Variablen in einen eigenen Bereich hinter
+   dem Datensegment legen: `ir.Module` bekommt `BSSSize`, `alloc` für
+   Variablen vergibt nur Offsets, `codegen` setzt den Schatten-Stack hinter
+   Daten + BSS. Ins Modul kommen nur die initialisierten Bytes.
+   Speicherlayout in `PLAN.md` (Typabbildung und Speichermodell) und
+   `CLAUDE.md` nachziehen.
+7. **Abbruch über `ctx`, minimal** (gering, sobald 1 bis 5 greifen; volle
+   Durchreichung wäre aufwendig): `ctx` über die Config-Strukturen
+   durchreichen (kein globaler Zustand) und prüfen im Lexer alle 4096
+   Tokens (deckt Lexer und Parser ab) und in `check` je Routine. Weitere
+   Phasen nur, wenn ihre Laufzeit trotz der Grenzen messbar ins Gewicht
+   fällt. Ergebnis ist dann `ctx.Err()`, kein `Diagnostic`.
+8. **Fuzzing, zeitlich begrenzt** (hoch fürs Aufdecken, Befunde nach oben
+   offen): `FuzzCompile` im Paket `compiler` mit den Testprogrammen aus
+   `testdata/` als Startkorpus, jeder Aufruf mit Timeout-`ctx` und den
+   Voreinstellungen. Ein interner Fehler (`ErrInternal`) oder ein Hängen
+   gilt als Befund. In der Etappe werden nur Abstürze und Hänger behoben;
+   alle übrigen Befunde kommen als Liste in den Bericht. In
+   `testdata/README.md` beschreiben, wie man es laufen lässt
+   (`go test ./compiler -fuzz=FuzzCompile -fuzztime=10m`).
 9. **Doku:** Im Paketkommentar von `compiler` einen Abschnitt „Einbetten in
    Server“: was garantiert ist (Grenzen, Abbruch, keine Goroutinen, kein
    Dateizugriff außer `Options.FS`) und was nicht (keine harte
    Speicherobergrenze des Prozesses – für fremde Eingaben in gemeinsam
-   genutzten Servern zusätzlich eigenen Prozess oder Etappe 13 empfehlen).
+   genutzten Servern zusätzlich einen eigenen Prozess empfehlen).
 
-**Fertig, wenn:** Alle Tests aus Punkt 7 liefern innerhalb von 1 s ein
+*Schon erledigt – Quelltextmenge begrenzen (vorgezogen, Nov 25, 2026):*
+`source.Loader` zählt je Übersetzung jede Einbindung und ihre Bytes erneut
+(`MaxIncludes` = 1000, `MaxSourceBytes` = 16 MB, eingebettete Laufzeit
+ausgenommen) → Error 905 „Source too large“. Zusätzlich erkennt der Lexer
+Include-Zyklen sofort (Error 9 „circular include of …“). Pfade in `{$I}`
+bleiben wie in TP erlaubt (eine Beschränkung auf Dateinamen hilft gegen die
+Vervielfachung nicht und bräche TP-Quelltexte).
+
+#### Tests
+
+`compiler/limits_test.go`, jeweils mit `ctx`-Timeout von 2 s und Prüfung des
+Speicherverbrauchs (`runtime.MemStats` vorher/nachher, z. B. < 64 MB):
+
+- 400 KB flacher Code in einer Zeile wird so schnell übersetzt wie auf viele
+  Zeilen verteilt (Punkt 1); Spaltenangaben in Meldungen unverändert.
+- `var a, b, c: array[1..2000000000] of Byte;` → 49, ohne großen
+  Speicherverbrauch (Punkt 2).
+- 100 000 verschachtelte Klammern, `a+a+…+a` mit 100 000 Operanden,
+  100 000 `else if`, 10 000 verschachtelte `begin`, tief verschachtelte
+  Typen (`array … of array …`, Records) und Prozeduren → 904 (Punkt 3).
+- Ein Quelltext mit mehr als `MaxTokens` Tokens → 906; ein künstlich
+  ausgelöster interner Fehler → `ErrInternal` (Punkt 4).
+- Jede Grenze lässt sich über `Limits` ändern und mit −1 abschalten
+  (Punkt 5).
+- Ein Programm mit 1 MB globaler Variablen: Modul bleibt klein (Punkt 6).
+- Abbruch: großer, gültiger Quelltext mit sofort abgelaufenem `ctx` →
+  `context.Canceled` bzw. `DeadlineExceeded` (Punkt 7).
+- Alle bisherigen Tests unverändert grün, `TestWebCompiler` byte-gleich.
+
+**Fertig, wenn:** Alle Tests oben liefern innerhalb von 1 s ein
 `*Diagnostic` bzw. `ctx.Err()`, ohne nennenswerten Speicher zu belegen;
-`FuzzCompile` läuft 10 Minuten ohne Befund; alle bisherigen Tests und
-`TestWebCompiler` sind unverändert grün.
+`FuzzCompile` läuft 10 Minuten ohne Absturz oder Hänger; alle bisherigen
+Tests und `TestWebCompiler` sind unverändert grün.
+- *Erledigt (Nov 25, 2026).* Punkte 1 bis 9 umgesetzt: Spalten im Lexer schrittweise (400 KB in einer Zeile: 19 s → 0,08 s); `MaxStaticData` in `check` (Error 49, ohne Speicher zu belegen); Tiefe im Parser (`ParseDepth`, Error 904); `ErrInternal`; `MaxTokens` im `source.Loader` (Error 906); `compiler.Limits` (0 = Voreinstellung, −1 = aus; `{$M}` über `MaxStackSize`: Error 17); BSS (`ir.Module.BSSBase`/`BSSSize`, Adressen am Ende von `Lower` nachgetragen); `ctx` im Lexer alle 4096 Tokens und in `check` je Routine; `FuzzCompile` 10 Minuten (8,75 Mio. Aufrufe) ohne Befund. **Abweichung vom Plan:** `structure.go` kopiert den Kontext weiter je Ebene – bei höchstens 500 Ebenen gemessen unter 0,03 s, der Umbau hätte jede Funktion des Strukturierers berührt. Tests: `compiler/limits_test.go` (lange Zeile, statische Daten, zwölf Schachtelungsfälle, knapp unter der Grenze, Tokens, `ErrInternal`, alle Grenzen einstellbar, BSS mit Laufzeitprobe, Abbruch über `ctx`), `TestCheckCanceled`, `ExampleLimits`.
 
 ## Arbeitsregeln für Claude Code
 

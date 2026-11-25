@@ -7,6 +7,32 @@
 // Die System-Unit (rtl/system.pas, eingebettet über das Paket rtl) wird
 // implizit mitgeprüft und mitübersetzt. Noch nicht übersetzbare Sprachmittel
 // melden Error 902 mit der Etappe, in der sie folgen.
+//
+// # Einbetten in Server
+//
+// Compile und Check dürfen Quelltexte aus fremder Hand übersetzen. Garantiert
+// ist:
+//
+//   - Das Ergebnis ist immer ein Modul, ein *Diagnostic (Fehler im
+//     Quelltext), ctx.Err() (Abbruch) oder ein Fehler mit ErrInternal (Fehler
+//     im Compiler, abgefangene Panic). Was Go nicht abfangen kann –
+//     Überlauf des Go-Stacks und Speichermangel –, verhindern die Grenzen
+//     unten; geprüft mit Extremfällen und Fuzzing (FuzzCompile).
+//   - Arbeit und Speicher sind über Options.Limits begrenzt: Quelltextmenge
+//     (auch über {$I} vervielfacht), Tokens, Schachtelungstiefe, statische
+//     Daten, Stackgröße. Die Voreinstellungen gelten auch, wenn Limits
+//     nicht gesetzt ist; jede Grenze lässt sich ändern oder abschalten.
+//   - ctx wird zwischen den Phasen, im Lexer alle 4096 Tokens und in der
+//     Typprüfung je Routine geprüft.
+//   - Der Compiler startet keine Goroutinen, hat keinen globalen
+//     veränderlichen Zustand und liest nur über Options.FS.
+//
+// Nicht garantiert ist eine harte Obergrenze für den Speicher des ganzen
+// Prozesses: Die Grenzen halten den Verbrauch einer Übersetzung klein (die
+// Tests verlangen unter 64 MB für die bekannten Extremfälle), aber viele
+// gleichzeitige Übersetzungen addieren sich. Wer fremde Eingaben in einem
+// gemeinsam genutzten Server übersetzt, sollte dafür zusätzlich einen
+// eigenen Prozess mit Speichergrenze verwenden.
 package compiler
 
 import (
@@ -54,9 +80,39 @@ type Options struct {
 	StackSize int
 	// NoLines lässt Zeilentabelle und Name Section weg.
 	NoLines bool
+	// Limits begrenzt Arbeit und Speicher der Übersetzung, etwa für
+	// Quelltexte aus fremder Hand; der Nullwert sind sichere Voreinstellungen.
+	Limits Limits
 
 	// forceFrame legt alle Variablen in den Frame (nur für Tests im Paket).
 	forceFrame bool
+}
+
+// Limits begrenzt, wie viel Arbeit und Speicher eine Übersetzung kostet. In
+// jedem Feld bedeutet 0 die Voreinstellung und eine negative Zahl, dass die
+// Grenze abgeschaltet ist. Die Voreinstellungen lassen auch große
+// Lehrprogramme zu. Wird eine Grenze überschritten, liefert Compile ein
+// *Diagnostic mit der angegebenen Nummer.
+type Limits struct {
+	// MaxDepth begrenzt die Schachtelung von Ausdrücken, Anweisungen, Typen,
+	// typisierten Konstanten und Prozeduren (500; Error 904). Ketten wie
+	// a+b+c zählen je Operator eine Ebene.
+	MaxDepth int
+	// MaxSourceBytes begrenzt den gelesenen Quelltext aller Dateien; jede
+	// {$I}-Einbindung zählt erneut, die eingebettete Laufzeit nicht
+	// (16 MB; Error 905).
+	MaxSourceBytes int
+	// MaxIncludes begrenzt die Anzahl der {$I}-Einbindungen (1000; Error 905).
+	MaxIncludes int
+	// MaxTokens begrenzt die Tokens aller Dateien und damit die Größe des
+	// Syntaxbaums (2 000 000; Error 906).
+	MaxTokens int
+	// MaxStaticData begrenzt die Summe aller globalen Variablen und
+	// typisierten Konstanten in Byte (256 MB; Error 49).
+	MaxStaticData int64
+	// MaxStackSize begrenzt die Größe des Schatten-Stacks aus {$M}
+	// (Error 17) bzw. Options.StackSize (Fehler ohne Diagnostic) (256 MB).
+	MaxStackSize int
 }
 
 // Result ist das Ergebnis einer erfolgreichen Übersetzung.
@@ -106,10 +162,15 @@ func Check(ctx context.Context, mainFile string, opts Options) error {
 	return err
 }
 
+// ErrInternal kennzeichnet einen internen Fehler des Compilers (eine
+// abgefangene Panic) im Unterschied zu Fehlern im Quelltext (*Diagnostic);
+// errors.Is(err, ErrInternal) erkennt ihn. Ein Server sollte ihn protokollieren.
+var ErrInternal = errors.New("compiler: interner Fehler")
+
 func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res *Result, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			res, err = nil, fmt.Errorf("compiler: interner Fehler: %v", r)
+			res, err = nil, fmt.Errorf("%w: %v", ErrInternal, r)
 		}
 	}()
 	if err := ctx.Err(); err != nil {
@@ -124,14 +185,26 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if opts.StackSize < 0 {
 		return nil, fmt.Errorf("compiler: negative Stackgröße %d", opts.StackSize)
 	}
+	lim := opts.Limits
+	if max := lim.MaxStackSize; max >= 0 {
+		if max == 0 {
+			max = source.DefaultMaxStackSize
+		}
+		if opts.StackSize > max {
+			return nil, fmt.Errorf("compiler: Stackgröße %d über der Grenze %d", opts.StackSize, max)
+		}
+	}
 	// Das Ziel ist als bedingtes Symbol WASI bzw. GOJS definiert.
 	opts.Defines = append(append([]string{}, opts.Defines...), targetSymbol(opts.Target))
 	loader := source.NewLoader(opts.FS, opts.IncludePaths)
+	loader.MaxIncludes, loader.MaxSourceBytes = lim.MaxIncludes, lim.MaxSourceBytes
+	loader.MaxTokens, loader.MaxStackSize = lim.MaxTokens, lim.MaxStackSize
+	loader.Ctx = ctx
 	lx, err := lexer.New(loader, mainFile, source.NewDefines(opts.Defines...))
 	if err != nil {
 		return nil, diagnostic(err)
 	}
-	file, err := parser.Parse(lx)
+	file, err := parser.ParseDepth(lx, lim.MaxDepth)
 	if err != nil {
 		return nil, diagnostic(err)
 	}
@@ -143,7 +216,8 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if err != nil {
 		return nil, diagnostic(err)
 	}
-	info, err := check.Check(file, check.Config{System: system, Units: units, Embedded: embedded})
+	info, err := check.Check(file, check.Config{System: system, Units: units, Embedded: embedded,
+		MaxStaticData: lim.MaxStaticData, Ctx: ctx})
 	if err != nil {
 		return nil, diagnostic(err)
 	}
@@ -216,7 +290,7 @@ func loadUnits(ctx context.Context, file ast.File, loader *source.Loader, dir st
 		if err != nil {
 			return nil, nil, err
 		}
-		f, err := parser.Parse(lx)
+		f, err := parser.ParseDepth(lx, opts.Limits.MaxDepth)
 		if err != nil {
 			return nil, nil, err
 		}

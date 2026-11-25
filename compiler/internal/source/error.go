@@ -71,6 +71,7 @@ const (
 	ErrUndefinedPtrType    = 19
 	ErrVarIdentExpected    = 20
 	ErrStructTooLarge      = 22
+	ErrDataTooLarge        = 49
 	ErrSetBaseRange        = 23
 	ErrInvalidStringLen    = 25
 	ErrTypeMismatch        = 26
@@ -110,12 +111,13 @@ const (
 	ErrInvalidFormat       = 135
 	ErrInvalidProcRef      = 143
 
-	ErrInvalidUTF8  = 900
-	ErrNonASCII     = 901
-	ErrNotSupported = 902
-	ErrBreakOutside = 903
-	// 904 und 906 sind für Etappe 12 vorgesehen (Schachtelungstiefe, Programmgröße).
-	ErrSourceTooLarge = 905
+	ErrInvalidUTF8     = 900
+	ErrNonASCII        = 901
+	ErrNotSupported    = 902
+	ErrBreakOutside    = 903
+	ErrNestingTooDeep  = 904
+	ErrSourceTooLarge  = 905
+	ErrProgramTooLarge = 906
 )
 
 var messages = map[int]string{
@@ -154,6 +156,7 @@ var messages = map[int]string{
 	ErrUndefinedPtrType:    "Undefined type in pointer definition",
 	ErrVarIdentExpected:    "Variable identifier expected",
 	ErrStructTooLarge:      "Structure too large",
+	ErrDataTooLarge:        "Data segment too large",
 	ErrSetBaseRange:        "Set base type out of range",
 	ErrInvalidStringLen:    "Invalid string length",
 	ErrTypeMismatch:        "Type mismatch",
@@ -198,6 +201,8 @@ var messages = map[int]string{
 	ErrStringExceedsLine:   "String constant exceeds line",
 	ErrTooManyNestedFiles:  "Too many nested files",
 	ErrSourceTooLarge:      "Source too large",
+	ErrNestingTooDeep:      "Nesting too deep",
+	ErrProgramTooLarge:     "Program too large",
 	ErrUnexpectedEOF:       "Unexpected end of file",
 	ErrInvalidFileName:     "Invalid file name",
 	ErrFileNotFound:        "File not found",

@@ -542,13 +542,17 @@ const DataBase = 65536
 
 // Module ist das übersetzte Programm.
 type Module struct {
-	Files     []string // Dateinamen für Pos.File
-	Funcs     []*Func  // alle Funktionen; Main ist enthalten
-	Main      *Func
-	Globals   []*Var // im Datensegment, Offset = absolute Adresse
-	Data      []byte // Inhalt des Datensegments ab DataBase
-	StackSize int64
-	Hosts     []*Host // benutzte Importe in Reihenfolge der ersten Verwendung
+	Files   []string // Dateinamen für Pos.File
+	Funcs   []*Func  // alle Funktionen; Main ist enthalten
+	Main    *Func
+	Globals []*Var // im Datensegment bzw. BSS, Offset = absolute Adresse
+	Data    []byte // Inhalt des Datensegments ab DataBase (initialisierte Daten)
+	// BSS: nicht initialisierte globale Variablen ab BSSBase (hinter Data,
+	// auf 16 ausgerichtet), BSSSize Byte. Sie stehen nicht im Modul; frischer
+	// WASM-Speicher ist ohnehin 0.
+	BSSBase, BSSSize int64
+	StackSize        int64
+	Hosts            []*Host // benutzte Importe in Reihenfolge der ersten Verwendung
 	// SuspendAction führt die Aktion eines Anhaltepunkts aus (rtl:
 	// _SuspendAction); nil ohne System-Unit. ResumeAction (gojs, rtl:
 	// _GoResumeAction) läuft vor dem Fortsetzen und liefert dessen Ergebnis.

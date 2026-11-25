@@ -55,8 +55,10 @@ var GlobalExports = [...]string{"", "__rt_code", "__rt_file", "__rt_line", "__rt
 // Generate erzeugt das Binärmodul.
 //
 // Speicher (PLAN.md): Seite 0 bleibt frei, ab ir.DataBase liegt das
-// Datensegment, danach der Schatten-Stack, der von seinem Ende nach unten
-// wächst, dahinter der Heap (rtl/system.pas, wächst mit memory.grow).
+// Datensegment (initialisierte Daten, im Modul), dahinter das BSS (nicht
+// initialisierte globale Variablen, nicht im Modul), danach der
+// Schatten-Stack, der von seinem Ende nach unten wächst, dahinter der Heap
+// (rtl/system.pas, wächst mit memory.grow).
 func Generate(m *ir.Module, opts Options) []byte {
 	analysis.MarkSuspendable(m)
 	mod := &wasm.Module{}
@@ -83,7 +85,7 @@ func Generate(m *ir.Module, opts Options) []byte {
 		g.funcIndex[f] = uint32(len(mod.Imports) + i)
 	}
 
-	g.stackBase = types.AlignTo(ir.DataBase+int64(len(m.Data)), 16)
+	g.stackBase = types.AlignTo(max(ir.DataBase+int64(len(m.Data)), m.BSSBase+m.BSSSize), 16)
 	g.stackTop = g.stackBase + types.AlignTo(m.StackSize, 16)
 	mod.MemMin = uint32((g.stackTop + 65535) / 65536)
 	i32 := func(v int64) wasm.Global {

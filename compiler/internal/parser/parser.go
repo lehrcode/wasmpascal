@@ -11,7 +11,21 @@ import (
 // Parse liest ein Programm oder eine Unit. Text nach dem abschließenden
 // "end." wird wie in TP nicht mehr gelesen.
 func Parse(lx *lexer.Lexer) (f ast.File, err error) {
-	p := &parser{lx: lx}
+	return ParseDepth(lx, 0)
+}
+
+// DefaultMaxDepth ist die Voreinstellung für die Schachtelungstiefe.
+const DefaultMaxDepth = 500
+
+// ParseDepth ist Parse mit einer Grenze für die Schachtelungstiefe von
+// Ausdrücken, Anweisungen, Typen, typisierten Konstanten und Prozeduren
+// (Error 904). 0 heißt DefaultMaxDepth, eine negative Zahl keine Grenze. Die
+// Grenze schützt auch die späteren Phasen, die rekursiv über den AST laufen.
+func ParseDepth(lx *lexer.Lexer, maxDepth int) (f ast.File, err error) {
+	if maxDepth == 0 {
+		maxDepth = DefaultMaxDepth
+	}
+	p := &parser{lx: lx, maxDepth: maxDepth}
 	defer func() {
 		if r := recover(); r != nil {
 			b, ok := r.(bailout)
@@ -34,7 +48,23 @@ type parser struct {
 	lx     *lexer.Lexer
 	tok    lexer.Token  // aktuelles Token
 	peeked *lexer.Token // ein Token Vorschau, falls angefordert
+
+	depth, maxDepth int // aktuelle Schachtelung und Grenze (<0: keine)
 }
+
+// enter betritt eine Ebene der Schachtelung; leave verlässt sie. Ketten
+// (a+b+c, a.b.c, p^^) zählen je Glied eine Ebene, weil der AST dort tiefer
+// wird; sie geben ihre Ebenen am Ende mit leaveN zurück.
+func (p *parser) enter() {
+	p.depth++
+	if p.maxDepth > 0 && p.depth > p.maxDepth {
+		p.failHere(source.ErrNestingTooDeep)
+	}
+}
+
+func (p *parser) leave() { p.depth-- }
+
+func (p *parser) leaveN(n int) { p.depth -= n }
 
 // ---------------------------------------------------------------------------
 // Token-Verwaltung und Fehler
@@ -234,6 +264,8 @@ func (p *parser) unit() *ast.Unit {
 // Deklarationen
 
 func (p *parser) block() *ast.Block {
+	p.enter()
+	defer p.leave()
 	b := &ast.Block{Base: ast.At(p.tok.Pos)}
 	b.Decls = p.decls(false)
 	b.Body = p.compound()
@@ -409,6 +441,8 @@ func (p *parser) namedType() *ast.NamedType {
 // Typen
 
 func (p *parser) typeExpr() ast.TypeExpr {
+	p.enter()
+	defer p.leave()
 	pos := p.tok.Pos
 	switch p.tok.Kind {
 	case lexer.Caret:
@@ -511,6 +545,8 @@ func (p *parser) typeExpr() ast.TypeExpr {
 
 // fieldList liest Felder bis end bzw. ")" (Variantenzweig).
 func (p *parser) fieldList() *ast.FieldList {
+	p.enter()
+	defer p.leave()
 	fl := &ast.FieldList{}
 	for p.tok.Kind == lexer.Ident {
 		g := &ast.FieldGroup{Base: ast.At(p.tok.Pos), Names: p.identList()}
@@ -561,6 +597,8 @@ func (p *parser) variantPart() *ast.VariantPart {
 // typedConst liest den Wert einer typisierten Konstante: Ausdruck,
 // Array-Konstante (a, b, c) oder Record-Konstante (x: 1; y: 2).
 func (p *parser) typedConst() ast.Expr {
+	p.enter()
+	defer p.leave()
 	if p.tok.Kind != lexer.LParen {
 		return p.expr()
 	}
@@ -631,6 +669,8 @@ func (p *parser) endOfList(k lexer.Kind) {
 }
 
 func (p *parser) stmt() ast.Stmt {
+	p.enter()
+	defer p.leave()
 	base := p.stmtBase()
 	if p.tok.Kind == lexer.Int || (p.tok.Kind == lexer.Ident && p.peek().Kind == lexer.Colon) {
 		s := &ast.LabeledStmt{StmtBase: base, Label: p.label()}
@@ -757,6 +797,8 @@ func (p *parser) expr() ast.Expr { return p.exprFrom(nil) }
 // exprFrom liest einen Ausdruck; ist f nicht nil, ist es der bereits gelesene
 // erste Faktor.
 func (p *parser) exprFrom(f ast.Expr) ast.Expr {
+	p.enter()
+	defer p.leave()
 	x := p.simpleExpr(f)
 	switch p.tok.Kind {
 	case lexer.Eq, lexer.Ne, lexer.Lt, lexer.Le, lexer.Gt, lexer.Ge, lexer.In:
@@ -769,10 +811,14 @@ func (p *parser) exprFrom(f ast.Expr) ast.Expr {
 
 func (p *parser) simpleExpr(f ast.Expr) ast.Expr {
 	x := p.term(f)
+	n := 0
+	defer func() { p.leaveN(n) }()
 	for {
 		switch p.tok.Kind {
 		case lexer.Plus, lexer.Minus, lexer.Or, lexer.Xor:
 			op, pos := p.tok.Kind, p.tok.Pos
+			p.enter()
+			n++
 			p.next()
 			x = &ast.BinaryExpr{Base: ast.At(x.Pos()), OpPos: pos, Op: op, X: x, Y: p.term(nil)}
 		default:
@@ -786,10 +832,14 @@ func (p *parser) term(f ast.Expr) ast.Expr {
 	if x == nil {
 		x = p.factor()
 	}
+	n := 0
+	defer func() { p.leaveN(n) }()
 	for {
 		switch p.tok.Kind {
 		case lexer.Star, lexer.Slash, lexer.Div, lexer.Mod, lexer.And, lexer.Shl, lexer.Shr:
 			op, pos := p.tok.Kind, p.tok.Pos
+			p.enter()
+			n++
 			p.next()
 			x = &ast.BinaryExpr{Base: ast.At(x.Pos()), OpPos: pos, Op: op, X: x, Y: p.factor()}
 		default:
@@ -801,6 +851,8 @@ func (p *parser) term(f ast.Expr) ast.Expr {
 // factor liest einen Faktor. Vorzeichen binden wie not am stärksten, damit
 // wie in TP auch a * -b erlaubt ist.
 func (p *parser) factor() ast.Expr {
+	p.enter()
+	defer p.leave()
 	pos := p.tok.Pos
 	switch p.tok.Kind {
 	case lexer.Int:
@@ -860,7 +912,13 @@ func (p *parser) setLit() ast.Expr {
 func (p *parser) designator() ast.Expr {
 	var x ast.Expr = p.ident()
 	start := x.Pos()
+	n := 0
+	defer func() { p.leaveN(n) }()
 	for {
+		if k := p.tok.Kind; k == lexer.Dot || k == lexer.LBrack || k == lexer.Caret || k == lexer.LParen {
+			p.enter()
+			n++
+		}
 		switch p.tok.Kind {
 		case lexer.Dot:
 			p.next()
