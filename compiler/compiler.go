@@ -34,7 +34,8 @@ const (
 	TargetWASI Target = iota
 	// TargetGoJS erzeugt ein Modul mit der Schnittstelle von GOOS=js GOARCH=wasm
 	// (Exporte run, resume, getsp, mem), lauffähig mit wasm_exec.js und
-	// web/loader.js im Browser oder in Node.js. Dateien gibt es dort nicht.
+	// web/loader.js im Browser oder in Node.js. Dateizugriffe gehen über
+	// WASI-Importe, die web/loader.js bereitstellt.
 	TargetGoJS
 )
 

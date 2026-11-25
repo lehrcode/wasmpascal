@@ -14,7 +14,8 @@
     _Suspend(g, a)  Anhaltepunkt des Schedulers
 
   Nur die "unterste Schicht" unterscheidet sich zwischen den Zielen; sie ist
-  per bedingter Uebersetzung (Symbole WASI bzw. GOJS) getrennt.
+  per bedingter Uebersetzung (Symbole WASI bzw. GOJS) getrennt. Dateien und
+  Verzeichnisse nutzen unter beiden Zielen WASI-Aufrufe.
 
   Laufzeitroutinen setzen die vorgemerkte Quelltextstelle nicht; Fehler darin
   nennen die Anweisung des Anwenderprogramms. }
@@ -50,7 +51,7 @@ type
     Handle: LongInt;   { WASI-Dateideskriptor }
     Mode: LongInt;     { fmClosed, fmInput, fmOutput, fmInOut }
     RecSize: LongInt;  { Satzgroesse typisierter und untypisierter Dateien }
-    Reserved: LongInt;
+    Access: LongInt;   { 0 nur lesen, 1 nur schreiben, 2 beides (FileMode) }
     Name: string
   end;
   TTextRec = record
@@ -83,6 +84,7 @@ const
     zusaetzlich fd_datasync, fd_sync, fd_write, fd_filestat_set_size }
   RightsRead = $200026;
   RightsWrite = $600077;
+  RightsWriteOnly = $600075;   { RightsWrite ohne fd_read }
 
   { Gruende fuer _Suspend (Scheduler, PLAN.md) }
   SuspendYield = 1;   { Zeitscheibe bei Ausgaben abgelaufen }
@@ -820,38 +822,38 @@ end;
 
 { ======================================================= unterste Schicht
   Nur dieser Teil unterscheidet sich zwischen den Zielen. Ergebnisse sind
-  WASI-Fehlernummern (0 = Erfolg); Pfade sind schon aufgeloest. }
+  WASI-Fehlernummern (0 = Erfolg); Pfade sind schon aufgeloest.
+
+  Dateien und Verzeichnisse laufen unter beiden Zielen ueber WASI-Aufrufe
+  (unter gojs stellt sie web/loader.js bereit); je Ziel getrennt sind nur
+  Konsole, Eingabe, Uhr, Argumente und Anhaltepunkte. }
 
 const
   ENOTCAPABLE = 76;
 
-{$IFNDEF GOJS}   { WASI (auch ohne Zielsymbol) }
-
-function SysWrite(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
+function WasiWrite(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
 begin
   IoVec.Buf := Buf;
   IoVec.Len := Len;
-  SysWrite := _FdWrite(Fd, LongInt(@IoVec), 1, LongInt(@IoCount));
+  WasiWrite := _FdWrite(Fd, LongInt(@IoVec), 1, LongInt(@IoCount));
   Done := IoCount
 end;
 
-function SysRead(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
+function WasiRead(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
 begin
   IoVec.Buf := Buf;
   IoVec.Len := Len;
-  SysRead := _FdRead(Fd, LongInt(@IoVec), 1, LongInt(@IoCount));
+  WasiRead := _FdRead(Fd, LongInt(@IoVec), 1, LongInt(@IoCount));
   Done := IoCount
 end;
 
-{ Unter WASI liest fd_read blockierend; es liegt nie etwas bereit. }
-function InputPending: Boolean;
-begin
-  InputPending := False
-end;
-
+{ Konsole (Handle 0 bis 2) bleibt offen. }
 function SysClose(Fd: LongInt): LongInt;
 begin
-  SysClose := _FdClose(Fd)
+  if Fd <= 2 then
+    SysClose := 0
+  else
+    SysClose := _FdClose(Fd)
 end;
 
 function SysSeek(Fd, Offset, Whence: LongInt; var NewOffset: LongInt): LongInt;
@@ -901,6 +903,24 @@ end;
 function SysRmDir(var P: string): LongInt;
 begin
   SysRmDir := _PathRemoveDirectory(RootFd, LongInt(@P[1]), Length(P))
+end;
+
+{$IFNDEF GOJS}   { WASI (auch ohne Zielsymbol) }
+
+function SysWrite(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
+begin
+  SysWrite := WasiWrite(Fd, Buf, Len, Done)
+end;
+
+function SysRead(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
+begin
+  SysRead := WasiRead(Fd, Buf, Len, Done)
+end;
+
+{ Unter WASI liest fd_read blockierend; es liegt nie etwas bereit. }
+function InputPending: Boolean;
+begin
+  InputPending := False
 end;
 
 procedure MemGrown;
@@ -1059,10 +1079,16 @@ begin
   end
 end;
 
+{ Konsole ueber wasm_exec.js, Dateien ueber WASI }
 function SysWrite(Fd, Buf, Len: LongInt; var Done: LongInt): LongInt;
 begin
   Done := 0;
-  if (Fd <> 1) and (Fd <> 2) then
+  if Fd > 2 then
+  begin
+    SysWrite := WasiWrite(Fd, Buf, Len, Done);
+    Exit
+  end;
+  if Fd = 0 then
   begin
     SysWrite := 8;   { EBADF }
     Exit
@@ -1080,9 +1106,14 @@ var
   N: LongInt;
 begin
   Done := 0;
+  if Fd > 2 then
+  begin
+    SysRead := WasiRead(Fd, Buf, Len, Done);
+    Exit
+  end;
   if Fd <> 0 then
   begin
-    SysRead := ENOTCAPABLE;
+    SysRead := 8;   { EBADF }
     Exit
   end;
   N := LineLen - LinePos;
@@ -1098,55 +1129,6 @@ end;
 function InputPending: Boolean;
 begin
   InputPending := LinePos < LineLen
-end;
-
-function SysClose(Fd: LongInt): LongInt;
-begin
-  SysClose := 0
-end;
-
-{ Dateien gibt es im Browser nicht. }
-function SysSeek(Fd, Offset, Whence: LongInt; var NewOffset: LongInt): LongInt;
-begin
-  NewOffset := 0;
-  SysSeek := ENOTCAPABLE
-end;
-
-function SysSize(Fd: LongInt; var Size: LongInt): LongInt;
-begin
-  Size := 0;
-  SysSize := ENOTCAPABLE
-end;
-
-function SysSetSize(Fd, Size: LongInt): LongInt;
-begin
-  SysSetSize := ENOTCAPABLE
-end;
-
-function SysOpen(var P: string; OFlags, Rights, FdFlags: LongInt; var Fd: LongInt): LongInt;
-begin
-  Fd := -1;
-  SysOpen := ENOTCAPABLE
-end;
-
-function SysUnlink(var P: string): LongInt;
-begin
-  SysUnlink := ENOTCAPABLE
-end;
-
-function SysRename(var P, Q: string): LongInt;
-begin
-  SysRename := ENOTCAPABLE
-end;
-
-function SysMkDir(var P: string): LongInt;
-begin
-  SysMkDir := ENOTCAPABLE
-end;
-
-function SysRmDir(var P: string): LongInt;
-begin
-  SysRmDir := ENOTCAPABLE
 end;
 
 { wasm_exec.js haelt eine DataView auf den Speicher, die nach memory.grow
@@ -1335,21 +1317,65 @@ begin
 end;
 
 { Pascal-Dateiname in einen Pfad relativ zum Wurzelverzeichnis. }
-function _Path(const Name: string): string;
+{ Loest Name relativ zu CurDir auf: "\" gilt als "/", ein fuehrendes "/"
+  meint die Wurzel, "." und leere Teile entfallen, ".." geht eine Ebene
+  zurueck. P ist der Pfad relativ zur Wurzel ohne fuehrendes "/" ('' = die
+  Wurzel selbst). False, wenn der Pfad die Wurzel verlassen wuerde.
+  TP-ANNAHME: Unter DOS bleibt ".." in der Wurzel stehen; wir melden einen
+  Fehler (ChDir 3, sonst 5), damit nichts ausserhalb der Wurzel erreichbar
+  scheint. }
+function NormPath(const Name: string; var P: string): Boolean;
 var
-  I: Integer;
+  S, Teil: string;
+  I, J, K: Integer;
 begin
-  Result := Name;
-  for I := 1 to Length(Result) do
-    if Result[I] = '\' then
-      Result[I] := '/';
-  if (Length(Result) > 0) and (Result[1] = '/') then
-    while (Length(Result) > 0) and (Result[1] = '/') do
-      Delete(Result, 1, 1)
-  else if CurDir <> '' then
-    Result := CurDir + '/' + Result;
-  if Result = '' then
-    Result := '.'
+  NormPath := True;
+  S := Name;
+  for I := 1 to Length(S) do
+    if S[I] = '\' then
+      S[I] := '/';
+  if (Length(S) > 0) and (S[1] = '/') then
+    P := ''
+  else
+    P := CurDir;
+  I := 1;
+  while I <= Length(S) do
+  begin
+    J := I;
+    while (J <= Length(S)) and (S[J] <> '/') do
+      Inc(J);
+    Teil := Copy(S, I, J - I);
+    if Teil = '..' then
+    begin
+      if P = '' then
+      begin
+        NormPath := False;
+        Exit
+      end;
+      K := Length(P);
+      while (K > 0) and (P[K] <> '/') do
+        Dec(K);
+      if K = 0 then
+        P := ''
+      else
+        P := Copy(P, 1, K - 1)
+    end
+    else if (Teil <> '') and (Teil <> '.') then
+    begin
+      if P <> '' then
+        P := P + '/';
+      P := P + Teil
+    end;
+    I := J + 1
+  end
+end;
+
+{ Pfad fuer den Host: wie NormPath, die Wurzel selbst als "." }
+function HostPath(const Name: string; var P: string): Boolean;
+begin
+  HostPath := NormPath(Name, P);
+  if P = '' then
+    P := '.'
 end;
 
 function OpenPath(const Name: string; OFlags, Rights, FdFlags: LongInt; var Handle: LongInt): Integer;
@@ -1357,7 +1383,11 @@ var
   P: string;
   Fd, Err: LongInt;
 begin
-  P := _Path(Name);
+  if not HostPath(Name, P) then
+  begin
+    OpenPath := 5;
+    Exit
+  end;
   Err := SysOpen(P, OFlags, Rights, FdFlags, Fd);
   if Err = 0 then
   begin
@@ -1433,7 +1463,7 @@ begin
   F.Handle := -1;
   F.Mode := fmClosed;
   F.RecSize := 0;
-  F.Reserved := 0;
+  F.Access := 2;
   F.Name := Name
 end;
 
@@ -1750,9 +1780,12 @@ end;
 
 { ------------------------------------- typisierte und untypisierte Dateien }
 
-procedure OpenFile(var F: TFileRec; RecSize, OFlags: LongInt);
+{ Oeffnet eine typisierte oder untypisierte Datei mit der Zugriffsart
+  Access (0 lesen, 1 schreiben, 2 beides). }
+procedure OpenFile(var F: TFileRec; RecSize, OFlags, Access: LongInt);
 var
   Err: Integer;
+  Rights: LongInt;
 begin
   if InOutRes <> 0 then
     Exit;
@@ -1763,7 +1796,13 @@ begin
   end;
   if (F.Mode <> fmClosed) and (F.Handle > 2) then
     if SysClose(F.Handle) <> 0 then;
-  Err := OpenPath(F.Name, OFlags, RightsWrite, 0, F.Handle);
+  case Access of
+    0: Rights := RightsRead;
+    1: Rights := RightsWriteOnly;
+  else
+    Rights := RightsWrite
+  end;
+  Err := OpenPath(F.Name, OFlags, Rights, 0, F.Handle);
   if Err <> 0 then
   begin
     F.Mode := fmClosed;
@@ -1771,17 +1810,50 @@ begin
     Exit
   end;
   F.Mode := fmInOut;
-  F.RecSize := RecSize
+  F.RecSize := RecSize;
+  F.Access := Access
 end;
 
+{ Reset beachtet FileMode wie in TP: 0 lesen, 1 schreiben, 2 beides.
+  TP-ANNAHME: Nur die unteren zwei Bits zaehlen (die Sharing-Bits ab $10
+  entfallen), 3 gilt wie 2. }
 procedure _ResetFile(var F: TFileRec; RecSize: LongInt);
+var
+  Access: LongInt;
 begin
-  OpenFile(F, RecSize, 0)
+  Access := FileMode and 3;
+  if Access = 3 then
+    Access := 2;
+  OpenFile(F, RecSize, 0, Access)
 end;
 
+{ Rewrite oeffnet wie in TP immer zum Lesen und Schreiben. }
 procedure _RewriteFile(var F: TFileRec; RecSize: LongInt);
 begin
-  OpenFile(F, RecSize, 9)
+  OpenFile(F, RecSize, 9, 2)
+end;
+
+{ Prueft vor dem Lesen bzw. Schreiben die Zugriffsart aus FileMode.
+  TP-ANNAHME: Wie DOS meldet die Laufzeit "Zugriff verweigert" (5), und
+  zwar selbst, damit beide Ziele gleich reagieren. }
+function CanRead(var F: TFileRec): Boolean;
+begin
+  CanRead := CheckMode(F.Mode, fmInOut);
+  if Result and (F.Access = 1) then
+  begin
+    InOutRes := 5;
+    CanRead := False
+  end
+end;
+
+function CanWrite(var F: TFileRec): Boolean;
+begin
+  CanWrite := CheckMode(F.Mode, fmInOut);
+  if Result and (F.Access = 0) then
+  begin
+    InOutRes := 5;
+    CanWrite := False
+  end
 end;
 
 procedure _CloseFile(var F: TFileRec);
@@ -1796,14 +1868,14 @@ end;
 
 procedure _ReadRec(var F: TFileRec; Buf: LongInt);
 begin
-  if CheckMode(F.Mode, fmInOut) then
+  if CanRead(F) then
     if ReadBytes(F.Handle, Buf, F.RecSize) <> F.RecSize then
       InOutRes := 100
 end;
 
 procedure _WriteRec(var F: TFileRec; Buf: LongInt);
 begin
-  if CheckMode(F.Mode, fmInOut) then
+  if CanWrite(F) then
     if not WriteBytes(F.Handle, Buf, F.RecSize) then
       InOutRes := 101
 end;
@@ -1813,7 +1885,7 @@ var
   Got: LongInt;
 begin
   _BlockRead := 0;
-  if not CheckMode(F.Mode, fmInOut) then
+  if not CanRead(F) then
     Exit;
   Got := ReadBytes(F.Handle, Buf, Count * F.RecSize);
   if Got < 0 then
@@ -1829,7 +1901,7 @@ end;
 function _BlockWrite(var F: TFileRec; Buf, Count: LongInt; WantResult: Boolean): LongInt;
 begin
   _BlockWrite := 0;
-  if not CheckMode(F.Mode, fmInOut) then
+  if not CanWrite(F) then
     Exit;
   if WriteBytes(F.Handle, Buf, Count * F.RecSize) then
     _BlockWrite := Count
@@ -1884,7 +1956,7 @@ end;
 
 procedure _Truncate(var F: TFileRec);
 begin
-  if CheckMode(F.Mode, fmInOut) then
+  if CanWrite(F) then
     if SysSetSize(F.Handle, SeekTo(F.Handle, 0, 1)) <> 0 then
       InOutRes := 101
 end;
@@ -1901,7 +1973,11 @@ begin
     InOutRes := 102;
     Exit
   end;
-  P := _Path(F.Name);
+  if not HostPath(F.Name, P) then
+  begin
+    InOutRes := 5;
+    Exit
+  end;
   Err := SysUnlink(P);
   if Err <> 0 then
     InOutRes := IoError(Err, 5)
@@ -1919,8 +1995,11 @@ begin
     InOutRes := 102;
     Exit
   end;
-  P := _Path(F.Name);
-  Q := _Path(NewName);
+  if not HostPath(F.Name, P) or not HostPath(NewName, Q) then
+  begin
+    InOutRes := 5;
+    Exit
+  end;
   Err := SysRename(P, Q);
   if Err <> 0 then
     InOutRes := IoError(Err, 5)
@@ -1932,22 +2011,25 @@ end;
 
 procedure _ChDir(const Dir: string);
 var
-  P: string;
+  P, Q: string;
   Fd: LongInt;
 begin
   if InOutRes <> 0 then
     Exit;
-  P := _Path(Dir);
-  if OpenPath(Dir, 2, 0, 0, Fd) <> 0 then   { O_DIRECTORY, ohne Rechte }
+  if not NormPath(Dir, P) then
+  begin
+    InOutRes := 3;
+    Exit
+  end;
+  Q := P;
+  if Q = '' then
+    Q := '.';
+  if SysOpen(Q, 2, 0, 0, Fd) <> 0 then   { O_DIRECTORY, ohne Rechte }
   begin
     InOutRes := 3;
     Exit
   end;
   if SysClose(Fd) <> 0 then;
-  while (Length(P) > 0) and (P[Length(P)] = '/') do
-    Delete(P, Length(P), 1);
-  if P = '.' then
-    P := '';
   CurDir := P
 end;
 
@@ -1958,7 +2040,11 @@ var
 begin
   if InOutRes <> 0 then
     Exit;
-  P := _Path(Dir);
+  if not HostPath(Dir, P) then
+  begin
+    InOutRes := 5;
+    Exit
+  end;
   Err := SysMkDir(P);
   if Err <> 0 then
     InOutRes := IoError(Err, 5)
@@ -1971,7 +2057,11 @@ var
 begin
   if InOutRes <> 0 then
     Exit;
-  P := _Path(Dir);
+  if not HostPath(Dir, P) then
+  begin
+    InOutRes := 5;
+    Exit
+  end;
   Err := SysRmDir(P);
   if Err <> 0 then
     InOutRes := IoError(Err, 5)

@@ -1,0 +1,12 @@
+FileMode: 2
+nur lesen: 1
+schreiben: 5
+Truncate: 5
+Groesse: 3
+lesen: 5
+Saetze: 3
+Satz 2: 30
+BlockWrite: 5
+Rewrite liest: 7
+Text: Text
+FileMode $42: 8

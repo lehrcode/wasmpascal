@@ -61,7 +61,7 @@ String und kein `Char`, und `Length('Größe')` ist 7.
 | `Input` | `Text` | Standardeingabe; `Read`/`ReadLn` ohne Datei lesen von hier |
 | `Output` | `Text` | Standardausgabe; `Write`/`WriteLn` ohne Datei schreiben hierhin |
 | `RandSeed` | `LongInt` | Startwert des Zufallsgenerators; ein fester Wert ergibt immer dieselbe Folge |
-| `FileMode` | `Byte` | vorhanden, aber ohne Wirkung |
+| `FileMode` | `Byte` | Zugriffsart für `Reset` typisierter und untypisierter Dateien: 0 nur lesen, 1 nur schreiben, 2 lesen und schreiben (Standard) |
 | `ExitCode` | `Integer` | vorhanden, aber ohne Wirkung; den Exit-Code setzt `Halt(n)` |
 
 ### Ein- und Ausgabe mit Text
@@ -84,15 +84,20 @@ Enter abgeschlossene Zeile. Vor dem Lesen wird `Output` geleert.
 
 ### Dateien
 
-Unter dem Ziel `gojs` (Browser) gibt es keine Dateien: Öffnen, Löschen
-usw. ergeben E/A-Fehler 5. Unter WASI sind Dateinamen relativ zum
-Arbeitsverzeichnis; `\` gilt als `/`, Laufwerksbuchstaben gibt es nicht.
+Dateinamen sind relativ zum aktuellen Verzeichnis des Programms (siehe
+`ChDir`) innerhalb einer Wurzel: in der CLI das Arbeitsverzeichnis, unter
+dem Ziel `gojs` das Verzeichnis, das der Host bereitstellt (z. B.
+`node web/node-run.js --dir verz`). `\` gilt als `/`, ein führendes `/`
+meint die Wurzel, `.` und `..` werden aufgelöst; Laufwerksbuchstaben gibt
+es nicht. Pfade, die die Wurzel verlassen, ergeben E/A-Fehler 5. Stellt
+der Host unter `gojs` kein Dateisystem bereit (so in der Browser-Demo),
+ergibt jeder Dateizugriff E/A-Fehler 5.
 
 | Signatur | Beschreibung |
 | --- | --- |
 | `Assign(var F; Name: string)` | Verbindet die Dateivariable mit einem Dateinamen. `Assign(F, '')` steht für Standardein- bzw. -ausgabe. |
-| `Reset(var F [; RecSize: Word])` | Öffnet eine vorhandene Datei zum Lesen; typisierte und untypisierte Dateien auch zum Schreiben. `RecSize` nur bei untypisierten Dateien (Standard 128). |
-| `Rewrite(var F [; RecSize: Word])` | Legt die Datei neu an bzw. leert sie und öffnet sie zum Schreiben. |
+| `Reset(var F [; RecSize: Word])` | Öffnet eine vorhandene Datei: Textdateien zum Lesen, typisierte und untypisierte Dateien nach `FileMode` (Standard 2: lesen und schreiben; eine schreibgeschützte Datei braucht `FileMode := 0`). Lesen bzw. Schreiben gegen die Zugriffsart ergibt E/A-Fehler 5. `RecSize` nur bei untypisierten Dateien (Standard 128). |
+| `Rewrite(var F [; RecSize: Word])` | Legt die Datei neu an bzw. leert sie und öffnet sie zum Schreiben; typisierte und untypisierte Dateien unabhängig von `FileMode` auch zum Lesen. |
 | `Append(var F: Text)` | Öffnet eine Textdatei zum Anhängen. |
 | `Close(var F)` | Schreibt den Puffer und schließt die Datei. Nicht geschlossene Dateien verlieren ihren Puffer. |
 | `Flush(var F: Text)` | Schreibt den Puffer einer Textdatei. |
@@ -121,10 +126,10 @@ if Fehler <> 0 then WriteLn('Fehler ', Fehler);
 
 | Signatur | Beschreibung |
 | --- | --- |
-| `ChDir(Pfad: string)` | Wechselt das aktuelle Verzeichnis des Programms. |
+| `ChDir(Pfad: string)` | Wechselt das aktuelle Verzeichnis des Programms. Fehlt das Verzeichnis oder läge es oberhalb der Wurzel: E/A-Fehler 3. |
 | `MkDir(Pfad: string)` | Legt ein Verzeichnis an. |
 | `RmDir(Pfad: string)` | Löscht ein leeres Verzeichnis. |
-| `GetDir(Laufwerk: Byte; var S: string)` | Liefert das aktuelle Verzeichnis als `/pfad`; `Laufwerk` wird ignoriert. |
+| `GetDir(Laufwerk: Byte; var S: string)` | Liefert das aktuelle Verzeichnis als `/pfad` (normalisiert, die Wurzel als `/`); `Laufwerk` wird ignoriert. |
 
 ### Strings
 
@@ -291,7 +296,7 @@ Fehlernummer.
 | 2 | Datei nicht gefunden |
 | 3 | Pfad nicht gefunden |
 | 4 | Zu viele offene Dateien |
-| 5 | Zugriff verweigert (unter `gojs` für jeden Dateizugriff) |
+| 5 | Zugriff verweigert (schreibgeschützt, gegen `FileMode`, Pfad außerhalb der Wurzel, Verzeichnis nicht leer oder schon vorhanden; unter `gojs` ohne Datei-Host jeder Dateizugriff) |
 | 100 | Lesefehler (z. B. Lesen hinter dem Dateiende) |
 | 101 | Schreibfehler |
 | 102 | Datei nicht mit `Assign` zugewiesen |

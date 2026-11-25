@@ -1,0 +1,13 @@
+Groesse: 256 Position: 256
+Abweichungen: 0 Eof: TRUE
+Satz 200: 200 Position: 201
+nach Truncate: 100 Eof: TRUE
+letzter Satz: 99
+wieder gelesen: 100
+Append fehlt: 2
+log: eins
+log: zwei
+nach Rename: eins
+alter Name: 2
+nach Erase: 2
+Erase doppelt: 2

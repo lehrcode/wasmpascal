@@ -267,7 +267,7 @@ Das Programm kann an festgelegten Punkten anhalten und die Kontrolle an den Host
 
 ## Etappen mit Akzeptanzkriterien
 
-Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
+Dreizehn Etappen (0 bis 12). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
 
 ### Etappe 0: Gerüst ✅
 
@@ -352,6 +352,287 @@ Elf Etappen (0 bis 10). Jede endet mit grünen Tests und einem Commit; die näch
 - `web/`: Editor-Textfeld, xterm.js-Terminal, Kompilieren und Ausführen im Browser.
 - **Fertig, wenn:** Die Demo-Seite lokal über einen statischen Server das Zahlenraten kompiliert und startet.
 - *Erledigt (Nov 24, 2026).* `cmd/pascaljs` (nur `GOOS=js GOARCH=wasm`) legt `pascalCompile(sources, options)` an: Quelltexte als Objekt Dateiname → String oder `Uint8Array` (oder ein einzelner String), Optionen `main`, `defines`, `stack`; Ergebnis `{wasm}` (Ziel gojs) oder `{error, file, line, column, code}`. `web/index.html`: Editor, Beispiele (`web/beispiele/`), xterm.js-Terminal, Strg+Enter, Sprung zur Fehlerstelle, Stopp; das Terminal mit Zeileneditor liegt jetzt in `web/terminal.js` (auch für `run.html`). `web/node-compile.js` übersetzt mit demselben WASM-Compiler in Node. Tests: `TestWebCompiler` baut den Browser-Compiler, übersetzt alle Testprogramme damit in Node und verlangt byte-gleiche Module und dieselben Compilermeldungen wie der native Compiler; `TestWebExamples` übersetzt die Beispiele. Abnahme mit headless Chromium: Zahlenraten auf der Seite übersetzt (etwa 0,2 s) und durchgespielt, Compilerfehler mit markierter Fehlerstelle.
+
+### Etappe 11: Dateien unter `gojs` ✅
+
+**Idee:** Unter `gojs` benutzt die RTL für echte Dateien (Handle ≥ 3)
+dieselben WASI-Aufrufe wie unter WASI. Konsole, Eingabe, Uhr, Argumente und
+Anhaltepunkte bleiben auf dem gojs-Weg. Das Modul importiert dann neben
+`gojs` auch eine kleine Teilmenge von `wasi_snapshot_preview1`, die
+`web/loader.js` bereitstellt. Alle Dateiaufrufe sind synchron; die Eingabe
+bleibt asynchron über `go.wasmPascalReadLine`. Der Compiler muss dafür nicht
+geändert werden: `abi.Intrinsics` enthält WASI- und gojs-Intrinsics für
+beide Ziele, und Importe entstehen erst, wenn ein Intrinsic aufgerufen wird
+(`codegen.go`, `hostIndex`).
+
+Zum Umfang gehören ausdrücklich auch `ChDir`, `MkDir`, `RmDir` und `GetDir`:
+`MkDir`/`RmDir` laufen über `path_create_directory`/`path_remove_directory`
+zum Host, `ChDir` prüft das Ziel über `path_open` mit `O_DIRECTORY`, und
+`GetDir` liefert das in der RTL geführte aktuelle Verzeichnis.
+
+**Abgrenzung zu Go (`GOOS=js`, `syscall/fs_js.go`):** Go ruft die
+Callback-Variante der Node-API über `globalThis.fs` auf und blockiert dabei
+die Goroutine; `Chdir`/`Getwd` gehen an `process.chdir`/`process.cwd`, und
+es gibt keine Sandbox. Wir übernehmen von Go die Node-API als Vorbild für den
+Host-Vertrag, weichen aber bewusst ab:
+
+- **Synchron statt Callbacks:** Bei uns müsste sonst jede Dateioperation ein
+  Anhaltepunkt sein, und jede Routine mit `Read(f)`/`Write(f)` würde zur
+  Dispatch-Schleife. Folge: Hosts im Browser müssen synchron sein
+  (Dateisystem im Speicher, OPFS nur in einem Worker).
+- **Aktuelles Verzeichnis in der RTL** (`CurDir`) statt `process.chdir`: Es
+  gehört wie in TP zum Programm, mehrere Programme dürfen gleichzeitig
+  laufen, und im Browser gibt es kein `process`. Unter WASI ist es schon so.
+- **Wurzel als Sandbox** statt freiem Zugriff auf das Host-Dateisystem.
+
+#### RTL (`rtl/system.pas`)
+
+- Die unterste Schicht neu aufteilen:
+  - **Gemeinsam** (aus `{$IFNDEF GOJS}` herausziehen): `SysOpen`, `SysClose`
+    (Handles ≤ 2 nicht schließen), `SysSeek`, `SysSize`, `SysSetSize`,
+    `SysUnlink`, `SysRename`, `SysMkDir`, `SysRmDir`.
+  - **Je Ziel** bleiben nur: `SysWrite`, `SysRead`, `InputPending`,
+    `MemGrown`, `_Clock`, `SysArgs`, `_SuspendAction` (gojs zusätzlich
+    `_GoResumeAction` und die Hilfsroutinen).
+- gojs-`SysWrite`: Handle 1 und 2 über `_GoWasmWrite` wie bisher, alle
+  anderen über `_FdWrite`. Handle 0 bleibt `EBADF`.
+- gojs-`SysRead`: Handle 0 aus dem Zeilenpuffer wie bisher, alle anderen über
+  `_FdRead`. `PeekChar` hält nur bei Handle 0 an; daran ändert sich nichts.
+- **Pfade normalisieren (beide Ziele):** `_Path` löst `.` und `..` auf und
+  fasst doppelte `/` zusammen, bevor ein Pfad an `Sys*` geht; `ChDir` speichert
+  nur normalisierte Pfade in `CurDir`. Behebt einen Fehler, der heute schon
+  unter WASI auftritt: Nach `MkDir('a'); ChDir('a'); ChDir('..')` liefert
+  `GetDir` `/a/..` statt `/`. Ein `..` oberhalb der Wurzel ergibt E/A-Fehler 3
+  bei `ChDir` bzw. 5 bei den übrigen Routinen (`// TP-ANNAHME:`, unter DOS
+  bleibt man in der Wurzel; wir melden den Fehler, statt still zu kürzen).
+  Der Loader prüft trotzdem selbst auf Ausbruch aus der Wurzel.
+- **`FileMode` auswerten (beide Ziele):** `Reset` öffnet typisierte und
+  untypisierte Dateien wie in TP je nach `FileMode and 3`: 0 = nur lesen,
+  1 = nur schreiben, 2 = lesen und schreiben (Standard), 3 wie 2
+  (`// TP-ANNAHME:`; die Sharing-Bits ab `$10` werden ignoriert). Die RTL
+  übergibt die passenden WASI-Rechte (`fd_read` 0x2, `fd_write` 0x40) und
+  merkt sich die Zugriffsart in der Dateivariablen. Lesen aus einer nur zum
+  Schreiben bzw. Schreiben in eine nur zum Lesen geöffnete Datei ergibt
+  E/A-Fehler 5, geprüft in der RTL vor dem Host-Aufruf, damit beide Ziele
+  gleich reagieren (`// TP-ANNAHME:` DOS meldet „Zugriff verweigert“).
+  `Rewrite` und `Append` sowie Textdateien beachten `FileMode` nicht (wie TP).
+  Eine schreibgeschützte Datei lässt sich damit mit `FileMode := 0` lesen;
+  mit dem Standardwert 2 scheitert `Reset` wie in TP mit Fehler 5.
+- Die Kopfkommentare der System-Unit und von `compiler/internal/abi`
+  anpassen („Nur die unterste Schicht unterscheidet sich“ gilt weiter, aber
+  gojs nutzt jetzt auch WASI-Importe für Dateien).
+- Danach importiert ein gojs-Modul genau diese WASI-Funktionen:
+  `fd_read`, `fd_write`, `fd_close`, `fd_seek`, `fd_filestat_get`,
+  `fd_filestat_set_size`, `path_open`, `path_unlink_file`, `path_rename`,
+  `path_create_directory`, `path_remove_directory`. Nicht dazu gehören
+  `args_*`, `clock_time_get`, `proc_exit`, `poll_oneoff`.
+
+#### Loader (`web/loader.js`)
+
+- `go.importObject.wasi_snapshot_preview1` **immer** belegen, sonst schlägt
+  `WebAssembly.instantiate` fehl. Ohne Host liefert jede Funktion
+  `ENOTCAPABLE` (76) – das ist das heutige Verhalten (E/A-Fehler 5).
+- Neue Option `files` für `WasmPascal.run`: ein **synchroner Host mit einer
+  Teilmenge der Node-API `fs`**. So kann `node-run.js` direkt Nodes `fs`
+  benutzen, und ein Playground kann sein virtuelles Dateisystem um dieselben
+  Methoden ergänzen. Vertrag (Pfade sind relativ zur Wurzel, mit `/`):
+
+  | Methode | Verwendung |
+  | --- | --- |
+  | `openSync(path, flags)` → fd | `flags` als String: `"r"`, `"r+"`, `"w"`, `"w+"` |
+  | `readSync(fd, buf, offset, length, position)` → Anzahl | `position` immer angegeben (Loader führt die Position) |
+  | `writeSync(fd, buf, offset, length, position)` → Anzahl | dito |
+  | `closeSync(fd)` | |
+  | `fstatSync(fd)`, `statSync(path)` → `{ size, isDirectory() }` | Größe, `ChDir`, Dateityp |
+  | `ftruncateSync(fd, length)` | `Truncate` |
+  | `unlinkSync(path)`, `renameSync(from, to)` | `Erase`, `Rename` |
+  | `mkdirSync(path)`, `rmdirSync(path)` | `MkDir`, `RmDir`; darf `EPERM` werfen |
+
+  Fehler wirft der Host als Exception mit Node-Code in `err.code`. Der
+  Loader übersetzt in WASI-Fehlernummern: ENOENT→44, EACCES→2, EPERM→63,
+  EBADF→8, EEXIST→20, EISDIR→31, ENOTDIR→54, ENOTEMPTY→55, EMFILE→33,
+  ENOSPC→51, alles andere → 29 (EIO). Die RTL (`IoError`) macht daraus die
+  TP-Nummern 2, 3, 4, 5 bzw. den Standardwert.
+- Umsetzung im Loader:
+  - Handle 3 ist die vorgeöffnete Wurzel (`RootFd` in der RTL); weitere
+    Handles verwaltet der Loader selbst (eigene Tabelle Handle →
+    `{hostFd, pos, append, write, dir}`), damit die Nummern nicht vom Host
+    abhängen.
+  - `path_open`: Pfad aus dem Speicher (UTF-8) lesen und normalisieren.
+    Pfade, die die Wurzel verlassen (`..`), ergeben `ENOTCAPABLE`, wie unter
+    wazero. Abbildung: `O_DIRECTORY` (2) → `statSync` + Verzeichnis-Handle,
+    sonst `ENOTDIR`; Schreibrecht = Bit `fd_write` (0x40) in
+    `rights_base`; `O_CREAT|O_TRUNC` (9) → `"w"` bzw. `"w+"`; Schreiben ohne
+    `O_CREAT` → `"r+"`; nur lesen → `"r"`. `FDFLAGS_APPEND` (1) setzt die
+    Position vor jedem Schreiben ans Ende. Kein Rückfall auf `"r"`, wenn
+    `"r+"` scheitert: Schreibgeschützte Dateien öffnet das Programm über
+    `FileMode := 0` (siehe RTL). Nur schreiben ohne `O_CREAT`
+    (`FileMode = 1`) lässt sich mit den String-Flags nicht ausdrücken und
+    wird als `"r+"` geöffnet; die RTL verhindert das Lesen
+    (`// TP-ANNAHME:` eine Datei ohne Leserecht scheitert dann unter gojs
+    mit Fehler 5, unter WASI nicht).
+  - Die Handle-Tabelle gehört zu einem Programmlauf (`WasmPascal.run`),
+    nicht zum Loader; mehrere Programme dürfen gleichzeitig laufen.
+  - `fd_read`/`fd_write`: iovec-Liste (je 8 Byte: Adresse, Länge), Anzahl
+    an die Ergebnisadresse.
+  - `fd_seek`: `whence` 0/1/2 (SET/CUR/END, END über `fstatSync`), neue
+    Position als u64 an die Ergebnisadresse.
+  - `fd_filestat_get`: 64 Byte, Dateityp (u8) bei Offset 16 (3 =
+    Verzeichnis, 4 = Datei), Größe (u64) bei Offset 32, Rest 0.
+  - **Fallstricke:** i64-Parameter (`fd_seek` offset, `rights_*`,
+    `fd_filestat_set_size`) kommen in JS als `BigInt` (JavaScript-Typ, kein
+    Pascal-Typ; in Pascal bleibt alles `LongInt`). Den Speicher bei
+    jedem Aufruf neu über `instance.exports.mem.buffer` ansprechen, weil
+    `memory.grow` den Puffer austauscht. Binärdaten nie über Strings
+    leiten.
+- Kopfkommentar von `loader.js` und `web/README.md` um die Option `files`
+  ergänzen; der Vertrag oben gilt als feste Schnittstelle.
+
+#### Node-Werkzeuge und Tests
+
+- `web/node-run.js`: neue Option `--dir verz`. Dann bekommt der Loader als
+  `files` einen Host aus Nodes `fs`, der Pfade unter `verz` auflöst (und
+  nichts außerhalb). Ohne `--dir` kein Dateizugriff wie bisher.
+- `TestProgramsGoJS` (`harness_gojs_test.go`): Den Ausschluss über
+  `usesFiles` entfernen. Jeder Testfall bekommt wie unter WASI ein eigenes
+  Verzeichnis und läuft mit `--dir`. Die Programme mit Dateizugriff (u. a.
+  `testdata/etappe6/textdatei.pas`) müssen dieselben `.out` liefern wie
+  unter WASI.
+- `TestGoJSWithoutFiles` bleibt: ohne `--dir` scheitern `Rewrite` und
+  `MkDir` weiter mit 5.
+- Neue Testprogramme (unter beiden Zielen):
+  - Pfad außerhalb der Wurzel (`'..\geheim.txt'`) → `IOResult` 5.
+  - `Append` auf eine fehlende Datei → 2.
+  - `file of Byte` mit allen Werten 0..255 schreiben und wieder lesen
+    (Binärdaten bleiben unverändert).
+  - `Seek`/`FilePos`/`FileSize`/`Truncate` auf einer typisierten Datei.
+  - `Erase` und `Rename` einer geschlossenen Datei. (Nicht bei geöffneter
+    Datei: In TP undefiniert, und das Ergebnis hängt vom Betriebssystem des
+    Hosts ab – Windows verweigert das Löschen offener Dateien.)
+  - Verzeichnisse: `MkDir`, `ChDir` hinein und mit `'..'` zurück, `GetDir`
+    jeweils normalisiert (`/a`, dann `/`); `ChDir` auf ein fehlendes
+    Verzeichnis → 3; `ChDir('..')` in der Wurzel → 3; `RmDir` auf ein nicht
+    leeres Verzeichnis → 5, auf ein fehlendes → 2; `MkDir` auf ein
+    vorhandenes → 5; Datei in einem Unterverzeichnis über einen relativen Pfad
+    nach `ChDir` anlegen und lesen.
+  - `FileMode`: schreibgeschützte typisierte Datei (Schreibschutz setzt der
+    Go-Test vorher auf dem Host) mit `FileMode := 0` lesen, mit dem
+    Standardwert 2 → 5; mit `FileMode := 0` geöffnet schreiben → 5, mit
+    `FileMode := 1` lesen → 5. Unter Windows läuft der Teil mit Schreibschutz
+    nicht (`t.Skip`).
+- Browser-Demo (`index.html`, `run.html`) bleibt ohne Dateien; keine
+  Änderung nötig.
+
+#### Doku
+
+- `docs/abweichungen.md`: Zeilen für Etappe 11 (Dateien unter gojs über
+  WASI-Importe, Host-Vertrag, Verhalten ohne Host, Abgrenzung zu Go,
+  `FileMode`, normalisierte Pfade, `..` oberhalb der Wurzel); die Zeile
+  „Dateien unter gojs“ aus Etappe 9 und den Teil „`FileMode` wird nicht
+  ausgewertet“ der Zeile „Datei-Records“ aus Etappe 6 als überholt
+  kennzeichnen.
+- `docs/units.md`: Dateiroutinen und Verzeichnisse unter gojs, `FileMode`
+  (Variable und `Reset`); `CLAUDE.md`: Abschnitt „Ziele“.
+
+**Fertig, wenn:** Alle Testprogramme mit Dateizugriff, auch
+`etappe6/verzeichnis.pas` und die neuen Verzeichnis- und `FileMode`-Tests,
+laufen unter gojs mit Node und `--dir` mit denselben Ausgaben wie unter WASI;
+ohne Host verhalten sich gojs-Module wie bisher; `TestWebCompiler` bleibt
+grün (byte-gleiche Module).
+- *Erledigt (Nov 25, 2026).* Die Dateiroutinen der untersten Schicht (`SysOpen` … `SysRmDir`, dazu `WasiWrite`/`WasiRead`) sind gemeinsam; gojs-`SysWrite`/`SysRead` leiten Handles ≥ 3 an WASI weiter. `_Path` ist durch `NormPath`/`HostPath` ersetzt (`.`/`..` aufgelöst, `..` oberhalb der Wurzel: `ChDir` 3, sonst 5). `Reset` beachtet `FileMode`; die Zugriffsart steht im Feld `Access` von `TFileRec` (vorher `Reserved`), `CanRead`/`CanWrite` prüfen sie vor jedem Lesen bzw. Schreiben. `web/loader.js` stellt die elf WASI-Funktionen bereit (Handle-Tabelle je Lauf, Option `files`), `node-run.js --dir` den Host über Nodes `fs`. Tests: `testdata/etappe11/` (`verzeichnisse`, `dateien`, `filemode`, auch mit erzwungener Frame-Ablage), `TestReadOnlyFile` (schreibgeschützte Datei unter beiden Zielen); `TestProgramsGoJS` läuft jetzt ohne Ausschluss über alle 84 Testprogramme.
+
+### Etappe 12: Härtung für fremde Quelltexte
+
+**Ziel:** `compiler.Compile` darf mit beliebigem Quelltext im Prozess eines
+Servers laufen: Er endet immer mit Ergebnis oder `*Diagnostic`, in
+begrenzter Zeit und mit begrenztem Speicher, und bringt den Prozess nie zum
+Absturz.
+
+#### Gefundene Schwachstellen
+
+| Stelle | Problem |
+| --- | --- |
+| `compiler/internal/parser/parser.go` | Recursive Descent ohne Tiefengrenze. Linkslastige Ketten (`a+b+c+…`), `else if`-Ketten, verschachtelte Klammern, Typen und Prozeduren erzeugen beliebig tiefe ASTs, über die auch `check`, `ir` und `codegen` rekursiv laufen. Folge: Go-Stack-Überlauf = `fatal error`, Prozess beendet. |
+| `compiler/internal/codegen/structure.go` (`push`) | Kopiert den Kontext je Ebene: quadratischer Aufwand in der Schachtelungstiefe. |
+| `compiler/internal/ir/lower.go` (`alloc`, `declare`) | Globale Variablen liegen im Datensegment und werden **Byte für Byte** angehängt; jede darf bis `MaxStructSize` (2 GB) groß sein, die Summe ist unbegrenzt. `encode` belegt für typisierte Konstanten `Size()` Bytes. Das Modul enthält alle Nullbytes. |
+| `compiler/internal/lexer/lexer.go` (`include`) | Nur die Tiefe ist begrenzt (16), nicht die Gesamtmenge. Eine Datei mit mehreren `{$I x}` auf sich selbst vervielfacht den Quelltext exponentiell. |
+| alle Phasen | `ctx` wird nur zwischen den Phasen und je Unit geprüft; eine laufende Phase lässt sich nicht abbrechen. |
+
+#### Änderungen
+
+1. **Grenzen als Teil der API** (`compiler.Options.Limits`, Typ
+   `compiler.Limits`, mit Doku-Kommentar und `Example`). Nullwert = sichere
+   Voreinstellungen, die alle bisherigen Testprogramme zulassen; die CLI
+   bekommt keine neuen Flags (bei Bedarf später). Vorschlag:
+
+   | Feld | Voreinstellung | Fehler |
+   | --- | --- | --- |
+   | `MaxDepth` – Schachtelung von Ausdrücken, Anweisungen, Typen, Prozeduren | 500 | 904 „Nesting too deep“ |
+   | `MaxSourceBytes` – alle gelesenen Quelltextbytes inkl. Units und Includes (ohne eingebettete RTL) | 16 MB | 905 „Source too large“ |
+   | `MaxIncludes` – Anzahl `{$I}` insgesamt | 1000 | 905 |
+   | `MaxNodes` – AST-Knoten insgesamt | 2 000 000 | 906 „Program too large“ |
+   | `MaxStaticData` – Summe aller globalen Variablen und typisierten Konstanten | 256 MB | 49 „Data segment too large“ (`// TP-ANNAHME:` Nummer wie TP 7) |
+   | `MaxStackSize` – `{$M}` bzw. `Options.StackSize` | 256 MB | 905er-Reihe oder passende TP-Nummer |
+
+   Fehlernummern ab 904 in `compiler/internal/source/error.go` und in
+   `docs/abweichungen.md` eintragen.
+2. **Tiefe im Parser zählen:** ein Zähler mit `enter()`/`leave()` in allen
+   rekursiven Produktionen (Ausdruck, Term, Faktor, Anweisung, Typ,
+   Prozedurblock). In den Schleifen für zweistellige Operatoren zählt jeder
+   weitere Operator eine Ebene, weil der Baum dort tiefer wird. Damit sind
+   auch die späteren Phasen begrenzt. `structure.go` beim Aufräumen auf
+   einen Stapel mit `append`/Kürzen umstellen (kein Kopieren je Ebene).
+3. **Datensegment ohne Nullbytes:**
+   - Nicht initialisierte globale Variablen in einen eigenen Bereich (BSS)
+     hinter dem Datensegment legen: `ir.Module` bekommt `BSSSize`, `alloc`
+     für Variablen vergibt nur Offsets, `codegen` setzt den Schatten-Stack
+     hinter Daten + BSS. Ins Modul kommen nur die initialisierten Bytes.
+   - `alloc` legt Platz auf einmal an (kein Anhängen in einer Schleife).
+   - `MaxStaticData` schon in der Typprüfung prüfen (an der Deklaration,
+     die die Grenze überschreitet), also bevor `encode` Speicher belegt.
+   - Speicherlayout in `PLAN.md` (Typabbildung und Speichermodell) und
+     `CLAUDE.md` nachziehen.
+4. **Quelltextmenge begrenzen:** Lexer bzw. `source.Loader` zählen gelesene
+   Bytes und `{$I}` über alle Dateien eines `Compile`-Aufrufs (Zähler im
+   Aufruf, nicht global).
+5. **Abbruch über `ctx` in allen Phasen:** `ctx` über die Config-Strukturen
+   durchreichen (kein globaler Zustand) und prüfen: im Lexer alle 4096
+   Tokens, im Parser je Deklaration und Anweisung, in `check` je Routine und
+   Anweisung, in `ir.Lower`, `analysis` und `codegen` je Funktion. Ergebnis
+   ist dann `ctx.Err()`, kein `Diagnostic`.
+6. **Panics:** `recover` in `compile` bleibt. Interne Fehler zusätzlich mit
+   einem Kennzeichen versehen (z. B. `errors.Is(err, compiler.ErrInternal)`),
+   damit ein Server sie von Quelltextfehlern unterscheiden und protokollieren
+   kann.
+7. **Tests** (`compiler/limits_test.go`), jeweils mit `ctx`-Timeout von 2 s
+   und Prüfung des Speicherverbrauchs (`runtime.MemStats` vorher/nachher,
+   z. B. < 64 MB):
+   - 100 000 verschachtelte Klammern, `a+a+…+a` mit 100 000 Operanden,
+     100 000 `else if`, 10 000 verschachtelte `begin`, tief verschachtelte
+     Typen (`array … of array …`, Records) und Prozeduren → 904 bzw. 906.
+   - Datei, die sich zehnmal selbst per `{$I}` einbindet → 9 oder 905,
+     schnell.
+   - `var a, b, c: array[1..2000000000] of Byte;` → 49, ohne großen
+     Speicherverbrauch.
+   - Ein Programm mit 1 MB globaler Variablen: Modul bleibt klein (BSS).
+   - Abbruch: großer, gültiger Quelltext mit sofort abgelaufenem `ctx` →
+     `context.Canceled` bzw. `DeadlineExceeded`.
+   - Alle bisherigen Tests unverändert grün, `TestWebCompiler` byte-gleich.
+8. **Fuzzing:** `FuzzCompile` im Paket `compiler` mit den Testprogrammen
+   aus `testdata/` als Startkorpus. Jeder Aufruf mit Timeout-`ctx` und den
+   Voreinstellungen; ein interner Fehler (`ErrInternal`) oder ein Hängen
+   gilt als Befund. In `testdata/README.md` beschreiben, wie man es laufen
+   lässt (`go test ./compiler -fuzz=FuzzCompile -fuzztime=10m`).
+9. **Doku:** Im Paketkommentar von `compiler` einen Abschnitt „Einbetten in
+   Server“: was garantiert ist (Grenzen, Abbruch, keine Goroutinen, kein
+   Dateizugriff außer `Options.FS`) und was nicht (keine harte
+   Speicherobergrenze des Prozesses – für fremde Eingaben in gemeinsam
+   genutzten Servern zusätzlich eigenen Prozess oder Etappe 13 empfehlen).
+
+**Fertig, wenn:** Alle Tests aus Punkt 7 liefern innerhalb von 1 s ein
+`*Diagnostic` bzw. `ctx.Err()`, ohne nennenswerten Speicher zu belegen;
+`FuzzCompile` läuft 10 Minuten ohne Befund; alle bisherigen Tests und
+`TestWebCompiler` sind unverändert grün.
 
 ## Arbeitsregeln für Claude Code
 

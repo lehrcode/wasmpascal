@@ -80,9 +80,12 @@ Intrinsics aus `compiler/internal/abi`. Laufzeitroutinen (`Func.RTL`) pflegen di
 Laufzeitfehler: exportierte Globale `__rt_*` plus Custom Section `wasmpascal.lines`, ausgewertet in
 `runner/rterror.go` bzw. `web/loader.js`.
 
-Ziele: Nur die unterste Schicht von `rtl/system.pas` (`Sys*`, `_Clock`, `SysArgs`, `_SuspendAction`) unterscheidet
-sich, per `{$IFDEF GOJS}`; ohne Symbol gilt WASI. `gojs` läuft mit `web/wasm_exec.js` (Go 1.27.4) und `web/loader.js`;
-`TestProgramsGoJS` führt die Testprogramme mit Node aus (`web/node-run.js`, übersprungen ohne `node`).
+Ziele: Nur die unterste Schicht von `rtl/system.pas` unterscheidet sich, per `{$IFDEF GOJS}`; ohne Symbol gilt WASI.
+Je Ziel getrennt sind Konsole, Eingabe, Uhr, Argumente und Anhaltepunkte (`SysWrite`, `SysRead`, `_Clock`, `SysArgs`,
+`_SuspendAction`); Dateien und Verzeichnisse laufen unter beiden Zielen über WASI-Aufrufe, unter gojs stellt
+`web/loader.js` sie bereit (Option `files`, synchroner Host nach der Node-API `fs`). `gojs` läuft mit
+`web/wasm_exec.js` (Go 1.27.4) und `web/loader.js`; `TestProgramsGoJS` führt alle Testprogramme mit Node aus
+(`web/node-run.js --dir`, übersprungen ohne `node`).
 
 Browser: `cmd/pascaljs` (nur `GOOS=js GOARCH=wasm`) legt `pascalCompile` an; `web/index.html` ist die Demo
 (Bau und Start in `web/README.md`). `TestWebCompiler` verlangt byte-gleiche Module wie der native Compiler.

@@ -11,7 +11,7 @@ Browser-Demo und Laufzeitumgebung für Programme mit dem Ziel `gojs`.
 | `loader.js` | `WasmPascal.run(wasm, {args, write, readLine, signal})` für Browser und Node.js; übersetzt Traps in `Runtime error NNN at datei.pas(zeile) in Prozedur` |
 | `terminal.js` | xterm.js-Terminal mit Zeileneditor für `index.html` und `run.html` |
 | `node-compile.js` | `node web/node-compile.js compiler.wasm [-o verz] datei.pas …` übersetzt mit dem Browser-Compiler |
-| `node-run.js` | `node web/node-run.js prog.wasm [Argumente …]`, stdin/stdout wie unter WASI |
+| `node-run.js` | `node web/node-run.js [--dir verz] prog.wasm [Argumente …]`, stdin/stdout wie unter WASI; mit `--dir` Dateizugriff unterhalb von `verz` |
 
 ## Demo starten
 
@@ -50,6 +50,19 @@ else { await WasmPascal.run(r.wasm, { args: ["zahlen"], write, readLine }); }
 
 Quelltexte sind Strings oder `Uint8Array`; weitere Optionen: `defines`
 (Array), `stack` (Byte). Einzelheiten im Kommentar von `cmd/pascaljs/main.go`.
+
+## Dateien
+
+Unter `gojs` greift das Programm über WASI-Aufrufe (`path_open`, `fd_read`,
+…) auf Dateien zu; `loader.js` setzt sie auf die Option `files` von
+`WasmPascal.run` um: einen **synchronen** Host mit einer Teilmenge der
+Node-API `fs` (`openSync`, `readSync`, `writeSync`, `closeSync`, `fstatSync`,
+`statSync`, `ftruncateSync`, `unlinkSync`, `renameSync`, `mkdirSync`,
+`rmdirSync`). Der genaue Vertrag steht im Kopf von `loader.js`. Pfade kommen
+normalisiert und relativ zur Wurzel an, Fehler meldet der Host als Exception
+mit Node-Code (`err.code`). `node-run.js --dir` zeigt einen solchen Host über
+Nodes `fs`; die Demo-Seiten haben keinen und melden bei Dateizugriffen
+E/A-Fehler 5.
 
 ## Schnittstelle zum Programm
 

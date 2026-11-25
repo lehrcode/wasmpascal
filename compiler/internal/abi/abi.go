@@ -1,7 +1,8 @@
 // Package abi beschreibt die Ziel-ABIs wasi und gojs: die Importe, die die
-// unterste Schicht der Laufzeit (rtl/system.pas, je Ziel per {$IFDEF WASI}
-// bzw. {$IFDEF GOJS}) über Intrinsics des Compilers aufruft. Nur diese
-// Schicht unterscheidet sich zwischen den Zielen (PLAN.md).
+// unterste Schicht der Laufzeit (rtl/system.pas) über Intrinsics des
+// Compilers aufruft. Nur diese Schicht unterscheidet sich zwischen den Zielen
+// (PLAN.md). Dateien und Verzeichnisse nutzen unter beiden Zielen die
+// WASI-Intrinsics; unter gojs stellt web/loader.js diese Importe bereit.
 package abi
 
 // ParamKind ist die WASM-Darstellung eines Arguments. In Pascal sind alle

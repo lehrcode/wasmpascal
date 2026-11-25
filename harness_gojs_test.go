@@ -20,9 +20,9 @@ import (
 
 // TestProgramsGoJS führt die Testprogramme unter testdata/ mit dem Ziel gojs
 // in Node.js aus (web/node-run.js mit wasm_exec.js und web/loader.js) und
-// vergleicht mit denselben erwarteten Ausgaben wie TestPrograms. Programme
-// mit Dateizugriffen entfallen, weil es unter gojs keine Dateien gibt. Ohne
-// node wird der Test übersprungen.
+// vergleicht mit denselben erwarteten Ausgaben wie TestPrograms. Jeder
+// Testfall bekommt wie unter WASI ein eigenes Verzeichnis als Wurzel für
+// Dateizugriffe (node-run.js --dir). Ohne node wird der Test übersprungen.
 func TestProgramsGoJS(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -38,13 +38,6 @@ func TestProgramsGoJS(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(strings.TrimSuffix(c, ".pas"), func(t *testing.T) {
-			src, err := os.ReadFile(filepath.Join("testdata", filepath.FromSlash(c)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if usesFiles.Match(src) {
-				t.Skip("Dateizugriff, unter gojs nicht verfügbar")
-			}
 			t.Parallel()
 			if err := h.check(t.Context(), c, t.TempDir()); err != nil {
 				t.Error(err)
@@ -53,16 +46,19 @@ func TestProgramsGoJS(t *testing.T) {
 	}
 }
 
-// usesFiles erkennt Programme mit Datei- oder Verzeichniszugriffen.
-var usesFiles = regexp.MustCompile(`(?i)\b(Assign|MkDir|ChDir|RmDir|Erase|Rename)\s*\(`)
-
 // runtimeErrorLine ist die Meldung des Loaders bei einem Laufzeitfehler.
 var runtimeErrorLine = regexp.MustCompile(`(?m)^Runtime error (\d+)[^\n]*\n\z`)
 
 // runNode führt ein gojs-Modul mit web/node-run.js aus und liefert die
-// Ausgabe im Format von result.
-func (h harness) runNode(ctx context.Context, wasm []byte, args []string, stdin io.Reader, dir string) (string, string, error) {
-	file := filepath.Join(dir, args[0]+".wasm")
+// Ausgabe im Format von result. Ist root nicht leer, ist es die Wurzel für
+// Dateizugriffe; das Modul selbst liegt außerhalb davon.
+func (h harness) runNode(ctx context.Context, wasm []byte, args []string, stdin io.Reader, root string) (string, string, error) {
+	bin, err := os.MkdirTemp("", "wasmpascal-gojs-")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.RemoveAll(bin)
+	file := filepath.Join(bin, args[0]+".wasm")
 	if err := os.WriteFile(file, wasm, 0o644); err != nil {
 		return "", "", err
 	}
@@ -70,9 +66,14 @@ func (h harness) runNode(ctx context.Context, wasm []byte, args []string, stdin 
 	if err != nil {
 		return "", "", err
 	}
+	nodeArgs := []string{script}
+	if root != "" {
+		nodeArgs = append(nodeArgs, "--dir", root)
+	}
+	nodeArgs = append(nodeArgs, file)
 	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, h.node, append([]string{script, file}, args[1:]...)...)
-	cmd.Dir = dir
+	cmd := exec.CommandContext(ctx, h.node, append(nodeArgs, args[1:]...)...)
+	cmd.Dir = bin
 	cmd.Stdin = stdin
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -134,7 +135,7 @@ end.
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := h.runNode(t.Context(), res.Wasm, []string{"ohne"}, strings.NewReader("eins\nzwei äöü\ndrei"), t.TempDir())
+	got, _, err := h.runNode(t.Context(), res.Wasm, []string{"ohne"}, strings.NewReader("eins\nzwei äöü\ndrei"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

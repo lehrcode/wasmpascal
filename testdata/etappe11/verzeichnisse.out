@@ -1,0 +1,14 @@
+in a: /a
+in a/b: /a/b
+zurueck: /a
+Wurzel: /
+ueber die Wurzel: 3 /
+ChDir fehlt: 3
+MkDir vorhanden: 5
+RmDir nicht leer: 5
+RmDir fehlt: 2
+gelesen: in a/b
+Reset ausserhalb: 5
+Rewrite ausserhalb: 5
+Reset ueber a: 5
+nach RmDir: 3

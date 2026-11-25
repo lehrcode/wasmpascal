@@ -7,6 +7,7 @@
 //     args: ["prog", "a", "b"],          // argv[0] ist der Programmname
 //     write(fd, bytes) { … },            // Ausgabe (UTF-8), fd 1 oder 2
 //     readLine() { return Promise },     // nächstes Stück Eingabe, "" oder null = Ende
+//     files,                             // Dateisystem (optional, siehe unten)
 //     signal,                            // AbortSignal zum Abbrechen (optional)
 //   });
 //   // result = { exitCode, error }  (error: WasmPascal.RuntimeError oder null)
@@ -14,6 +15,23 @@
 // Ein Laufzeitfehler erscheint wie unter WASI als Meldung
 // "Runtime error NNN at datei.pas(zeile) in Prozedur" auf fd 2; exitCode ist
 // dann die Fehlernummer. Mehrere Programme dürfen gleichzeitig laufen.
+//
+// Dateien: Das Programm greift über WASI-Aufrufe (fd_read, path_open, …) auf
+// Dateien zu; der Loader setzt sie auf files um, einen synchronen Host mit
+// einer Teilmenge der Node-API fs. Pfade sind relativ zur Wurzel des
+// Programms, mit "/" getrennt und schon normalisiert ("." ist die Wurzel):
+//
+//   openSync(path, flags) → fd          flags: "r", "r+", "w", "w+"
+//   readSync(fd, buf, offset, length, position) → Anzahl
+//   writeSync(fd, buf, offset, length, position) → Anzahl
+//   closeSync(fd)
+//   fstatSync(fd), statSync(path) → { size, isDirectory() }
+//   ftruncateSync(fd, length)
+//   unlinkSync(path), renameSync(from, to)
+//   mkdirSync(path), rmdirSync(path)
+//
+// Fehler wirft der Host als Exception mit dem Node-Code in err.code (ENOENT,
+// EACCES, EEXIST, …). Ohne files scheitert jeder Dateizugriff mit E/A-Fehler 5.
 (function (root, factory) {
 	"use strict";
 	if (typeof module === "object" && module.exports) {
@@ -163,6 +181,257 @@
 			(typeof InternalError === "function" && err instanceof InternalError); // Firefox: too much recursion
 	}
 
+	// ------------------------------------------------------------ Dateien
+
+	// WASI-Fehlernummern (wasi_snapshot_preview1)
+	const ESUCCESS = 0;
+	const EBADF = 8;
+	const EINVAL = 28;
+	const EIO = 29;
+	const EISDIR = 31;
+	const ENOTDIR = 54;
+	const ENOTCAPABLE = 76;
+	const errnoOf = {
+		ENOENT: 44, EACCES: 2, EPERM: 63, EBADF: 8, EEXIST: 20, EISDIR: 31,
+		ENOTDIR: 54, ENOTEMPTY: 55, EMFILE: 33, ENOSPC: 51, EINVAL: 28,
+	};
+	const ROOT_FD = 3; // vorgeöffnete Wurzel (RootFd in rtl/system.pas)
+
+	// wasiFiles liefert die WASI-Importe für Dateien. memory() gibt den
+	// aktuellen Speicher zurück (nach memory.grow ein neuer Puffer), host ist
+	// opts.files oder undefined. Die Handle-Tabelle gehört zu diesem Lauf.
+	function wasiFiles(memory, host) {
+		const handles = new Map([[ROOT_FD, { dir: true, path: "." }]]);
+		let nextFd = ROOT_FD + 1;
+
+		const view = () => new DataView(memory().buffer);
+		const bytes = (ptr, len) => new Uint8Array(memory().buffer, ptr, len);
+		const str = (ptr, len) => decoder.decode(bytes(ptr, len));
+
+		// guard führt f aus und übersetzt Exceptions des Hosts in errno
+		const guard = (f) => {
+			if (!host) {
+				return ENOTCAPABLE;
+			}
+			try {
+				return f();
+			} catch (err) {
+				if (typeof err === "number") {
+					return err;
+				}
+				return (err && errnoOf[err.code]) || EIO;
+			}
+		};
+
+		// resolve bildet einen Pfad relativ zum Verzeichnis-Handle dirFd auf
+		// einen Pfad relativ zur Wurzel ab; ".." über die Wurzel hinaus ist
+		// nicht erlaubt (wie unter wazero).
+		const resolve = (dirFd, ptr, len) => {
+			const dir = handles.get(dirFd);
+			if (!dir || !dir.dir) {
+				throw EBADF;
+			}
+			const parts = dir.path === "." ? [] : dir.path.split("/");
+			const p = str(ptr, len);
+			if (p.startsWith("/")) {
+				throw ENOTCAPABLE;
+			}
+			for (const part of p.split("/")) {
+				if (part === "" || part === ".") {
+					continue;
+				}
+				if (part === "..") {
+					if (parts.length === 0) {
+						throw ENOTCAPABLE;
+					}
+					parts.pop();
+				} else {
+					parts.push(part);
+				}
+			}
+			return parts.length === 0 ? "." : parts.join("/");
+		};
+
+		const file = (fd) => {
+			const h = handles.get(fd);
+			if (!h) {
+				throw EBADF;
+			}
+			if (h.dir) {
+				throw EISDIR;
+			}
+			return h;
+		};
+
+		// iovecs: je 8 Byte (Adresse, Länge)
+		const iovecs = (ptr, n) => {
+			const v = view();
+			const list = [];
+			for (let i = 0; i < n; i++) {
+				list.push([v.getUint32(ptr + 8 * i, true), v.getUint32(ptr + 8 * i + 4, true)]);
+			}
+			return list;
+		};
+
+		return {
+			fd_read(fd, iovs, iovsLen, nread) {
+				return guard(() => {
+					const h = file(fd);
+					let total = 0;
+					for (const [buf, len] of iovecs(iovs, iovsLen)) {
+						const n = host.readSync(h.hostFd, bytes(buf, len), 0, len, h.pos);
+						h.pos += n;
+						total += n;
+						if (n < len) {
+							break;
+						}
+					}
+					view().setUint32(nread, total, true);
+					return ESUCCESS;
+				});
+			},
+
+			fd_write(fd, iovs, iovsLen, nwritten) {
+				return guard(() => {
+					const h = file(fd);
+					let total = 0;
+					for (const [buf, len] of iovecs(iovs, iovsLen)) {
+						if (h.append) {
+							h.pos = host.fstatSync(h.hostFd).size;
+						}
+						let done = 0;
+						while (done < len) {
+							const n = host.writeSync(h.hostFd, bytes(buf, len), done, len - done, h.pos);
+							if (n <= 0) {
+								throw EIO;
+							}
+							h.pos += n;
+							done += n;
+						}
+						total += done;
+					}
+					view().setUint32(nwritten, total, true);
+					return ESUCCESS;
+				});
+			},
+
+			fd_close(fd) {
+				return guard(() => {
+					const h = handles.get(fd);
+					if (!h || fd === ROOT_FD) {
+						return EBADF;
+					}
+					handles.delete(fd);
+					if (!h.dir) {
+						host.closeSync(h.hostFd);
+					}
+					return ESUCCESS;
+				});
+			},
+
+			fd_seek(fd, offset, whence, newOffset) {
+				return guard(() => {
+					const h = file(fd);
+					const off = Number(offset); // i64 kommt als BigInt
+					let base;
+					switch (whence) {
+					case 0: base = 0; break;
+					case 1: base = h.pos; break;
+					case 2: base = host.fstatSync(h.hostFd).size; break;
+					default: return EINVAL;
+					}
+					if (base + off < 0) {
+						return EINVAL;
+					}
+					h.pos = base + off;
+					view().setBigUint64(newOffset, BigInt(h.pos), true);
+					return ESUCCESS;
+				});
+			},
+
+			fd_filestat_get(fd, ptr) {
+				return guard(() => {
+					const h = handles.get(fd);
+					if (!h) {
+						return EBADF;
+					}
+					const st = h.dir ? host.statSync(h.path) : host.fstatSync(h.hostFd);
+					bytes(ptr, 64).fill(0);
+					const v = view();
+					v.setUint8(ptr + 16, st.isDirectory() ? 3 : 4); // filetype
+					v.setBigUint64(ptr + 32, BigInt(st.size), true);
+					return ESUCCESS;
+				});
+			},
+
+			fd_filestat_set_size(fd, size) {
+				return guard(() => {
+					const h = file(fd);
+					host.ftruncateSync(h.hostFd, Number(size));
+					return ESUCCESS;
+				});
+			},
+
+			path_open(dirFd, dirFlags, pathPtr, pathLen, oflags, rightsBase, rightsInherit, fdflags, fdPtr) {
+				return guard(() => {
+					const p = resolve(dirFd, pathPtr, pathLen);
+					let h;
+					if (oflags & 2) { // O_DIRECTORY
+						if (!host.statSync(p).isDirectory()) {
+							return ENOTDIR;
+						}
+						h = { dir: true, path: p };
+					} else {
+						const canRead = (BigInt(rightsBase) & 0x2n) !== 0n;
+						const canWrite = (BigInt(rightsBase) & 0x40n) !== 0n;
+						let flags;
+						if (oflags & 1) { // O_CREAT (die RTL setzt es nur mit O_TRUNC)
+							flags = canRead ? "w+" : "w";
+						} else if (canWrite) {
+							flags = "r+";
+						} else {
+							flags = "r";
+						}
+						const hostFd = host.openSync(p, flags);
+						h = { dir: false, hostFd, pos: 0, append: (fdflags & 1) !== 0 };
+					}
+					const fd = nextFd++;
+					handles.set(fd, h);
+					view().setUint32(fdPtr, fd, true);
+					return ESUCCESS;
+				});
+			},
+
+			path_unlink_file(dirFd, ptr, len) {
+				return guard(() => {
+					host.unlinkSync(resolve(dirFd, ptr, len));
+					return ESUCCESS;
+				});
+			},
+
+			path_rename(oldFd, oldPtr, oldLen, newFd, newPtr, newLen) {
+				return guard(() => {
+					host.renameSync(resolve(oldFd, oldPtr, oldLen), resolve(newFd, newPtr, newLen));
+					return ESUCCESS;
+				});
+			},
+
+			path_create_directory(dirFd, ptr, len) {
+				return guard(() => {
+					host.mkdirSync(resolve(dirFd, ptr, len));
+					return ESUCCESS;
+				});
+			},
+
+			path_remove_directory(dirFd, ptr, len) {
+				return guard(() => {
+					host.rmdirSync(resolve(dirFd, ptr, len));
+					return ESUCCESS;
+				});
+			},
+		};
+	}
+
 	async function instantiate(source, importObject) {
 		if (source instanceof WebAssembly.Module) {
 			return { module: source, instance: await WebAssembly.instantiate(source, importObject) };
@@ -179,7 +448,10 @@
 		const go = new Go();
 		go.argv = (opts.args && opts.args.length > 0) ? opts.args.map(String) : ["program"];
 		go.env = {};
+		let memory = null;
+		go.importObject.wasi_snapshot_preview1 = wasiFiles(() => memory, opts.files);
 		const { module, instance } = await instantiate(source, go.importObject);
+		memory = instance.exports.mem;
 		const exports = instance.exports;
 
 		return new Promise((resolve, reject) => {
