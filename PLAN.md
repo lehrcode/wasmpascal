@@ -267,7 +267,7 @@ Das Programm kann an festgelegten Punkten anhalten und die Kontrolle an den Host
 
 ## Etappen mit Akzeptanzkriterien
 
-Dreizehn Etappen (0 bis 12). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
+Vierzehn Etappen (0 bis 13). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
 
 ### Etappe 0: Gerüst ✅
 
@@ -671,6 +671,121 @@ Speicherverbrauchs (`runtime.MemStats` vorher/nachher, z. B. < 64 MB):
 `FuzzCompile` läuft 10 Minuten ohne Absturz oder Hänger; alle bisherigen
 Tests und `TestWebCompiler` sind unverändert grün.
 - *Erledigt (Nov 25, 2026).* Punkte 1 bis 9 umgesetzt: Spalten im Lexer schrittweise (400 KB in einer Zeile: 19 s → 0,08 s); `MaxStaticData` in `check` (Error 49, ohne Speicher zu belegen); Tiefe im Parser (`ParseDepth`, Error 904); `ErrInternal`; `MaxTokens` im `source.Loader` (Error 906); `compiler.Limits` (0 = Voreinstellung, −1 = aus; `{$M}` über `MaxStackSize`: Error 17); BSS (`ir.Module.BSSBase`/`BSSSize`, Adressen am Ende von `Lower` nachgetragen); `ctx` im Lexer alle 4096 Tokens und in `check` je Routine; `FuzzCompile` 10 Minuten (8,75 Mio. Aufrufe) ohne Befund. **Abweichung vom Plan:** `structure.go` kopiert den Kontext weiter je Ebene – bei höchstens 500 Ebenen gemessen unter 0,03 s, der Umbau hätte jede Funktion des Strukturierers berührt. Tests: `compiler/limits_test.go` (lange Zeile, statische Daten, zwölf Schachtelungsfälle, knapp unter der Grenze, Tokens, `ErrInternal`, alle Grenzen einstellbar, BSS mit Laufzeitprobe, Abbruch über `ctx`), `TestCheckCanceled`, `ExampleLimits`.
+
+### Etappe 13: Compiler-Server ✅
+
+**Ziel:** `pascal serve` übersetzt Quelltexte aus fremder Hand im
+Dauerbetrieb über JSON-Zeilen auf stdin/stdout. Der Compiler läuft nativ im
+Prozess (`compiler.Compile`); Schutz geben die Grenzen aus Etappe 12.
+
+**Entscheidungen (nach Rückfrage):** Dauerbetrieb mit JSON-Zeilen; der
+Compiler läuft **nativ im Prozess**, nicht als `wasip1`-Modul in wazero.
+Abgewogen wurde (Prototyp vom 25. 11. 2026): Als WASM-Sandbox gäbe es eine
+harte Speichergrenze je Anfrage, Abbruch an jeder Stelle und eingegrenzte
+Abstürze, aber etwa 0,4 s je Anfrage, ein eingechecktes Modul von 4,7 MB
+und einen `go generate`-Schritt nach jeder Compiler-Änderung. Nativ dauert
+eine Anfrage Millisekunden, dafür gilt:
+
+- **Speicher:** Die Grenzen (`Limits`) halten den Verbrauch einer
+  Übersetzung klein; eine harte Grenze gibt es nicht. `-memory` setzt
+  `debug.SetMemoryLimit` (weiches Ziel der Speicherbereinigung für den
+  ganzen Prozess).
+- **Zeit:** `-timeout` gibt jeder Anfrage einen `ctx`; er wirkt dort, wo
+  der Compiler ihn prüft (zwischen den Phasen, im Lexer alle 4096 Tokens,
+  in der Typprüfung je Routine). Mit den Grenzen sind die übrigen Phasen
+  kurz.
+- **Abstürze:** Panics kommen als `ErrInternal` zurück, der Server läuft
+  weiter. Ein `fatal error` von Go (Stacküberlauf, Speichermangel) beendet
+  dagegen den Prozess; die Grenzen aus Etappe 12 sollen genau das
+  verhindern (Extremfälle und Fuzzing ohne Befund). Für den Betrieb mit
+  fremden Quelltexten wird ein Container mit Speichergrenze und
+  automatischem Neustart empfohlen (Doku).
+
+#### Aufbau
+
+- **`internal/compilereq`** (nur Standardbibliothek und `compiler`): Typen
+  `Request`/`Response`, `Decode` (JSON, unbekannte Felder sind ein Fehler,
+  damit Tippfehler in `limits` auffallen) und `Handle(ctx, Request)
+  Response`. Quelltexte kommen ausschließlich aus `files` (`fstest.MapFS`);
+  Dateinamen werden mit `fs.ValidPath` geprüft (kein `/` am Anfang, kein
+  `..`), `IncludePaths` sind leer. `cmd/pascaljs` kann das Paket später
+  übernehmen (nicht Teil dieser Etappe).
+- **`pascal serve`** in `cmd/pascal`:
+  - liest stdin zeilenweise, je Zeile eine Anfrage, und schreibt je Anfrage
+    genau eine Antwortzeile nach stdout, in derselben Reihenfolge;
+    Anfragen werden nacheinander bearbeitet;
+  - Optionen: `-timeout` (je Anfrage, Standard 10 s), `-memory` (MB, setzt
+    `debug.SetMemoryLimit`, Standard 0 = nicht setzen), `-maxrequest` (MB,
+    Standard 64; eine längere Zeile wird verworfen und als kaputte Anfrage
+    beantwortet);
+  - endet mit Exit-Code 0 bei Ende von stdin; ungleich 0 nur, wenn der Start
+    scheitert (ungültige Optionen) oder stdout nicht beschreibbar ist.
+    Fehler einzelner Anfragen beenden den Server nie;
+  - liest keine Hostdateien und nutzt keine Umgebungsvariablen.
+
+#### Protokoll
+
+Anfrage, eine Zeile JSON (wie `pascalCompile`):
+
+```json
+{"id": 7, "files": {"name.pas": "…"}, "main": "name.pas", "target": "gojs",
+ "defines": [], "stack": 0, "limits": {"maxDepth": 500, "maxStaticData": -1}}
+```
+
+- `files` Pflicht, `main` Pflicht bei mehr als einer Datei; `target`
+  `"wasi"` (Standard, wie `pascal build`) oder `"gojs"`; `limits` mit den
+  Feldern von `compiler.Limits` in camelCase (0 = Voreinstellung, −1 = aus).
+- `id` ist optional und beliebiges JSON; die Antwort enthält es unverändert.
+
+Antwort, eine Zeile JSON:
+
+- Erfolg: `{"id": 7, "wasm": "<base64>"}`
+- Quelltextfehler: `{"id": 7, "kind": "source", "error": "name.pas(3,9): Error 85: \";\" expected", "file": "name.pas", "line": 3, "column": 9, "code": 85}`
+- kaputte Anfrage (kein JSON, unbekanntes Feld, Zeile zu lang, ungültiger
+  Name, …): `{"id": 7, "kind": "request", "error": "…"}`
+- interner Fehler (`compiler.ErrInternal`): `{"id": 7, "kind": "internal", "error": "…"}`
+- Zeitüberschreitung: `{"id": 7, "kind": "timeout", "error": "…"}`
+
+Die Exit-Code-Regel aus der Anforderung (0 auch bei Quelltextfehlern,
+ungleich 0 nur bei internem Fehler oder kaputter Anfrage) gilt im
+Dauerbetrieb je Anfrage und steht deshalb in `kind`; der Prozess selbst
+endet nur am Ende der Eingabe.
+
+#### Tests
+
+- `internal/compilereq`: gültige Anfrage (Modul byte-gleich zu
+  `compiler.Compile`, als base64 in JSON), Quelltextfehler mit allen
+  Feldern, kaputte Anfragen (kein JSON, unbekanntes Feld, fehlende `files`,
+  fehlendes `main` bei mehreren Dateien, ungültige Namen wie `../x.pas` oder
+  `/x.pas`, unbekanntes `target`), `limits` kommt im Compiler an, `id` kommt
+  zurück, Zeitüberschreitung → `timeout`, Panic → `internal` (über einen
+  Test-Haken im Paket, nicht über die Anfrage).
+- `pascal serve` (über `run()` wie `TestCLI`): mehrere Zeilen in einer
+  Eingabe, darunter Erfolg, Quelltextfehler, kaputte Zeile, zu lange Zeile,
+  Zeitüberschreitung (`-timeout` sehr kurz, großer Quelltext), danach jeweils
+  eine gültige Anfrage → Erfolg; Antworten in Reihenfolge, Exit-Code 0 am
+  Ende.
+- Keine Hostdateien: `{$I /etc/passwd}` und `{$I ../geheim.inc}` ergeben
+  Quelltextfehler, auch wenn die Dateien existieren.
+
+#### Doku
+
+- `README.md`, Abschnitt „In eigene Projekte einbinden“: neuer
+  Unterabschnitt „Compiler-Server“ mit einem kurzen Beispiel – eine Anfrage
+  per Shell (`echo '{…}' | pascal serve`) und ein Go-Ausschnitt, der
+  `pascal serve` als Kindprozess startet und über `json.Encoder`/
+  `json.Decoder` Anfragen schickt. Beide Beispiele werden beim Schreiben
+  ausgeführt. Dazu die Garantien und Grenzen aus den Entscheidungen oben
+  (Container empfohlen).
+- Hilfetext von `pascal` (`usage`) und `pascal serve -h`.
+- `CLAUDE.md`: `pascal serve` und `internal/compilereq` kurz erwähnen.
+
+**Fertig, wenn:** `pascal serve` beantwortet eine Folge von Anfragen
+einschließlich Quelltextfehler, kaputter Anfrage und Zeitüberschreitung
+jeweils mit genau einer Antwortzeile und läuft danach weiter; erzeugte
+Module sind byte-gleich zu `compiler.Compile`; kein Zugriff auf
+Hostdateien; alle bisherigen Tests sind grün.
+- *Erledigt (Nov 25, 2026).* `internal/compilereq` (`Request`, `Response`, `Decode`, `Handle`, `RequestError`; unbekannte Felder und ungültige Namen sind kaputte Anfragen, Fehler ohne Diagnostic aus `compiler.Compile` ebenso) und `pascal serve` (`cmd/pascal/serve.go`: `-timeout`, `-memory`, `-maxrequest`, Leerzeilen werden übersprungen, Strg+C ohne ANSI-Ausgabe). Tests: `internal/compilereq` (byte-gleiche Module für wasi und gojs, Quelltextfehler, neun kaputte Anfragen, Grenzen, keine Hostdateien, Zeitlimit, interner Fehler und Panic, `Example`), `cmd/pascal/serve_test.go` (Folge aus sieben Anfragen samt kaputter und zu langer Zeile, Zeitlimit, Optionen). README mit Shell- und Go-Beispiel, beide ausgeführt.
 
 ## Arbeitsregeln für Claude Code
 

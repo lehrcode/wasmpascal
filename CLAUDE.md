@@ -1,7 +1,7 @@
 # CLAUDE.md – WasmPascal
 
 Turbo-Pascal-4.0-Compiler (ohne OOP, plus einige TP-7-/Delphi-Erweiterungen) nach WebAssembly, geschrieben in Go.
-Modul `github.com/lehrcode/wasmpascal`, CLI `pascal` (`build` | `run` | `check`).
+Modul `github.com/lehrcode/wasmpascal`, CLI `pascal` (`build` | `run` | `check` | `serve`).
 
 **Verbindlich ist [PLAN.md](PLAN.md).** Diese Datei fasst nur die Arbeitsregeln und die Typabbildung zusammen;
 bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichungen.md`.
@@ -19,7 +19,7 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
   `GOOS=js GOARCH=wasm` und `GOOS=wasip1 GOARCH=wasm` müssen `./compiler/...` bauen (wird im Testlauf geprüft).
 - **Bibliotheksregeln:** kein globaler veränderlicher Zustand, kein `os.Exit`/`log.Fatal`, kein `os.Stdin`/`os.Stdout`
   außerhalb von `cmd/pascal`; Panics abfangen und als Fehler liefern; `ctx` respektieren.
-  Jede exportierte API hat Doku-Kommentar und mindestens ein `Example`-Test. `cmd/pascal` nutzt nur die öffentliche API.
+  Jede exportierte API hat Doku-Kommentar und mindestens ein `Example`-Test. `cmd/pascal` nutzt nur die öffentliche API (für `serve` zusätzlich `internal/compilereq`).
 - **Fehlermeldungen:** `datei.pas(zeile,spalte): Error NN: Text`, Abbruch beim ersten Fehler.
 - **Codegenerator auf den Scheduler auslegen:** IR immer als CFG; jede Variable muss sich in den Frame auslagern lassen.
 - **Keine eigenmächtigen Spracherweiterungen.** Im Zweifel TP 4.0 nachbilden, Abweichungen in `docs/abweichungen.md`.
@@ -89,3 +89,7 @@ Je Ziel getrennt sind Konsole, Eingabe, Uhr, Argumente und Anhaltepunkte (`SysWr
 
 Browser: `cmd/pascaljs` (nur `GOOS=js GOARCH=wasm`) legt `pascalCompile` an; `web/index.html` ist die Demo
 (Bau und Start in `web/README.md`). `TestWebCompiler` verlangt byte-gleiche Module wie der native Compiler.
+
+Server: `pascal serve` (`cmd/pascal/serve.go`) liest JSON-Anfragen zeilenweise und antwortet je Zeile; Prüfen,
+Übersetzen und Antworten liegen in `internal/compilereq`. Der Compiler läuft nativ im Prozess, geschützt durch
+`compiler.Limits` und ein Zeitlimit je Anfrage (PLAN.md, Etappe 13).

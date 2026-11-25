@@ -50,6 +50,7 @@ pascal run mittel.pas
 | `pascal run datei.pas [arg …]` | übersetzt und führt aus (WASI mit wazero, Dateizugriff im Arbeitsverzeichnis) |
 | `pascal build datei.pas` | erzeugt `datei.wasm`; `-target gojs` für den Browser, `-o` für den Namen |
 | `pascal check datei.pas` | prüft nur |
+| `pascal serve` | Compiler-Server: JSON-Anfragen zeilenweise auf stdin, Antworten auf stdout (siehe unten) |
 
 Weitere Optionen: `-I pfad` (Units und Include-Dateien), `-D symbol`
 (`{$DEFINE}`), `-stack n` (Schatten-Stack in Byte), `-nolines` (ohne
@@ -99,6 +100,75 @@ default:
 
 Das Modul aus `compiler.Compile` (Standardziel WASI Preview 1) läuft auch
 ohne `runner`, z. B. mit `node:wasi`.
+
+### Compiler-Server
+
+`pascal serve` übersetzt im Dauerbetrieb: je Zeile auf stdin eine
+JSON-Anfrage, je Anfrage genau eine JSON-Zeile auf stdout, in derselben
+Reihenfolge. Quelltexte kommen nur aus der Anfrage, Hostdateien sind nicht
+erreichbar. So lässt sich der Compiler aus jeder Sprache ansprechen, etwa als
+Kindprozess eines Webservers.
+
+```bash
+echo '{"id": 1, "files": {"p.pas": "program P; begin WriteLn(6 * 7) end."}}' | pascal serve
+```
+
+```json
+{"id":1,"wasm":"AGFzbQEAAAAB…"}
+```
+
+Anfrage: `files` (Dateiname → Quelltext, Pflicht), `main` (nötig bei mehreren
+Dateien), `target` (`"wasi"` oder `"gojs"`), `defines`, `stack`, `limits` (die
+Felder von `compiler.Limits` in camelCase, etwa `{"maxDepth": 100}`) und
+optional `id`, die die Antwort unverändert enthält. Antwort: `wasm`
+(base64) oder `kind` mit `error`; bei `"kind": "source"` zusätzlich `file`,
+`line`, `column` und `code`. Weitere Arten sind `request` (kaputte Anfrage),
+`internal` und `timeout`. Fehler beenden den Server nicht; er endet am Ende
+der Eingabe. Optionen: `-timeout` je Anfrage (10 s), `-maxrequest` (64 MB je
+Zeile), `-memory` (weiches Speicherziel des Prozesses).
+
+In Go als Kindprozess:
+
+```go
+cmd := exec.Command("pascal", "serve", "-timeout", "5s")
+in, _ := cmd.StdinPipe()
+out, _ := cmd.StdoutPipe()
+if err := cmd.Start(); err != nil {
+	log.Fatal(err)
+}
+enc, dec := json.NewEncoder(in), json.NewDecoder(out)
+
+type response struct {
+	ID    int    `json:"id"`
+	Wasm  []byte `json:"wasm"` // base64 im JSON, hier schon dekodiert
+	Kind  string `json:"kind"` // leer bei Erfolg
+	Error string `json:"error"`
+}
+quellen := []string{
+	"program P; begin WriteLn(6 * 7) end.",
+	"program P; begin x := 1 end.",
+}
+for i, src := range quellen {
+	enc.Encode(map[string]any{"id": i, "target": "gojs", "files": map[string]string{"p.pas": src}})
+	var r response
+	if err := dec.Decode(&r); err != nil {
+		log.Fatal(err)
+	}
+	if r.Kind != "" {
+		fmt.Println(r.ID, r.Kind, r.Error) // 1 source p.pas(1,18): Error 3: Unknown identifier (x)
+		continue
+	}
+	fmt.Println(r.ID, "Modul mit", len(r.Wasm), "Byte")
+}
+in.Close() // Ende der Eingabe beendet den Server
+cmd.Wait()
+```
+
+Der Compiler läuft im Prozess des Servers. Die Grenzen aus `compiler.Limits`
+halten Zeit und Speicher je Anfrage klein, eine harte Speichergrenze gibt es
+aber nicht, und ein Absturz der Go-Laufzeit (etwa Speichermangel) beendet den
+Server. Für Quelltexte aus fremder Hand den Server deshalb in einem Container
+mit Speichergrenze und automatischem Neustart betreiben.
 
 ### Browser und Node.js
 

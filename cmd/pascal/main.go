@@ -3,8 +3,10 @@
 //	pascal build [Optionen] datei.pas        übersetzt nach datei.wasm
 //	pascal run   [Optionen] datei.pas [arg…] übersetzt und führt in wazero aus
 //	pascal check [Optionen] datei.pas        prüft nur
+//	pascal serve [Optionen]                  Compiler-Server (JSON-Zeilen auf stdin/stdout)
 //
-// Die CLI nutzt ausschließlich die öffentliche API der Pakete compiler und runner.
+// Die CLI nutzt die öffentliche API der Pakete compiler und runner, für serve
+// zusätzlich internal/compilereq.
 package main
 
 import (
@@ -28,9 +30,12 @@ func main() {
 	// Programm, das gerade auf eine Eingabezeile wartet, wird so sofort beendet.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
+	isServe := len(os.Args) > 1 && os.Args[1] == "serve"
 	go func() {
 		<-sig
-		fmt.Fprint(os.Stdout, resetColors)
+		if !isServe { // serve schreibt nur JSON-Zeilen nach stdout
+			fmt.Fprint(os.Stdout, resetColors)
+		}
 		os.Exit(130)
 	}()
 	os.Exit(run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -43,6 +48,7 @@ const usage = `Aufruf:
   pascal build [Optionen] datei.pas          übersetzt nach WebAssembly
   pascal run   [Optionen] datei.pas [arg...] übersetzt und führt aus (Ziel wasi)
   pascal check [Optionen] datei.pas          prüft nur, erzeugt nichts
+  pascal serve [Optionen]                    Compiler-Server: JSON-Zeilen auf stdin/stdout
 
 Optionen mit "pascal <befehl> -h".
 `
@@ -55,6 +61,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	cmd, args := args[0], args[1:]
 	switch cmd {
+	case "serve":
+		return serve(ctx, args, stdin, stdout, stderr)
 	case "build", "run", "check":
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usage)
