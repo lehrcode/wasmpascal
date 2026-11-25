@@ -67,6 +67,9 @@ func New(loader *source.Loader, name string, defines source.Defines) (*Lexer, er
 		}
 		return nil, source.Errorf(source.Pos{File: name}, source.ErrFileNotFound, "")
 	}
+	if reason := loader.Use(f, false); reason != "" {
+		return nil, source.Errorf(source.Pos{File: name}, source.ErrSourceTooLarge, "%s", reason)
+	}
 	l := &Lexer{
 		loader:   loader,
 		files:    []*fileState{{f: f, line: 1}},
@@ -474,6 +477,10 @@ func (l *Lexer) directive(text string, pos source.Pos) error {
 }
 
 // include öffnet eine {$I datei}-Datei. Ohne Endung wird .pas angenommen.
+// Eine Datei, die schon auf dem Include-Stapel liegt, ergibt sofort Error 9.
+// TP-ANNAHME: Die Nummer ist die für zu tiefe Schachtelung; wir erkennen den
+// Zyklus schon bei der ersten Wiederholung statt erst an der Tiefengrenze.
+// Jede Einbindung zählt für die Grenzen der Quelltextmenge (source.Loader.Use).
 func (l *Lexer) include(name string, pos source.Pos) error {
 	if name == "" {
 		return source.Errorf(pos, source.ErrInvalidFileName, "")
@@ -501,6 +508,14 @@ func (l *Lexer) include(name string, pos source.Pos) error {
 			return source.Errorf(pos, source.ErrFileNotFound, "%s", name)
 		}
 		return source.Errorf(pos, source.ErrFileNotFound, "%s: %v", name, err)
+	}
+	for _, open := range l.files {
+		if open.f == f {
+			return source.Errorf(pos, source.ErrTooManyNestedFiles, "circular include of %s", f.Name)
+		}
+	}
+	if reason := l.loader.Use(f, true); reason != "" {
+		return source.Errorf(pos, source.ErrSourceTooLarge, "%s", reason)
 	}
 	l.files = append(l.files, &fileState{f: f, line: 1})
 	return nil

@@ -2,6 +2,7 @@ package source
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"path"
 	"strings"
@@ -28,12 +29,39 @@ func (f *File) Position(off int) Pos {
 	return Pos{File: f.Name, Line: line, Col: utf8.RuneCount(f.Data[start:end]) + 1}
 }
 
+// Grenzen für die Quelltextmenge einer Übersetzung. Sie verhindern, dass sich
+// Dateien über {$I} vervielfachen (jede Einbindung zählt erneut).
+const (
+	MaxIncludes    = 1000     // {$I}-Direktiven insgesamt
+	MaxSourceBytes = 16 << 20 // gelesene Quelltextbytes insgesamt (16 MB)
+)
+
 // Loader liest Quelldateien aus einem fs.FS und merkt sich bereits geladene.
-// Ein Loader gehört zu genau einer Übersetzung und ist nicht nebenläufig nutzbar.
+// Ein Loader gehört zu genau einer Übersetzung und ist nicht nebenläufig nutzbar;
+// er zählt auch, wie viel Quelltext die Übersetzung schon gelesen hat.
 type Loader struct {
 	FS           fs.FS
 	IncludePaths []string
 	files        map[string]*File
+	includes     int // bisherige {$I}-Einbindungen
+	bytes        int // bisher gelesene Quelltextbytes, mit Wiederholungen
+}
+
+// Use zählt f als gelesen, include gibt an, ob es über {$I} geschieht. Ist
+// eine Grenze überschritten, liefert Use den Grund für die Fehlermeldung
+// (ErrSourceTooLarge), sonst "".
+func (l *Loader) Use(f *File, include bool) string {
+	if include {
+		l.includes++
+		if l.includes > MaxIncludes {
+			return fmt.Sprintf("more than %d {$I} directives", MaxIncludes)
+		}
+	}
+	l.bytes += len(f.Data)
+	if l.bytes > MaxSourceBytes {
+		return fmt.Sprintf("more than %d MB of source text", MaxSourceBytes>>20)
+	}
+	return ""
 }
 
 // NewLoader erzeugt einen Loader für fsys mit zusätzlichen Suchpfaden.

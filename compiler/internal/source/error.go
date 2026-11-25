@@ -114,6 +114,8 @@ const (
 	ErrNonASCII     = 901
 	ErrNotSupported = 902
 	ErrBreakOutside = 903
+	// 904 und 906 sind für Etappe 12 vorgesehen (Schachtelungstiefe, Programmgröße).
+	ErrSourceTooLarge = 905
 )
 
 var messages = map[int]string{
@@ -195,6 +197,7 @@ var messages = map[int]string{
 	ErrIntConst:            "Error in integer constant",
 	ErrStringExceedsLine:   "String constant exceeds line",
 	ErrTooManyNestedFiles:  "Too many nested files",
+	ErrSourceTooLarge:      "Source too large",
 	ErrUnexpectedEOF:       "Unexpected end of file",
 	ErrInvalidFileName:     "Invalid file name",
 	ErrFileNotFound:        "File not found",

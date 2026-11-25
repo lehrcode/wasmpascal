@@ -595,6 +595,14 @@ Absturz.
 4. **Quelltextmenge begrenzen:** Lexer bzw. `source.Loader` zählen gelesene
    Bytes und `{$I}` über alle Dateien eines `Compile`-Aufrufs (Zähler im
    Aufruf, nicht global).
+   *Vorgezogen und erledigt (Nov 25, 2026):* `source.Loader` zählt je
+   Übersetzung jede Einbindung und ihre Bytes erneut (`MaxIncludes` = 1000,
+   `MaxSourceBytes` = 16 MB, eingebettete Laufzeit ausgenommen) → Error 905
+   „Source too large“. Zusätzlich erkennt der Lexer Include-Zyklen sofort
+   (Error 9 „circular include of …“). Pfade in `{$I}` bleiben wie in TP
+   erlaubt (eine Beschränkung auf Dateinamen hilft gegen die Vervielfachung
+   nicht und bräche TP-Quelltexte). Offen für Etappe 12: die Grenzen in
+   `compiler.Limits` übernehmen.
 5. **Abbruch über `ctx` in allen Phasen:** `ctx` über die Config-Strukturen
    durchreichen (kein globaler Zustand) und prüfen: im Lexer alle 4096
    Tokens, im Parser je Deklaration und Anweisung, in `check` je Routine und

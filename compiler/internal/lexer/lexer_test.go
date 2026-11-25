@@ -298,7 +298,12 @@ func TestErrors(t *testing.T) {
 		{"include fehlt", nil, "a {$I fehlt}", "main.pas(1,3): Error 15: File not found (fehlt.pas)"},
 		{"include ohne namen", nil, "{$I}", "main.pas(1,1): Error 14: Invalid file name"},
 		{"include mit laufwerk", nil, `{$I C:\TP\X.INC}`, `main.pas(1,1): Error 14: Invalid file name (C:\TP\X.INC)`},
-		{"rekursives include", fstest.MapFS{"main.pas": {Data: []byte("{$I main.pas}")}}, "", "main.pas(1,1): Error 9: Too many nested files"},
+		{"rekursives include", fstest.MapFS{"main.pas": {Data: []byte("{$I main.pas}")}}, "", "main.pas(1,1): Error 9: Too many nested files (circular include of main.pas)"},
+		{"zyklus über zwei dateien", fstest.MapFS{
+			"main.pas": {Data: []byte("{$I a.inc}")},
+			"a.inc":    {Data: []byte("x\n{$I b.inc}")},
+			"b.inc":    {Data: []byte("  {$I A.INC}")},
+		}, "", "b.inc(1,3): Error 9: Too many nested files (circular include of a.inc)"},
 		{"ungültiges utf-8", nil, "ab\n c\xff", "main.pas(2,3): Error 900: Source file is not valid UTF-8; convert it with: iconv -f CP437 -t UTF-8"},
 		{"ungültiges utf-8 im include", fstest.MapFS{"main.pas": {Data: []byte("{$I alt.inc}")}, "alt.inc": {Data: []byte("x := '\x84';")}}, "",
 			"alt.inc(1,7): Error 900: Source file is not valid UTF-8; convert it with: iconv -f CP437 -t UTF-8"},

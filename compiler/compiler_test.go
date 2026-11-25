@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -121,5 +122,25 @@ func TestDelayWaits(t *testing.T) {
 	}
 	if out.String() != "ab\n" {
 		t.Errorf("Ausgabe %q", out.String())
+	}
+}
+
+// TestIncludeLimitAcrossUnits prüft, dass die Grenze für {$I} über alle
+// Dateien einer Übersetzung zählt, auch über Units hinweg.
+func TestIncludeLimitAcrossUnits(t *testing.T) {
+	incs := strings.Repeat("{$I x.inc}\n", 600)
+	src := fstest.MapFS{
+		"p.pas": {Data: []byte("program P;\nuses U;\n" + incs + "begin\nend.\n")},
+		"u.pas": {Data: []byte("unit U;\ninterface\n" + incs + "implementation\nend.\n")},
+		"x.inc": {Data: []byte("{ leer }")},
+	}
+	_, err := Compile(context.Background(), "p.pas", Options{FS: src})
+	var d *Diagnostic
+	if !errors.As(err, &d) || d.Code != 905 {
+		t.Fatalf("err = %v, want Error 905", err)
+	}
+	// p.pas bindet 600-mal ein, die 1001. Einbindung ist die 401. in u.pas
+	if want := "u.pas(403,1): Error 905: Source too large (more than 1000 {$I} directives)"; d.Error() != want {
+		t.Errorf("\n got: %s\nwant: %s", d.Error(), want)
 	}
 }
