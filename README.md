@@ -39,9 +39,16 @@ end.
   und typisierten Konstanten; dazu `Result`, `Break`/`Continue`, `Low`/`High`,
   `const`-Parameter, `for … in`, Funktionen mit Record- oder
   Array-Ergebnis, `SmallInt` und `WideChar`. `Integer` hat 32 Bit, `Word`
-  und `SmallInt` 16 Bit. Texte sind UTF-8; `WideChar` und die Routinen
-  `UTF8Length`, `UTF8Next`, `UTF8Index` und `UTF8Copy` arbeiten
-  zeichenweise statt byteweise.
+  und `SmallInt` 16 Bit wie in TP.
+- **Unicode:** Texte sind UTF-8, `string` bleibt der ShortString mit 255
+  Bytes. Ein `WideChar` hält ein Zeichen bis U+FFFF (`W := 'ä'`,
+  `W := #$20AC`) und wird als String zu UTF-8; `UTF8Length`, `UTF8Next`,
+  `UTF8Index`, `UTF8Copy` und `for w in s do` arbeiten zeichenweise statt
+  byteweise.
+- **Saubere Quelltexte:** Steuerzeichen stehen in Literalen nur als `#n` oder
+  `^X` (`'Zeile'#10`, `#27'[34m'`), nicht roh; Bidi-Steuerzeichen, mit denen
+  ein Editor Code anders anzeigen kann, als er übersetzt wird („Trojan
+  Source“), lehnt der Compiler überall ab.
 - **Units:** `System` (Ein- und Ausgabe, Text-, typisierte und untypisierte
   Dateien samt `FileMode`, Verzeichnisse, Strings, Mathematik, Heap), `Crt`
   (Farben, `ClrScr`, `GotoXY`, `Delay`, `ReadKey` zeilenweise) und `Dos`
@@ -57,7 +64,8 @@ end.
   geprüft mit Extremfällen und Fuzzing.
 
 Wo und warum WasmPascal von Turbo Pascal abweicht, steht in
-[docs/abweichungen.md](docs/abweichungen.md).
+[docs/abweichungen.md](docs/abweichungen.md), was sich zwischen den Versionen
+geändert hat, in [CHANGELOG.md](CHANGELOG.md).
 
 ## Kommandozeile
 
@@ -287,6 +295,7 @@ Start und Schnittstellen beschreibt [web/README.md](web/README.md).
 | --- | --- |
 | [docs/units.md](docs/units.md) | Referenz der Units System, Crt und Dos: Typen, Routinen, Laufzeitfehler |
 | [docs/abweichungen.md](docs/abweichungen.md) | Wo und warum WasmPascal von Turbo Pascal 4.0 abweicht |
+| [CHANGELOG.md](CHANGELOG.md) | Änderungen je Version |
 | [PLAN.md](PLAN.md) | Sprachumfang, Erweiterungen, Typabbildung, Speichermodell, Architektur, Etappen |
 | [web/README.md](web/README.md) | Browser-Demo, Loader mit Datei-Host, `pascalCompile`, Node-Werkzeuge |
 | [testdata/README.md](testdata/README.md) | Aufbau der Testprogramme, Fuzzing |
