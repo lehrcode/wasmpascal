@@ -144,6 +144,9 @@ func (l *Loader) Load(name string) (*File, error) {
 		}
 		return nil, Errorf(f.Position(off), ErrInvalidUTF8, "")
 	}
+	if err := checkBidi(f); err != nil {
+		return nil, err
+	}
 	l.files[name] = f
 	return f, nil
 }
@@ -170,6 +173,29 @@ func (l *Loader) Resolve(name, dir string) (string, error) {
 }
 
 var errInvalidName = errors.New("ungültiger Dateiname")
+
+// IsBidi meldet die Bidi-Steuerzeichen U+202A–U+202E und U+2066–U+2069. Mit
+// ihnen kann ein Editor Quelltext anders anzeigen, als er übersetzt wird
+// („Trojan Source“, CVE-2021-42574); sie sind im ganzen Quelltext verboten.
+func IsBidi(r rune) bool {
+	return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
+}
+
+// checkBidi meldet das erste Bidi-Steuerzeichen in f (Error 908).
+func checkBidi(f *File) error {
+	for off, r := range string(f.Data) {
+		if IsBidi(r) {
+			return Errorf(f.Position(off), ErrBidiChar, "U+%04X; in strings use #$%04X", r, r)
+		}
+	}
+	return nil
+}
+
+// IsNoncharacter meldet die Unicode-Noncharacters U+FDD0–U+FDEF und die
+// jeweils letzten zwei Codepoints jeder Ebene (U+FFFE, U+FFFF, …, U+10FFFF).
+func IsNoncharacter(r rune) bool {
+	return (r >= 0xFDD0 && r <= 0xFDEF) || (r&0xFFFE == 0xFFFE && r <= 0x10FFFF)
+}
 
 // IsInvalidName meldet, ob err von Resolve wegen eines ungültigen Namens kommt.
 func IsInvalidName(err error) bool { return errors.Is(err, errInvalidName) }

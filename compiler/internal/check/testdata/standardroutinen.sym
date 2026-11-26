@@ -4,7 +4,7 @@ type TRec = record (size 8, align 4)
   b: Integer @4
 var i: Integer (size 4)
 var code: Integer (size 4)
-var w: Word (size 4)
+var w: Word (size 2)
 var l: LongInt (size 4)
 var r: Real (size 8)
 var c: Char (size 1)

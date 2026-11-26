@@ -123,3 +123,23 @@ func TestConditionals(t *testing.T) {
 		t.Error("EndIf ohne If ohne Fehler")
 	}
 }
+
+// Bidi-Steuerzeichen sind im ganzen Quelltext verboten (Error 908).
+func TestBidiChars(t *testing.T) {
+	for _, tt := range []struct{ data, want string }{
+		{"a { ‮ } b", "p.pas(1,5): Error 908: Bidirectional control character (U+202E; in strings use #$202E)"},
+		{"x := 'ab⁦';\n", "p.pas(1,9): Error 908: Bidirectional control character (U+2066; in strings use #$2066)"},
+		{"\n\n  ‪", "p.pas(3,3): Error 908: Bidirectional control character (U+202A; in strings use #$202A)"},
+	} {
+		l := NewLoader(fstest.MapFS{"p.pas": {Data: []byte(tt.data)}}, nil)
+		_, err := l.Load("p.pas")
+		if err == nil || err.Error() != tt.want {
+			t.Errorf("%q: %v, want %s", tt.data, err, tt.want)
+		}
+	}
+	// U+200E (Links-nach-rechts-Marke) gehört nicht dazu.
+	l := NewLoader(fstest.MapFS{"p.pas": {Data: []byte("'‎'")}}, nil)
+	if _, err := l.Load("p.pas"); err != nil {
+		t.Errorf("U+200E: %v", err)
+	}
+}

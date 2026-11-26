@@ -132,8 +132,9 @@ func truncate(t types.Type, v int64) int64 {
 		return int64(int8(v))
 	case t.Size() == 1:
 		return int64(uint8(v))
-	case types.Is(t, types.Word):
-		// TP-ANNAHME: Word(x) schneidet auf 16 Bit zu (Word(-1) = 65535).
+	case t.Size() == 2 && lo < 0:
+		return int64(int16(v))
+	case t.Size() == 2:
 		return int64(uint16(v))
 	}
 	return int64(int32(v))
@@ -192,7 +193,11 @@ func (c *checker) stmt(s ast.Stmt) {
 					if e == nil {
 						continue
 					}
-					if k := c.constExpr(e); !compatible(x.Type, k.Type) {
+					k := c.constExpr(e)
+					if isWide(x.Type) {
+						k = c.wideLiteral(k, e)
+					}
+					if !types.IsOrdinal(k.Type) || !compatible(x.Type, k.Type) {
 						c.fail(e.Pos(), source.ErrCaseConstType, "")
 					}
 				}
@@ -304,16 +309,24 @@ func (c *checker) forIn(s *ast.ForInStmt) {
 	case *types.Array:
 		elem = t.Elem
 	case *types.String:
+		// Mit WideChar-Laufvariable läuft die Schleife über die Zeichen
+		// (UTF-8 dekodiert), sonst über die Bytes.
 		elem = types.Char
+		if isWide(v.Type) {
+			elem = types.WideChar
+		}
 	case *types.Set:
 		elem = t.Elem
 		if elem == nil {
 			elem = v.Type
 		}
 	default:
-		if types.Is(x.Type, types.Char) {
+		switch {
+		case types.Is(x.Type, types.Char):
 			elem = types.Char
-		} else {
+		case types.Is(x.Type, types.WideChar):
+			elem = types.WideChar
+		default:
 			c.fail(s.In.Pos(), source.ErrTypeMismatch, "array, string or set expected")
 		}
 	}

@@ -1,0 +1,16 @@
+type TBuchstabe = 'a'..'z' (size 1, align 1)
+type TBreit = #$0100..#$017F (size 2, align 2)
+type TMisch = 'a'..#$20AC (size 2, align 2)
+type TKurz = -1000..1000 (size 2, align 2)
+type TRec = record (size 6, align 2)
+  C: Char @0
+  W: WideChar @2
+  S: SmallInt @4
+const Euro = #$20AC: WideChar
+const Ae: WideChar = #$00E4 (size 2)
+const Klein: SmallInt = -32768 (size 2)
+const Text_ = "x€": string
+var W: WideChar (size 2)
+var S: SmallInt (size 2)
+var Wort: Word (size 2)
+var R: TRec (size 6)

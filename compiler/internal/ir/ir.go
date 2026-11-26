@@ -32,8 +32,10 @@ type MemType int
 
 // Speichertypen.
 const (
-	MemI8 MemType = iota // Byte mit Vorzeichen (ShortInt, Teilbereiche mit negativer Untergrenze)
-	MemU8                // Byte ohne Vorzeichen
+	MemI8  MemType = iota // Byte mit Vorzeichen (ShortInt, Teilbereiche mit negativer Untergrenze)
+	MemU8                 // Byte ohne Vorzeichen
+	MemI16                // 16 Bit mit Vorzeichen (SmallInt, Teilbereiche)
+	MemU16                // 16 Bit ohne Vorzeichen (Word, Teilbereiche, Aufzählungen)
 	MemI32
 	MemF32
 	MemF64
@@ -44,6 +46,8 @@ func (m MemType) Size() int64 {
 	switch m {
 	case MemI8, MemU8:
 		return 1
+	case MemI16, MemU16:
+		return 2
 	case MemF64:
 		return 8
 	}
@@ -166,6 +170,7 @@ const (
 	IntToF   // i32 → f64
 	FToInt   // f64 → i32 (abschneiden)
 	Ext8     // Vorzeichenerweiterung des unteren Bytes
+	Ext16    // Vorzeichenerweiterung der unteren 16 Bit
 	RoundF32 // auf Single-Genauigkeit runden (f64 → f32 → f64)
 	ExtS64   // i32 → i64 mit Vorzeichen
 	ExtU64   // i32 → i64 ohne Vorzeichen
@@ -175,7 +180,7 @@ var opNames = [...]string{
 	"add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr",
 	"eq", "ne", "lt", "le", "gt", "ge",
 	"fadd", "fsub", "fmul", "fdiv", "feq", "fne", "flt", "fle", "fgt", "fge",
-	"eqz", "fneg", "fabs", "fsqrt", "ftrunc", "itof", "ftoi", "ext8", "f32", "ext64s", "ext64u",
+	"eqz", "fneg", "fabs", "fsqrt", "ftrunc", "itof", "ftoi", "ext8", "ext16", "f32", "ext64s", "ext64u",
 }
 
 func (o Op) String() string { return opNames[o] }

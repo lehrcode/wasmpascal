@@ -358,6 +358,10 @@ func (fg *funcGen) loadOp(m ir.MemType, off int64) {
 		c.Mem(wasm.OpI32Load8S, 0, uint32(off))
 	case ir.MemU8:
 		c.Mem(wasm.OpI32Load8U, 0, uint32(off))
+	case ir.MemI16:
+		c.Mem(wasm.OpI32Load16S, 1, uint32(off))
+	case ir.MemU16:
+		c.Mem(wasm.OpI32Load16U, 1, uint32(off))
 	case ir.MemI32:
 		c.Mem(wasm.OpI32Load, 2, uint32(off))
 	case ir.MemF32:
@@ -373,6 +377,8 @@ func (fg *funcGen) storeOp(m ir.MemType, off int64) {
 	switch m {
 	case ir.MemI8, ir.MemU8:
 		c.Mem(wasm.OpI32Store8, 0, uint32(off))
+	case ir.MemI16, ir.MemU16:
+		c.Mem(wasm.OpI32Store16, 1, uint32(off))
 	case ir.MemI32:
 		c.Mem(wasm.OpI32Store, 2, uint32(off))
 	case ir.MemF32:
@@ -459,6 +465,7 @@ var unOps = map[ir.Op][]byte{
 	ir.IntToF:   {wasm.OpF64ConvertI32S},
 	ir.FToInt:   {wasm.OpI32TruncF64S},
 	ir.Ext8:     {wasm.OpI32Extend8S},
+	ir.Ext16:    {wasm.OpI32Extend16S},
 	ir.RoundF32: {wasm.OpF32DemoteF64, wasm.OpF64PromoteF32},
 	ir.ExtS64:   {wasm.OpI64ExtendI32S},
 	ir.ExtU64:   {wasm.OpI64ExtendI32U},

@@ -37,8 +37,11 @@ end.
 
 - **Sprache:** Turbo Pascal 4.0 ohne OOP, mit Units, `goto`, Mengen, Zeigern
   und typisierten Konstanten; dazu `Result`, `Break`/`Continue`, `Low`/`High`,
-  `const`-Parameter, `for … in` und Funktionen mit Record- oder
-  Array-Ergebnis. `Integer` hat 32 Bit, Texte sind UTF-8.
+  `const`-Parameter, `for … in`, Funktionen mit Record- oder
+  Array-Ergebnis, `SmallInt` und `WideChar`. `Integer` hat 32 Bit, `Word`
+  und `SmallInt` 16 Bit. Texte sind UTF-8; `WideChar` und die Routinen
+  `UTF8Length`, `UTF8Next`, `UTF8Index` und `UTF8Copy` arbeiten
+  zeichenweise statt byteweise.
 - **Units:** `System` (Ein- und Ausgabe, Text-, typisierte und untypisierte
   Dateien samt `FileMode`, Verzeichnisse, Strings, Mathematik, Heap), `Crt`
   (Farben, `ClrScr`, `GotoXY`, `Delay`, `ReadKey` zeilenweise) und `Dos`

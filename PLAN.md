@@ -29,10 +29,12 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 - Quelltext muss gültiges UTF-8 sein, sonst Compilerfehler mit Hinweis auf `iconv -f CP437 -t UTF-8`. Ein BOM am Anfang wird übersprungen.
 - Bezeichner und Schlüsselwörter bestehen nur aus ASCII; in String-Literalen und Kommentaren ist beliebiges UTF-8 erlaubt.
 - `string` bleibt der ShortString von TP: Längenbyte plus höchstens 255 **Bytes**. `Length` zählt Bytes (`Length('Größe')` = 7), `s[0]` bleibt das Längenbyte. Es gibt keine längeren oder dynamischen Strings.
-- `Char` ist ein Byte. Ein Literal in Hochkommas, das mehr als ein Byte lang ist (`'ä'`), ist ein String und kein `Char`.
+- `Char` ist ein Byte. Ein Literal in Hochkommas, das mehr als ein Byte lang ist (`'ä'`), ist ein String und kein `Char`; wo ein `WideChar` erwartet wird, gilt ein Literal mit genau einem Zeichen bis U+FFFF als `WideChar` (seit Etappe 14).
+- `WideChar` (seit Etappe 14) ist ein einzelnes Zeichen bis U+FFFF; als String eingesetzt wird es zu UTF-8. Die Hilfsfunktionen `UTF8Length`, `UTF8Next`, `UTF8Index` und `UTF8Copy` arbeiten zeichenweise, `for … in` mit `WideChar`-Laufvariable ebenso.
+- In Literalen sind Steuerzeichen außer Tabulator und Noncharacters verboten (Error 907; Steuerzeichen über `#n`), Bidi-Steuerzeichen im ganzen Quelltext (Error 908).
 - `Copy`, `Delete`, `Insert` und Indizierung arbeiten auf Bytes und können ein Mehrbyte-Zeichen zerschneiden.
 - `UpCase` und die Groß-/Kleinschreibung von Bezeichnern betreffen nur a–z.
-- `#nnn` und `Chr(n)` über 127 erzeugen das rohe Byte. Alte Programme, die Rahmen mit CP437-Nummern zeichnen (`#196`, `Chr(219)`), geben deshalb ungültiges UTF-8 aus; das ist eine bewusste Abweichung.
+- `#nnn` bis 255 und `Chr(n)` über 127 erzeugen das rohe Byte; `#n` von 256 bis 65535 ist ein `WideChar` (ohne Surrogate und Noncharacters). Alte Programme, die Rahmen mit CP437-Nummern zeichnen (`#196`, `Chr(219)`), geben deshalb ungültiges UTF-8 aus; das ist eine bewusste Abweichung.
 - Textdateien (`Text`) werden als UTF-8 gelesen und geschrieben, ohne Umwandlung; typisierte und untypisierte Dateien sind ohnehin Rohbytes.
 
 **Erweiterungen aus späteren Versionen:** Diese Sprachmittel kommen über TP 4.0 hinaus dazu. Keines braucht ein neues reserviertes Wort; `Result`, `Break`, `Continue`, `Low` und `High` sind vordefinierte Bezeichner.
@@ -46,7 +48,9 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 | `const`-Parameter | TP 7 | Im Rumpf schreibgeschützt. Records, Arrays, Strings und Mengen werden per Adresse übergeben, ohne Kopie; Skalare per Wert. |
 | Funktionsaufruf als Anweisung | TP 6 (`{$X+}`), Delphi | Immer erlaubt, ohne Schalter: Das Ergebnis eigener Funktionen wird verworfen. Wie bei `{$X+}` gilt das nicht für Standardfunktionen der System-Unit. |
 | Strukturierte Funktionsergebnisse | Delphi 1.0 | Funktionen dürfen alle Typen außer Dateien zurückgeben, also auch Records, Arrays und Mengen. Der Ergebnistyp ist ein Typbezeichner. Felder und Elemente des Ergebnisses setzt man über `Result`; `F.x` im Rumpf ist ein rekursiver Aufruf. |
-| `for … in` | Delphi 2005 | Über Arrays (alle Elemente in Indexreihenfolge), Strings (Bytes als `Char`) und Mengen (enthaltene Elemente aufsteigend). Die Schleifenvariable ist im Rumpf schreibgeschützt. Keine Enumeratoren, da es keine Klassen gibt. |
+| `WideChar` | Delphi 2.0 | Ein Unicode-Zeichen bis U+FFFF, 2 Byte; Ordinal- und Zeichentyp ohne Arithmetik; als String eingesetzt UTF-8 (Etappe 14). |
+| `SmallInt` | Delphi | 16 Bit mit Vorzeichen, 2 Byte; jede Zuweisung kürzt auf 16 Bit (Etappe 14). |
+| `for … in` | Delphi 2005 | Über Arrays (alle Elemente in Indexreihenfolge), Strings (Bytes als `Char`, mit `WideChar`-Laufvariable die UTF-8-Zeichen – eigene Erweiterung, Etappe 14) und Mengen (enthaltene Elemente aufsteigend). Die Schleifenvariable ist im Rumpf schreibgeschützt. Keine Enumeratoren, da es keine Klassen gibt. |
 
 Bewusst nicht aufgenommen: offene Array-Parameter (`array of T`) und Standardwerte für Parameter.
 
@@ -175,10 +179,10 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 | Turbo Pascal | In WASM-Werten | Im Speicher |
 | --- | --- | --- |
 | Byte, ShortInt, Char, Boolean | `i32` | 1 Byte; jede Zuweisung kürzt auf 8 Bit |
+| SmallInt, Word, WideChar | `i32` | 2 Byte; jede Zuweisung kürzt auf 16 Bit (seit Etappe 14; `Word` vorher 4 Byte ohne Kürzung) |
 | Integer | `i32` | 4 Byte, Bereich wie LongInt (`MaxInt` = 2147483647) |
-| Word | `i32` | 4 Byte, Bereich 0..65535 (kein 16-Bit-Überlauf) |
 | LongInt | `i32` | 4 Byte |
-| Aufzählungen, Teilbereiche | `i32` | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen, sonst 4 Byte |
+| Aufzählungen, Teilbereiche | `i32` | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen, 2 Byte in 0..65535 bzw. −32768..32767, sonst 4 Byte (wie TP) |
 | Real, Double, Extended, Comp | `f64` | 8 Byte |
 | Single | `f32` | 4 Byte |
 | Zeiger, `nil` | `i32` | 4 Byte |
@@ -190,9 +194,9 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 
 **Festlegungen zu Wertebereichen (nach Etappe 1):**
 
-- `Integer` hat den Bereich von `LongInt`; `MaxInt` = `High(Integer)` = 2147483647. `Word` bleibt 0..65535; Konstanten außerhalb davon sind Compilerfehler, gerechnet wird aber in 32 Bit ohne 16-Bit-Kürzung.
-- `Byte`, `ShortInt` und `Char` werden bei jeder Zuweisung auf 8 Bit gekürzt (`ShortInt` mit Vorzeichenerweiterung), egal ob die Variable in einem WASM-Local oder im Speicher liegt. `b := b + 1` ergibt bei `b = 255` also immer 0, wie in TP mit `{$R-}`. Teilbereiche mit 1 Byte Speicher werden ebenso gekürzt.
-- Die Speichergröße eines Teilbereichs richtet sich nach dem Wertebereich, nicht nach der Anzahl der Werte: `1000..1100` belegt 4 Byte.
+- `Integer` hat den Bereich von `LongInt`; `MaxInt` = `High(Integer)` = 2147483647. `Word` bleibt 0..65535; Konstanten außerhalb davon sind Compilerfehler. *Geändert in Etappe 14:* `Word` belegt wie in TP 2 Byte und wird bei jeder Zuweisung auf 16 Bit gekürzt (`65535 + 1` ergibt 0); vorher 4 Byte ohne Kürzung.
+- `Byte`, `ShortInt` und `Char` werden bei jeder Zuweisung auf 8 Bit gekürzt (`SmallInt`, `Word` und `WideChar` seit Etappe 14 entsprechend auf 16 Bit) (`ShortInt` mit Vorzeichenerweiterung), egal ob die Variable in einem WASM-Local oder im Speicher liegt. `b := b + 1` ergibt bei `b = 255` also immer 0, wie in TP mit `{$R-}`. Teilbereiche mit 1 Byte Speicher werden ebenso gekürzt.
+- Die Speichergröße eines Teilbereichs richtet sich nach dem Wertebereich, nicht nach der Anzahl der Werte: `1000..1100` belegt 2 Byte (bis Etappe 13: 4 Byte), `-1..40000` belegt 4 Byte.
 
 **Speicheraufteilung (linearer Speicher):**
 
@@ -786,6 +790,302 @@ jeweils mit genau einer Antwortzeile und läuft danach weiter; erzeugte
 Module sind byte-gleich zu `compiler.Compile`; kein Zugriff auf
 Hostdateien; alle bisherigen Tests sind grün.
 - *Erledigt (Nov 25, 2026).* `internal/compilereq` (`Request`, `Response`, `Decode`, `Handle`, `RequestError`; unbekannte Felder und ungültige Namen sind kaputte Anfragen, Fehler ohne Diagnostic aus `compiler.Compile` ebenso) und `pascal serve` (`cmd/pascal/serve.go`: `-timeout`, `-memory`, `-maxrequest`, Leerzeilen werden übersprungen, Strg+C ohne ANSI-Ausgabe). Tests: `internal/compilereq` (byte-gleiche Module für wasi und gojs, Quelltextfehler, neun kaputte Anfragen, Grenzen, keine Hostdateien, Zeitlimit, interner Fehler und Panic, `Example`), `cmd/pascal/serve_test.go` (Folge aus sieben Anfragen samt kaputter und zu langer Zeile, Zeitlimit, Optionen). README mit Shell- und Go-Beispiel, beide ausgeführt.
+
+### Etappe 14: `WideChar`, 16-Bit-Ganzzahlen und UTF-8-Hilfsfunktionen ✅
+
+**Ziel:** Einzelne Unicode-Zeichen lassen sich als Wert behandeln, und
+UTF-8-Strings lassen sich zeichenweise statt byteweise verarbeiten.
+`string` bleibt UTF-8 mit 255 Bytes, `Char` bleibt ein Byte. Dazu kommen
+16-Bit-Ganzzahlen wie in TP: `SmallInt` neu, `Word` künftig mit 2 Byte.
+
+**Entscheidungen (nach Rückfrage):**
+
+- Zeichen außerhalb der Basic Multilingual Plane (U+10000 und höher, z. B.
+  Emojis) passen wie in Delphi nicht in ein `WideChar`.
+- `SmallInt` (16 Bit mit Vorzeichen) kommt neu hinzu. `Word` belegt
+  künftig wie in TP 2 Byte, und jede Zuweisung kürzt auf 16 Bit
+  (`65535 + 1` ergibt 0). Das löst die Festlegung aus Etappe 1 („Word
+  4 Byte, kein 16-Bit-Überlauf“) ab. Teilbereiche und Aufzählungen belegen
+  wie in TP 1, 2 oder 4 Byte. `Integer` bleibt 32 Bit.
+- Im Quelltext werden Steuerzeichen (U+0000–U+001F außer Tabulator) in
+  String- und Zeichenliteralen verboten, wie JSON sie in Strings nur als
+  Escape erlaubt; sie bleiben über `#n` erreichbar. Bidi-Steuerzeichen
+  werden im ganzen Quelltext verboten (Schutz gegen „Trojan Source“).
+- Noncharacters (U+FDD0–U+FDEF und die jeweils letzten zwei Codepoints
+  jeder Ebene, U+FFFE/U+FFFF bis U+10FFFE/U+10FFFF) und einzelne Surrogate
+  (U+D800–U+DFFF) sind als Zeichenkonstanten verboten: weder direkt im
+  Literal noch über `#n`.
+
+#### 16-Bit-Ganzzahlen und Speichergrößen
+
+| Typ | Wertebereich | Im Speicher | Zuweisung |
+| --- | --- | --- | --- |
+| `SmallInt` (neu, aus Delphi) | −32768..32767 | 2 Byte, Ausrichtung 2 | kürzt auf 16 Bit mit Vorzeichen |
+| `Word` (geändert) | 0..65535 | 2 Byte, Ausrichtung 2 (bisher 4) | kürzt auf 16 Bit (bisher keine Kürzung) |
+| Teilbereiche | wie bisher | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen; **2 Byte**, wenn in 0..65535 bzw. −32768..32767; sonst 4 | auf die Speichergröße gekürzt |
+| Aufzählungen | wie bisher | 1 Byte bis 256 Werte, **2 Byte** bis 65536, sonst 4 | |
+
+- Gerechnet wird weiter in 32 Bit (`i32`); gekürzt wird nur beim Speichern,
+  genau wie heute bei den 1-Byte-Typen: in WASM-Locals mit `and $FFFF` bzw.
+  Vorzeichenerweiterung (`i32.extend16_s`), im Speicher über 16-Bit-Zugriffe.
+- Konstanten außerhalb des Bereichs bleiben Compilerfehler (Error 76),
+  Typumwandlungen (`SmallInt(x)`, `Word(x)`) kürzen.
+- `SmallInt` ist ein Ganzzahltyp wie `ShortInt`; für das Ergebnis von
+  Ausdrücken gilt dieselbe Regel wie heute (`Integer`, mit `LongInt` dann
+  `LongInt`).
+- Folgen: `SizeOf(Word)` = 2, Records und typisierte Dateien mit
+  `Word`-Feldern haben das Layout von TP (binäre Dateien aus TP passen).
+  `testdata/etappe4/typen.out` ändert sich (`Word 65535+1 = 0`), weitere
+  Ausgaben möglicherweise bei `SizeOf` von Records; jeden Diff mit
+  `-update` prüfen und im Bericht nennen. `GetDate`/`GetTime`,
+  `Delay`/`Sound` haben `Word`-Parameter und laufen unverändert.
+
+#### Der Typ `WideChar`
+
+| Eigenschaft | Festlegung |
+| --- | --- |
+| Herkunft | Delphi 2.0 |
+| Wertebereich | `#0`..`#$FFFF` (UTF-16-Codeeinheit). Surrogate (U+D800..U+DFFF) und Noncharacters (U+FDD0..U+FDEF, U+FFFE, U+FFFF) lassen sich nicht als Konstante schreiben (Error 76), entstehen aber über `WideChar(n)` und als `High(WideChar)`; beim Dekodieren entstehen Surrogate nie |
+| Darstellung | WASM-Wert `i32`, im Speicher 2 Byte, Ausrichtung 2 |
+| Art | Ordinaltyp und Zeichentyp, kein Ganzzahltyp: keine Arithmetik (`w + 1` ist Error 41), aber `Ord`, `Succ`, `Pred`, `Inc`, `Dec`, `Low`, `High`, Vergleiche, `case`-Marken, Array-Index, `for`-Laufvariable, Teilbereiche (Größe nach der Tabelle oben) |
+| Mengen | `set of WideChar` ist wie jede Menge mit mehr als 256 Elementen ein Fehler (Error 23); Teilbereiche innerhalb `#0`..`#255` sind erlaubt |
+| Typumwandlung | `WideChar(n)` aus jedem Ordinalwert (auf 16 Bit gekürzt), `Char(w)` auf 8 Bit gekürzt, `Word(w)`, `Integer(w)` usw. wie bei anderen Ordinaltypen |
+| Ausgabe als UTF-8 | 1–3 Bytes; ein Surrogat-Wert (U+D800..U+DFFF) wird als U+FFFD ausgegeben, damit nie ungültiges UTF-8 entsteht |
+
+**Konstanten:**
+
+- Ein String-Literal, das genau **ein** Unicode-Zeichen bis U+FFFF enthält
+  (`'ä'`, `'€'`), ist zuweisungsverträglich mit `WideChar` und darf überall
+  stehen, wo ein `WideChar` erwartet wird (Zuweisung, Wertparameter,
+  Vergleich mit einem `WideChar`, `case`-Marke über einem `WideChar`,
+  typisierte Konstante, Teilbereichsgrenze nach `WideChar(…)`). Ohne
+  solchen Kontext bleibt es wie bisher ein String (bzw. `Char`, wenn es
+  ein Byte lang ist), damit `Write('ä')` und `s := 'ä'` unverändert
+  funktionieren.
+- **Vorrang beim Vergleich:** Steht ein solches Literal einem `WideChar`
+  gegenüber (`w = 'ä'`, `w < '€'`), wird es `WideChar`, und verglichen wird
+  ordinal. Die Regel „`WideChar` → String beim Vergleich mit einem String“
+  gilt nur für String-Ausdrücke, die kein solches Literal sind. (Für
+  Zeichen bis U+FFFF käme dasselbe heraus, weil UTF-8 die Reihenfolge der
+  Codepoints erhält; der ordinale Vergleich ist aber billiger und
+  eindeutig.)
+- Ein Literal mit einem Zeichen ab U+10000 ergibt in `WideChar`-Kontext
+  Error 76 („Constant out of range“).
+- `#n` mit n in 256..65535 (auch `#$20AC`) ist eine `WideChar`-Konstante,
+  wie in Delphi; ausgenommen Surrogate (`#$D800`..`#$DFFF`) und
+  Noncharacters (`#$FDD0`..`#$FDEF`, `#$FFFE`, `#$FFFF`), die Error 76
+  „Constant out of range (surrogate)“ bzw. „(noncharacter)“ ergeben. `#n` bis 255 bleibt `Char` (ein **Byte**: `#$E9` ist also
+  nicht `'é'`, das als UTF-8 zwei Bytes hat; als Abweichung dokumentieren);
+  über 65535 bleibt es Error 76. `#n`-Folgen mit gemischten Größen
+  (`'x'#$20AC`) sind Strings: Jedes `WideChar` darin wird als UTF-8
+  eingesetzt.
+- Der Lexer setzt `#n` über 255 als UTF-8 in den Wert des String-Tokens
+  ein und vermerkt im Token, wenn es aus genau einem solchen `#n` besteht
+  (Feld mit dem Codepoint). Die Typprüfung macht daraus eine
+  `WideChar`-Konstante, sonst einen String.
+
+**Verträglichkeit:**
+
+| Von → nach | Regel |
+| --- | --- |
+| `Char` → `WideChar` | implizit, über den Ordinalwert (Byte 128..255 wird zu U+0080..U+00FF; sinnvoll nur für ASCII, als Abweichung in `docs/abweichungen.md`) |
+| `WideChar` → `Char` | nur explizit mit `Char(w)` |
+| `WideChar` → `string` | implizit überall, wo ein String-Wert erwartet wird: Zuweisung, Wert- und `const`-Parameter, `+`, `Concat`, Vergleich mit einem String (siehe Vorrang oben) und die Standardroutinen mit String-Argument (`Length`, `Pos`, `Copy`, `Insert`, `Assign`, `ChDir`, `MkDir`, `RmDir`, `Val`, …). Das Zeichen wird als UTF-8 eingesetzt; `Length(w)` liefert also 1–3 (Bytes). |
+| `string` → `WideChar` | nie implizit (Error 26); dafür `UTF8Next` |
+| `WideChar` ↔ `WideChar`/`Char` im Vergleich | ordinal, `Char` wird erweitert |
+| `var`-Parameter | identischer Typ wie bisher |
+
+**Ein- und Ausgabe:**
+
+- `Write(w)`/`Write(w:n)` schreibt das Zeichen als UTF-8; die Breite zählt
+  Zeichen, nicht Bytes (also `n − 1` Leerzeichen davor).
+- `Read(F, w)` auf einer Textdatei (auch `Input`) liest eine
+  UTF-8-Sequenz von 1–4 Bytes und dekodiert sie. Eine Sequenz wird immer
+  ganz verbraucht; ungültige Bytes (je Byte), Überlangkodierungen und
+  Zeichen ab U+10000 (alle 4 Bytes zusammen) ergeben einmal `#$FFFD`. Am
+  Zeilenende `#10`, am Dateiende `#26`, wie `_ReadChar`.
+- `file of WideChar` speichert 2 Bytes little-endian, wie jede typisierte
+  Datei die Rohbytes.
+- `Str`/`Val` gibt es für `WideChar` nicht; `UpCase` bleibt auf `Char`
+  beschränkt.
+
+**`for … in` über Strings:** Ist die Laufvariable ein `WideChar`, läuft die
+Schleife über die **Zeichen** des Strings (dekodiert wie `UTF8Next`, also
+ungültige Bytes und Zeichen ab U+10000 als `#$FFFD`). Ist sie ein `Char`,
+bleibt es bei den Bytes. Das ist eine kleine eigene Erweiterung von
+`for … in` (Delphi kennt den Fall nicht, weil Strings dort UTF-16 sind).
+
+**Hinweis für die Doku:** `s[i]` ist ein **Byte**. `w := s[1]` mit
+`s = 'ä'` ergibt `'Ã'` (U+00C3, das erste UTF-8-Byte über die
+`Char`→`WideChar`-Regel). Zeichenweise Zugriffe gehen über `UTF8Next`
+bzw. `for … in` mit `WideChar`; das gehört mit Beispiel in
+`docs/units.md`.
+
+#### Prüfungen des Quelltexts
+
+| Was | Wo | Fehler |
+| --- | --- | --- |
+| Steuerzeichen U+0000–U+001F außer Tabulator (U+0009) **direkt** in einem String- oder Zeichenliteral `'…'` | Lexer, beim Lesen des Literals | 907 „Invalid character in string literal (control character U+001B); use #27“ (Stelle des Zeichens) |
+| Noncharacter **direkt** in einem Literal (U+FDD0–U+FDEF, U+xFFFE, U+xFFFF aller Ebenen) | Lexer, beim Lesen des Literals | 907 „Invalid character in string literal (noncharacter U+FFFE)“ |
+| Surrogat oder Noncharacter über `#n` (`#$D800`..`#$DFFF`, `#$FDD0`..`#$FDEF`, `#$FFFE`, `#$FFFF`) | Lexer, bei `#n` | 76 „Constant out of range (surrogate)“ bzw. „(noncharacter)“ |
+| Surrogat direkt im Quelltext | `source.Loader` (UTF-8-Prüfung, schon vorhanden) | 900 wie bisher: kodierte Surrogate sind kein gültiges UTF-8 |
+| Bidi-Steuerzeichen U+202A–U+202E und U+2066–U+2069 **irgendwo** im Quelltext, auch in Kommentaren und Literalen | `source.Loader`, gleich nach der UTF-8-Prüfung | 908 „Bidirectional control character (U+202E)“, in Literalen mit Hinweis auf `#$202E` |
+
+- Vorbild sind JSON (RFC 8259: Steuerzeichen in Strings nur als Escape)
+  und Rust bzw. GCC (`-Wbidi-chars`), die Bidi-Steuerzeichen wegen
+  CVE-2021-42574 („Trojan Source“) ablehnen: Mit ihnen kann ein Editor
+  Quelltext anders anzeigen, als er übersetzt wird.
+- Über `#n` bleibt alles erreichbar: `#27` für ANSI-Sequenzen, `#7`,
+  `'Zeile'#13#10`, nach dieser Etappe auch `#$202E`. Zeilenumbrüche im
+  Literal sind wie bisher Error 8.
+- Weiter erlaubt: Tabulator im Literal, Steuerzeichen und Noncharacters in
+  Kommentaren (außer Bidi), Null-Breite-Zeichen in Strings und Kommentaren,
+  Typumwandlungen wie `WideChar($FFFE)` und `High(WideChar)` (Werte, keine
+  Zeichenkonstanten) und alles im laufenden Programm (`Chr(7)`, eingelesene
+  Dateien; `Read` und `UTF8Next` dekodieren Noncharacters als gültige
+  Zeichen, Surrogat-Werte gibt `Write` als U+FFFD aus).
+- **TP-Kompatibilität:** TP nahm jedes Byte im Literal an; alte
+  DOS-Programme enthalten oft ein rohes ESC für ANSI-Sequenzen. Sie brechen
+  jetzt mit 907 ab und müssen auf `#27` umgestellt werden (Abweichung).
+
+#### UTF-8-Hilfsfunktionen in `rtl/system.pas`
+
+Alle in Pascal, öffentlich in der System-Unit. „Zeichen“ heißt
+Unicode-Codepoint; ein ungültiges Byte zählt als ein Zeichen und dekodiert
+zu `#$FFFD`. Indizes sind wie bei `Copy` 1-basiert.
+
+| Routine | Wirkung |
+| --- | --- |
+| `function UTF8Length(const S: string): Integer` | Anzahl der Zeichen |
+| `function UTF8Next(const S: string; var Index: Integer): WideChar` | dekodiert das Zeichen ab Byte `Index` und setzt `Index` dahinter; `Index` außerhalb von 1..`Length(S)` → `#0`, `Index` bleibt |
+| `function UTF8Index(const S: string; CharIndex: Integer): Integer` | Byte-Index des `CharIndex`-ten Zeichens; hinter dem letzten Zeichen `Length(S) + 1`, unter 1 → 1 |
+| `function UTF8Copy(const S: string; Index, Count: Integer): string` | wie `Copy`, aber in Zeichen gezählt (zerschneidet nie ein Zeichen) |
+
+Nicht aufgenommen: Löschen und Einfügen in Zeichen (geht mit `UTF8Index`
+plus `Delete`/`Insert`).
+
+#### Umsetzung (Hinweise)
+
+- `compiler/internal/types/types.go`: neue Arten `KWideChar` **direkt
+  hinter `KChar`** und `KSmallInt` **zwischen `KByte` und `KInteger`**
+  (dann stimmen `IsInteger` = `KShortInt`..`KLongInt` und `IsReal` ab
+  `KReal` weiter). `WideChar` und `SmallInt` mit `size: 2`, `Word` mit
+  `size: 2`; `Enum.Size` und `Subrange.Size` um die 2-Byte-Stufe
+  erweitern; Zeichentyp-Prüfungen (`IsOrdinal`, Ausrichtung) ergänzen.
+- **16-Bit-Speicherzugriffe:** `ir` bekommt `MemI16` und `MemU16`
+  (bisher nur `MemI8`, `MemU8`, `MemI32` und Gleitkomma); `codegen` nutzt
+  `i32.load16_s`/`i32.load16_u`/`i32.store16` (Opcodes hat der Encoder
+  schon) und kürzt Locals mit `and $FFFF` bzw. `i32.extend16_s` (dafür in
+  `ir` eine Operation `Ext16` analog zu `Ext8`); `encode`
+  schreibt 2-Byte-Werte für typisierte Konstanten.
+- `compiler/internal/check/universe.go`: `WideChar` und `SmallInt` als
+  vordefinierte Typen; `UTF8…` kommen über `rtl/system.pas`.
+- `compiler/internal/check/expr.go`: `isStringish` wird an acht Stellen
+  benutzt (u. a. `stringExpr` für alle Standardroutinen mit
+  String-Argument, `compatible`, `isAssignable`, `binary`, `read`,
+  `write`) – jede Stelle ausdrücklich auf die Regeln oben prüfen.
+  `compatible` prüft Ordinaltypen vor Strings; `Char` gegen `WideChar`
+  muss dort als verträglich (ordinal) gelten. Literale mit einem Zeichen
+  bis U+FFFF im `WideChar`-Kontext.
+- `compiler/internal/lexer`: `#n` bis 65535 zulassen, UTF-8 in den Wert
+  einsetzen, Codepoint im Token vermerken (siehe Konstanten).
+- `compiler/internal/check/stmt.go` und `ir/lower.go`: `for … in` mit
+  `WideChar`-Laufvariable über Strings (über `UTF8Next`).
+- `compiler/internal/ir/lower_builtin.go` und `lower_expr.go`: `Write` und
+  `Read` für `WideChar`, Umwandlung `WideChar` → String an allen
+  Stellen von `isStringish`.
+- `rtl/system.pas`: `_WriteWideChar`, `_ReadWideChar`, `_WideCharToStr`
+  (UTF-8-Kodierung, 1–3 Bytes, Surrogate → U+FFFD) und die öffentlichen
+  Routinen aus der Tabelle; keine neuen Intrinsics.
+- Neue Fehlernummern nur für die Quelltext-Prüfungen: 907 und 908 in
+  `compiler/internal/source/error.go`; sonst reichen 26, 41, 76 und 23.
+- Lexer: im String-Literal jedes Zeichen unter U+0020 außer Tabulator und
+  jedes Noncharacter mit 907 ablehnen; bei `#n` Surrogate und
+  Noncharacters mit 76. `source.Loader`: nach `utf8.Valid` die Bidi-Codepoints
+  suchen (die Position wie bei Error 900 bestimmen).
+
+#### Tests
+
+- `testdata/etappe14/ganzzahl16.pas`: `SmallInt` und `Word` mit Überlauf
+  bei Zuweisung (`32767 + 1` → −32768, `65535 + 1` → 0), auch als
+  Record-Feld, Array-Element, `var`-Parameter und in typisierten
+  Konstanten; `SizeOf` von `SmallInt`, `Word`, Teilbereichen (`0..1000`
+  → 2, `-1..40000` → 4) und einer Aufzählung mit 300 Werten (→ 2);
+  `file of Word` mit Dateigröße = 2 × Anzahl; Typumwandlungen.
+- `testdata/etappe14/widechar.pas`: Zuweisungen aus Literalen (`'ä'`,
+  `'€'`, `#$20AC`), `Ord`, `Succ`/`Pred`, `Inc`/`Dec`, `Low`/`High`,
+  Vergleiche mit `Char`, `WideChar` und Literalen (ordinal), `case` mit
+  `WideChar`-Marken, Array mit `WideChar`-Index, Verkettung mit Strings,
+  `Length(w)`, `Write` mit Breite, Surrogat-Wert in `Write` (→ U+FFFD),
+  Typumwandlungen in beide Richtungen, `SizeOf(WideChar)` = 2, `#$E9`
+  gegen `'é'`, `s[1]`-Falle.
+- `testdata/etappe14/utf8.pas`: alle Hilfsfunktionen, auch mit
+  ungültigen Bytes (`#$FF`), abgeschnittenen Sequenzen, leeren Strings,
+  Indizes außerhalb; `for … in` mit `WideChar` und mit `Char` über
+  denselben String.
+- `testdata/etappe14/lesen.pas` mit `.in`: `Read` einzelner `WideChar`
+  aus einer Eingabe mit Umlauten, `€`, einem Emoji (→ einmal `#$FFFD`),
+  einem ungültigen Byte und Zeilenende (`#10`).
+- `testdata/etappe14/datei.pas`: `file of WideChar` schreiben und lesen,
+  Dateigröße = 2 × Anzahl.
+- Fehlertests (`*.err`): `set of WideChar` (23), Emoji-Literal an
+  `WideChar` (76), `#70000` (76), String-Variable an `WideChar` (26),
+  `w + 1` (41), `WideChar` an `var c: Char` (26), `SmallInt`-Konstante
+  40000 (76).
+- `compiler/internal/check/testdata`: Symbol-Golden-Test mit `WideChar`
+  und `SmallInt` in Typ-, Konstanten- und Variablendeklarationen.
+- Lexer-Test für `#256`, `#$FFFD` (größter erlaubter Wert unterhalb der
+  Noncharacters), `#$FFFF` und `#$FFFE` (76, noncharacter), `#$FDD0` (76),
+  `#$D800` und `#$DFFF` (76, surrogate), `#$D7FF` und `#$E000` (erlaubt),
+  `#65536` (76) – der bisherige Fall „# zu groß“ mit `#256` ändert sich.
+- Quelltext-Prüfungen (Lexer- bzw. Source-Tests und `*.err`): rohes ESC und
+  NUL im Literal (907 an der Stelle des Zeichens, Meldung mit `#27` bzw.
+  `#0`), Tabulator im Literal erlaubt, `#27` erlaubt, Steuerzeichen im
+  Kommentar erlaubt; U+202E im Kommentar, im Literal und in einer
+  `{$I}`-Datei (908 mit Datei und Stelle), U+2066 ebenso; U+FFFE, U+FDD0
+  und U+10FFFF im Literal (907, noncharacter), im Kommentar erlaubt;
+  U+200B im Literal erlaubt; `WideChar($FFFE)` und `High(WideChar)`
+  übersetzen.
+- Prüfen, dass kein bestehendes Testprogramm und kein Beispiel in
+  `web/beispiele/` ein rohes Steuerzeichen im Literal enthält.
+- Bestehende Golden-Files mit `-update` neu schreiben und jeden Diff prüfen
+  (mindestens `typen.out`).
+- Alle neuen Programme laufen wie üblich auch unter `gojs`, mit erzwungener
+  Frame-Ablage und mit dem Browser-Compiler (byte-gleich).
+
+#### Doku
+
+- `PLAN.md`: Typabbildung (`Word` 2 Byte, Zeilen `SmallInt` und
+  `WideChar`), „Festlegungen zu Wertebereichen“ (Word mit 16-Bit-Kürzung),
+  Regel für Teilbereiche und Aufzählungen, Abschnitt Zeichensatz (Hinweis
+  auf `WideChar` und die Hilfsfunktionen), Tabelle der Erweiterungen um
+  `WideChar` (Delphi 2.0), `SmallInt` und `for … in` mit `WideChar`.
+- `CLAUDE.md`: Typtabelle (`Word`, `SmallInt`, `WideChar`, Teilbereiche
+  und Aufzählungen), Erweiterungsliste.
+- `docs/units.md`: Typtabelle (`SmallInt`, `Word` mit 2 Byte, `WideChar`),
+  `WideChar` (Konstanten, Ein-/Ausgabe), die vier Routinen mit Beispielen,
+  ausdrücklich `UTF8Next` statt `s[i]` für Zeichen.
+- `docs/abweichungen.md`: Zeilen für Etappe 14 (Umwandlung `Char` →
+  `WideChar` über den Ordinalwert, `#128`..`#255` als Byte, `#$FFFD` für
+  ungültige Eingaben, Surrogate → U+FFFD, `for … in` mit `WideChar`,
+  `Length(w)` in Bytes, Steuerzeichen in Literalen nur über `#n`,
+  Bidi-Steuerzeichen verboten, Noncharacters und Surrogate als
+  Zeichenkonstanten verboten, Fehler 907 und 908); die Zeile aus Etappe 1
+  zu `Word` als überholt kennzeichnen.
+- `README.md`, Abschnitt Umfang: `WideChar`, `SmallInt`, 16-Bit-`Word` und
+  UTF-8-Hilfsfunktionen.
+
+**Fertig, wenn:** ein Programm Umlaute und `€` als `WideChar` speichern,
+vergleichen, in `case` verwenden, ausgeben und einlesen kann; die
+Hilfsfunktionen zählen, kopieren und durchlaufen UTF-8-Strings zeichenweise
+auch mit ungültigen Bytes korrekt; `SmallInt` und `Word` belegen 2 Byte und
+laufen bei Zuweisung wie in TP über; rohe Steuerzeichen in Literalen und
+Bidi-Steuerzeichen im Quelltext werden mit 907 bzw. 908 abgelehnt,
+Noncharacters und Surrogate als Zeichenkonstanten mit 907 bzw. 76; alle
+Fehlertests melden die erwarteten
+Nummern; alle bisherigen Tests (mit geprüften Diffs) sind unter WASI,
+`gojs` und mit dem Browser-Compiler grün.
+- *Erledigt (Nov 26, 2026).* `SmallInt` neu, `Word`, Teilbereiche und Aufzählungen mit 2 Byte (IR `MemI16`/`MemU16`, `Ext16`); `WideChar` als Basistyp hinter `Char`, Verträglichkeit über `charPair`/`isWide` statt über `host` (sonst würden `'a'..'z'`-Teilbereiche zu `WideChar`), Literale mit einem Zeichen über `wideLiteral` im Kontext (Zuweisung, Parameter, Vergleich, `case`, typisierte Konstante, Teilbereich, Array-Index); `#n` bis 65535 mit `CodePoint` im Token; Prüfungen 907 (Lexer) und 908 (`source.Loader`); Laufzeit `_WideCharToStr`, `_WriteWideChar`, `_ReadWideChar`, `UTF8Length`/`Next`/`Index`/`Copy`, `for … in` über `UTF8Next`. **Entscheidung bei der Umsetzung:** ungültige UTF-8-Folgen nach der Unicode-Empfehlung (maximal subpart, wie der Encoding-Standard der Browser) je Abschnitt als ein `#$FFFD`, nicht je Byte wie Go – nur so verhalten sich `Read` (sieht nur ein Byte voraus) und `UTF8Next` gleich; ein Byte, das nie gültig ist (`C0`, `FF`, …), bleibt ein eigenes Zeichen. Geänderte Golden-Files: `typen.out` (`Word 65535+1 = 0`, `SizeOf(w)` = 2), `deklarationen.sym` (Größen von `Word` und Teilbereich `1000..1100`), `lexer/zeichen_zu_gross.pas` (`#300` ist jetzt erlaubt, Test nutzt `#70000`). Tests: `testdata/etappe14/` (vier Programme, zehn Fehlertests), Lexer- und Source-Tests, `breit.sym`, Frame-Ablage. Nebenbei: `TestServeTimeout` mit mehr Abstand (unter Last lief auch die kleine Anfrage ins 20-ms-Limit).
 
 ## Arbeitsregeln für Claude Code
 

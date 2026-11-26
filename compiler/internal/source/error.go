@@ -111,13 +111,15 @@ const (
 	ErrInvalidFormat       = 135
 	ErrInvalidProcRef      = 143
 
-	ErrInvalidUTF8     = 900
-	ErrNonASCII        = 901
-	ErrNotSupported    = 902
-	ErrBreakOutside    = 903
-	ErrNestingTooDeep  = 904
-	ErrSourceTooLarge  = 905
-	ErrProgramTooLarge = 906
+	ErrInvalidUTF8       = 900
+	ErrNonASCII          = 901
+	ErrNotSupported      = 902
+	ErrBreakOutside      = 903
+	ErrNestingTooDeep    = 904
+	ErrSourceTooLarge    = 905
+	ErrProgramTooLarge   = 906
+	ErrInvalidStringChar = 907
+	ErrBidiChar          = 908
 )
 
 var messages = map[int]string{
@@ -203,6 +205,8 @@ var messages = map[int]string{
 	ErrSourceTooLarge:      "Source too large",
 	ErrNestingTooDeep:      "Nesting too deep",
 	ErrProgramTooLarge:     "Program too large",
+	ErrInvalidStringChar:   "Invalid character in string literal",
+	ErrBidiChar:            "Bidirectional control character",
 	ErrUnexpectedEOF:       "Unexpected end of file",
 	ErrInvalidFileName:     "Invalid file name",
 	ErrFileNotFound:        "File not found",

@@ -28,11 +28,13 @@ begründet.
 | --- | --- | --- |
 | `Boolean` | `False`, `True` | 1 Byte |
 | `Char` | ein Byte, `#0`..`#255` | 1 Byte |
+| `WideChar` | ein Unicode-Zeichen, `#0`..`#$FFFF` (siehe unten; aus Delphi) | 2 Byte |
 | `ShortInt` | −128..127 | 1 Byte |
 | `Byte` | 0..255 | 1 Byte |
+| `SmallInt` | −32768..32767 (aus Delphi) | 2 Byte |
 | `Integer` | −2147483648..2147483647 (**Abweichung:** wie `LongInt`, TP: 16 Bit) | 4 Byte |
 | `LongInt` | −2147483648..2147483647 | 4 Byte |
-| `Word` | 0..65535 | 4 Byte |
+| `Word` | 0..65535 | 2 Byte |
 | `Real`, `Double`, `Extended`, `Comp` | Gleitkomma doppelter Genauigkeit (**Abweichung:** alle gleich) | 8 Byte |
 | `Single` | Gleitkomma einfacher Genauigkeit | 4 Byte |
 | `Pointer` | untypisierter Zeiger, `nil` | 4 Byte |
@@ -40,10 +42,58 @@ begründet.
 
 Dazu die Typkonstruktoren der Sprache: `string` und `string[n]` (immer
 256 Byte, höchstens 255 Bytes Text), `array`, `record`, `set of`, `file`,
-`file of T`, `^T`, Aufzählungen und Teilbereiche.
+`file of T`, `^T`, Aufzählungen und Teilbereiche. Aufzählungen und
+Teilbereiche belegen wie in TP 1, 2 oder 4 Byte, je nach Wertebereich.
+
+Jede Zuweisung an eine Variable mit 1 oder 2 Byte kürzt den Wert auf diese
+Breite, wie in TP: `Byte` 255 + 1 ergibt 0, `Word` 65535 + 1 ergibt 0,
+`SmallInt` 32767 + 1 ergibt −32768. Gerechnet wird in 32 Bit.
 
 Texte sind UTF-8: Ein Umlaut belegt zwei Bytes, `'ä'` ist deshalb ein
 String und kein `Char`, und `Length('Größe')` ist 7.
+
+#### WideChar
+
+Ein `WideChar` ist ein einzelnes Unicode-Zeichen bis U+FFFF (Zeichen wie
+Emojis darüber passen nicht hinein). Es ist ein Ordinaltyp wie `Char`:
+`Ord`, `Succ`, `Pred`, `Inc`, `Dec`, `Low`, `High`, Vergleiche, `case`,
+Array-Index und `for`-Schleifen gehen, Arithmetik nicht (`w + 1` ist ein
+Fehler, `Ord(w) + 1` geht).
+
+```pascal
+var W: WideChar; S: string;
+begin
+  W := 'ä';                  { ein Literal mit einem Zeichen }
+  W := #$20AC;               { '€' als Codepoint }
+  if W = '€' then WriteLn('Euro: ', W, ' = ', Ord(W));   { Euro: € = 8364 }
+  case W of
+    'a'..'z': WriteLn('klein');
+    'ä', 'ö', 'ü': WriteLn('Umlaut')
+  end;
+  S := 'Preis: ' + W;        { als String wird es UTF-8 }
+  WriteLn(Length(S))         { 10: Length zählt Bytes }
+end.
+```
+
+- **Konstanten:** Ein Literal mit genau einem Zeichen (`'ä'`, `'€'`) ist dort
+  ein `WideChar`, wo eines erwartet wird; sonst bleibt es ein String.
+  `#n` von 256 bis 65535 ist ein `WideChar`, `#n` bis 255 bleibt ein Byte
+  (`#$E9` ist also **nicht** `'é'`). Zeichen ab U+10000, Surrogate und
+  Noncharacters (`#$FFFE`, `#$FFFF`, `#$FDD0`..`#$FDEF`) ergeben als
+  Konstante Error 76.
+- **Umwandlungen:** Ein `Char` wird automatisch zum `WideChar` (über seinen
+  Code, Bytes 128..255 werden also U+0080..U+00FF); umgekehrt nur mit
+  `Char(w)`. Wo ein String erwartet wird (Zuweisung, `+`, Vergleich mit
+  einem String, `Length`, `Pos`, `Assign`, …), wird ein `WideChar` als UTF-8
+  eingesetzt; `Length(w)` liefert also 1 bis 3. `WideChar(n)` und `Word(w)`
+  wandeln wie bei anderen Ordinaltypen.
+- **Ausgabe und Eingabe:** `Write(w)` schreibt UTF-8, die Breite in `w:n`
+  zählt Zeichen. `Read(F, w)` liest ein UTF-8-Zeichen; ungültige Bytes und
+  Zeichen ab U+10000 ergeben `#$FFFD`, das Zeilenende `#10`, das Dateiende
+  `#26`. `file of WideChar` speichert 2 Byte je Zeichen.
+- **Vorsicht bei `s[i]`:** `s[i]` ist ein **Byte**. `w := s[1]` mit
+  `s = 'ä'` ergibt `'Ã'` (das erste UTF-8-Byte). Die Zeichen eines Strings
+  liefern `UTF8Next` und `for w in s do` (siehe Strings).
 
 ### Konstanten
 
@@ -153,6 +203,36 @@ if Fehler <> 0 then WriteLn('Fehler ', Fehler);
 | `Str(X[:Breite[:Nachkomma]]; var S: string)` | Zahl in Text, mit denselben Formaten wie `Write`. |
 | `Val(S: string; var V; var Code: Integer)` | Text in Zahl (`V` ganzzahlig oder Gleitkomma). `Code` = 0 bei Erfolg, sonst die Position des ersten ungültigen Zeichens. Führende Leerzeichen und `$hex` sind erlaubt. |
 | `UpCase(C: Char): Char` | Großbuchstabe zu `'a'`..`'z'`; alle anderen Zeichen bleiben gleich. |
+
+Die Routinen oben zählen **Bytes**. Für **Zeichen** (Unicode-Codepoints)
+gibt es diese vier; ein ungültiges Byte bzw. eine abgebrochene UTF-8-Folge
+zählt dabei als ein Zeichen `#$FFFD`:
+
+| Signatur | Beschreibung |
+| --- | --- |
+| `UTF8Length(const S: string): Integer` | Anzahl der Zeichen: `UTF8Length('Größe')` = 5. |
+| `UTF8Next(const S: string; var Index: Integer): WideChar` | Zeichen ab Byte `Index`; setzt `Index` dahinter. Außerhalb von 1..`Length(S)` ergibt es `#0`, `Index` bleibt. |
+| `UTF8Index(const S: string; CharIndex: Integer): Integer` | Byte-Index des `CharIndex`-ten Zeichens; hinter dem letzten `Length(S) + 1`, unter 1 ergibt es 1. Damit lassen sich `Delete` und `Insert` zeichenweise verwenden. |
+| `UTF8Copy(const S: string; Index, Count: Integer): string` | Wie `Copy`, aber in Zeichen: `UTF8Copy('Grüße', 3, 2)` = `'üß'`. Zerschneidet nie ein Zeichen. |
+
+```pascal
+var S: string; I: Integer; W: WideChar;
+begin
+  S := 'Grüße';
+  I := 1;
+  while I <= Length(S) do
+  begin
+    W := UTF8Next(S, I);      { G, r, ü, ß, e }
+    Write(Ord(W), ' ')
+  end;
+  WriteLn;
+  for W in S do               { dasselbe kürzer: mit WideChar zeichenweise }
+    Write(W, '.');            { G.r.ü.ß.e. }
+  WriteLn
+end.
+```
+
+Mit einer `Char`-Laufvariable läuft `for c in s` weiter über die Bytes.
 
 ### Arithmetik
 

@@ -185,11 +185,18 @@ func scalar(t types.Type) (vt ValType, mem MemType, ok bool) {
 		}
 		return F64, MemF64, true
 	case types.IsOrdinal(t):
-		if t.Size() == 1 {
-			if lo, _ := types.Bounds(t); lo < 0 {
+		lo, _ := types.Bounds(t)
+		switch t.Size() {
+		case 1:
+			if lo < 0 {
 				return I32, MemI8, true
 			}
 			return I32, MemU8, true
+		case 2:
+			if lo < 0 {
+				return I32, MemI16, true
+			}
+			return I32, MemU16, true
 		}
 		return I32, MemI32, true
 	}
@@ -311,6 +318,8 @@ func put(b []byte, t types.Type, v *types.Value) {
 	switch mem {
 	case MemI8, MemU8:
 		b[0] = byte(v.Int)
+	case MemI16, MemU16:
+		binary.LittleEndian.PutUint16(b, uint16(v.Int))
 	case MemI32:
 		binary.LittleEndian.PutUint32(b, uint32(v.Int))
 	case MemF32:
@@ -792,6 +801,7 @@ func (s *fnState) forIn(st *ast.ForInStmt) {
 	var elemT types.Type
 	var elemAddr func() Expr
 	var skip func() Expr // nicht 0: Element überspringen (Mengen)
+	decode := false      // String zeichenweise (WideChar-Laufvariable, UTF8Next)
 	switch t := coll.(type) {
 	case *types.Array:
 		s.emit(Set{Var: base, Val: s.designator(st.In)})
@@ -820,6 +830,7 @@ func (s *fnState) forIn(st *ast.ForInStmt) {
 		s.emit(Set{Var: end, Val: Load{Addr: Get{Var: base}, Mem: MemU8}})
 		elemT = types.Char
 		elemAddr = func() Expr { return Bin{Op: AddI, X: Get{Var: base}, Y: Get{Var: idx}} }
+		decode = types.Is(v.Type, types.WideChar)
 	}
 	head, body, next, exit := s.fn.NewBlock(), s.fn.NewBlock(), s.fn.NewBlock(), s.fn.NewBlock()
 	s.jump(head)
@@ -831,6 +842,9 @@ func (s *fnState) forIn(st *ast.ForInStmt) {
 		s.branch(skip(), next, take)
 		s.cur = take
 		s.emit(Set{Var: v, Val: Get{Var: idx}})
+	} else if decode {
+		w := s.rtlValue("UTF8Next", types.WideChar, Get{Var: base}, Addr{Var: s.addressed(idx)})
+		s.emit(Set{Var: v, Val: s.coerce(w, types.WideChar, v.Type)})
 	} else if v.Scalar {
 		_, mem, _ := scalar(elemT)
 		s.emit(Set{Var: v, Val: s.coerce(Load{Addr: elemAddr(), Mem: mem}, elemT, v.Type)})
@@ -840,7 +854,9 @@ func (s *fnState) forIn(st *ast.ForInStmt) {
 	s.loop(exit, next, func() { s.stmt(st.Body) })
 	s.jump(next)
 	s.cur = next
-	s.emit(Set{Var: idx, Val: Bin{Op: AddI, X: Get{Var: idx}, Y: IntConst{V: 1}}})
+	if !decode { // UTF8Next hat den Index schon weitergesetzt
+		s.emit(Set{Var: idx, Val: Bin{Op: AddI, X: Get{Var: idx}, Y: IntConst{V: 1}}})
+	}
 	s.jump(head)
 	s.cur = exit
 }

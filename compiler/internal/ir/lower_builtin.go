@@ -537,6 +537,8 @@ func (s *fnState) write(args []ast.Expr, ln bool) {
 			s.callRtl("_WriteReal", nil, f, s.value(x, types.Real), width, prec)
 		case types.Is(t, types.Char):
 			s.callRtl("_WriteChar", nil, f, s.expr(x), width)
+		case types.Is(t, types.WideChar):
+			s.callRtl("_WriteWideChar", nil, f, s.expr(x), width)
 		case types.Is(t, types.Boolean):
 			s.callRtl("_WriteBool", nil, f, s.expr(x), width)
 		default:
@@ -569,6 +571,8 @@ func (s *fnState) read(args []ast.Expr, ln bool) {
 			s.storeTo(a, s.rtlValue("_ReadReal", types.Real, f))
 		case types.Is(t, types.Char):
 			s.storeTo(a, s.rtlValue("_ReadChar", types.Char, f))
+		case types.Is(t, types.WideChar):
+			s.storeTo(a, s.coerce(s.rtlValue("_ReadWideChar", types.LongInt, f), types.LongInt, t))
 		default:
 			s.storeTo(a, s.coerce(s.rtlValue("_ReadInt", types.LongInt, f), types.LongInt, t))
 		}

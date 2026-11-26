@@ -260,20 +260,39 @@ func (l *Lexer) ctrlCharAhead(atTokenStart bool) bool {
 
 // stringConst liest eine Zeichenkettenkonstante: eine lückenlose Folge aus
 // 'Text' (mit ” für ein Hochkomma), #nnn, #$hh und ^X.
+//
+// Im Literal sind Steuerzeichen außer Tabulator und Noncharacters verboten
+// (Error 907; über #n bleiben Steuerzeichen erreichbar). #n bis 255 ist ein
+// Byte, darüber (bis 65535, ohne Surrogate und Noncharacters) ein Zeichen,
+// das als UTF-8 eingesetzt wird; besteht das Token aus genau einem solchen
+// #n, steht der Codepoint in tok.CodePoint (WideChar-Konstante).
 func (l *Lexer) stringConst(tok Token) (Token, error) {
 	s := l.cur()
 	start := s.off
 	var val []byte
+	pieces := 0
+	var wide rune
 loop:
 	for !s.eof() {
 		switch c := s.f.Data[s.off]; {
 		case c == '\'':
+			pieces++
 			s.off++
 			for {
 				if s.eof() || s.f.Data[s.off] == '\n' || s.f.Data[s.off] == '\r' {
 					return Token{}, source.Errorf(tok.Pos, source.ErrStringExceedsLine, "")
 				}
 				b := s.f.Data[s.off]
+				if b < 0x20 && b != '\t' {
+					return Token{}, source.Errorf(l.posAt(s, s.off), source.ErrInvalidStringChar,
+						"control character U+%04X; use #%d", b, b)
+				}
+				if b >= 0xEF { // Noncharacters beginnen mit EF B7, EF BF oder F0..F4
+					if r, _ := utf8.DecodeRune(s.f.Data[s.off:]); source.IsNoncharacter(r) {
+						return Token{}, source.Errorf(l.posAt(s, s.off), source.ErrInvalidStringChar,
+							"noncharacter U+%04X", r)
+					}
+				}
 				s.off++
 				if b == '\'' {
 					if s.peek(0) != '\'' {
@@ -284,6 +303,7 @@ loop:
 				val = append(val, b)
 			}
 		case c == '#':
+			pieces++
 			numPos := l.pos()
 			s.off++
 			base, ok := 10, isDigit
@@ -299,11 +319,21 @@ loop:
 				return Token{}, source.Errorf(numPos, source.ErrIntConst, "")
 			}
 			n, err := strconv.ParseUint(string(s.f.Data[ds:s.off]), base, 32)
-			if err != nil || n > 255 {
+			switch r := rune(n); {
+			case err != nil || n > 0xFFFF:
 				return Token{}, source.Errorf(numPos, source.ErrConstOutOfRange, "")
+			case r >= 0xD800 && r <= 0xDFFF:
+				return Token{}, source.Errorf(numPos, source.ErrConstOutOfRange, "surrogate")
+			case source.IsNoncharacter(r):
+				return Token{}, source.Errorf(numPos, source.ErrConstOutOfRange, "noncharacter")
+			case n <= 255:
+				val = append(val, byte(n))
+			default:
+				val = utf8.AppendRune(val, r)
+				wide = r
 			}
-			val = append(val, byte(n))
 		case c == '^' && l.ctrlCharAhead(s.off == start):
+			pieces++
 			// TP-ANNAHME: ^a ist gleichbedeutend mit ^A.
 			ch := s.peek(1)
 			if ch >= 'a' && ch <= 'z' {
@@ -318,6 +348,9 @@ loop:
 	tok.Kind = String
 	tok.Text = string(s.f.Data[start:s.off])
 	tok.Value = string(val)
+	if pieces == 1 && wide != 0 {
+		tok.CodePoint = wide
+	}
 	return tok, nil
 }
 

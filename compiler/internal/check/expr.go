@@ -3,6 +3,7 @@ package check
 import (
 	"math"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/lexer"
@@ -30,8 +31,41 @@ func host(t types.Type) types.Type {
 	return t
 }
 
-// isStringish meldet String und Char (für +, Vergleiche, Zuweisung an String).
-func isStringish(t types.Type) bool { return types.IsString(t) || types.Is(t, types.Char) }
+// isStringish meldet String, Char und WideChar (für +, Vergleiche, Zuweisung
+// an String und alle Standardroutinen mit String-Argument; ein WideChar wird
+// dort als UTF-8 eingesetzt).
+func isStringish(t types.Type) bool {
+	return types.IsString(t) || types.Is(t, types.Char) || types.Is(t, types.WideChar)
+}
+
+// charPair meldet, ob a und b (als Wirtstypen) Char und WideChar sind; sie
+// sind ordinal verträglich, Char wird dabei erweitert.
+func charPair(a, b types.Type) bool {
+	a, b = host(a), host(b)
+	return (a == types.Char && b == types.WideChar) || (a == types.WideChar && b == types.Char)
+}
+
+// isWide meldet WideChar und Teilbereiche davon.
+func isWide(t types.Type) bool { return host(t) == types.WideChar }
+
+// wideLiteral wandelt eine String-Konstante mit genau einem Zeichen in eine
+// WideChar-Konstante, wenn ein WideChar erwartet wird (Zuweisung, Parameter,
+// Vergleich, case-Marke, Teilbereichsgrenze). Ein Zeichen ab U+10000 ergibt
+// Error 76. Ohne passende Konstante bleibt x unverändert.
+func (c *checker) wideLiteral(x TypeAndValue, e ast.Expr) TypeAndValue {
+	if x.Mode != Constant || !types.IsString(x.Type) || x.Val.Kind != types.VString {
+		return x
+	}
+	s := x.Val.Str
+	r, size := utf8.DecodeRuneInString(s)
+	if size != len(s) || size < 2 || r == utf8.RuneError {
+		return x
+	}
+	if r > 0xFFFF {
+		c.fail(e.Pos(), source.ErrConstOutOfRange, "")
+	}
+	return c.record(e, TypeAndValue{Mode: Constant, Type: types.WideChar, Val: types.IntVal(int64(r))})
+}
 
 // compatible meldet die Typverträglichkeit für Operatoren (TP: "compatible").
 func compatible(a, b types.Type) bool {
@@ -39,7 +73,7 @@ func compatible(a, b types.Type) bool {
 		return true
 	}
 	if types.IsOrdinal(a) && types.IsOrdinal(b) {
-		return host(a) == host(b)
+		return host(a) == host(b) || charPair(a, b)
 	}
 	if types.IsNumeric(a) && types.IsNumeric(b) {
 		return true
@@ -73,6 +107,9 @@ func pointersCompatible(a, b types.Type) bool {
 // assignable prüft die Zuweisungsverträglichkeit von x an den Typ dst und
 // meldet sonst Error 26 bzw. 76 für Konstanten außerhalb des Wertebereichs.
 func (c *checker) assignable(dst types.Type, x TypeAndValue, e ast.Expr) {
+	if isWide(dst) {
+		x = c.wideLiteral(x, e)
+	}
 	if !c.isAssignable(dst, x) {
 		c.fail(e.Pos(), source.ErrTypeMismatch, "")
 	}
@@ -103,7 +140,8 @@ func (c *checker) isAssignable(dst types.Type, x TypeAndValue) bool {
 	}
 	switch {
 	case types.IsOrdinal(dst) && types.IsOrdinal(src):
-		return host(dst) == host(src)
+		// Char → WideChar implizit, umgekehrt nur über Char(w)
+		return host(dst) == host(src) || (isWide(dst) && host(src) == types.Char)
 	case types.IsReal(dst):
 		return types.IsNumeric(src)
 	case types.IsString(dst):
@@ -174,6 +212,9 @@ func (c *checker) exprOrType(e ast.Expr) TypeAndValue {
 		}
 		return c.record(e, TypeAndValue{Mode: Constant, Type: types.Real, Val: types.RealVal(v)})
 	case *ast.StrLit:
+		if e.CodePoint != 0 { // genau ein #n über 255
+			return c.record(e, TypeAndValue{Mode: Constant, Type: types.WideChar, Val: types.IntVal(int64(e.CodePoint))})
+		}
 		return c.record(e, strConst(e.Value))
 	case *ast.NilLit:
 		return c.record(e, TypeAndValue{Mode: Constant, Type: types.Nil, Val: &types.Value{Kind: types.VNil}})
@@ -563,7 +604,7 @@ func (c *checker) binary(e *ast.BinaryExpr) TypeAndValue {
 			}
 		}
 	case lexer.In:
-		if !types.IsOrdinal(x.Type) || ys == nil || (ys.Elem != nil && host(x.Type) != host(ys.Elem)) {
+		if !types.IsOrdinal(x.Type) || ys == nil || (ys.Elem != nil && host(x.Type) != host(ys.Elem) && !charPair(x.Type, ys.Elem)) {
 			bad()
 		}
 		res.Type = types.Boolean
@@ -572,6 +613,14 @@ func (c *checker) binary(e *ast.BinaryExpr) TypeAndValue {
 		}
 	case lexer.Eq, lexer.Ne, lexer.Lt, lexer.Le, lexer.Gt, lexer.Ge:
 		res.Type = types.Boolean
+		// Ein Literal mit einem Zeichen gegenüber einem WideChar wird selbst
+		// WideChar; verglichen wird dann ordinal (PLAN.md, Etappe 14).
+		if isWide(x.Type) {
+			y = c.wideLiteral(y, e.Y)
+		} else if isWide(y.Type) {
+			x = c.wideLiteral(x, e.X)
+		}
+		both = x.Mode == Constant && y.Mode == Constant
 		if !compatible(x.Type, y.Type) {
 			bad()
 		}
@@ -617,9 +666,22 @@ func mergeSet(a, b *types.Set) types.Type {
 
 func strValue(x TypeAndValue) string {
 	if x.Val.Kind == types.VInt {
+		if types.Is(x.Type, types.WideChar) {
+			return WideString(x.Val.Int)
+		}
 		return string([]byte{byte(x.Val.Int)})
 	}
 	return x.Val.Str
+}
+
+// WideString liefert einen WideChar-Wert als UTF-8; Surrogate werden wie zur
+// Laufzeit zu U+FFFD, damit nie ungültiges UTF-8 entsteht.
+func WideString(v int64) string {
+	r := rune(v & 0xFFFF)
+	if r >= 0xD800 && r <= 0xDFFF {
+		r = utf8.RuneError
+	}
+	return string(r)
 }
 
 // compareConst vergleicht zwei verträgliche Konstanten.

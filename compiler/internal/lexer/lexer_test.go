@@ -281,7 +281,19 @@ func TestErrors(t *testing.T) {
 		{"offener kommentar", nil, "a\n{ abc", "main.pas(2,1): Error 10: Unexpected end of file (unterminated comment)"},
 		{"offener paren-kommentar", nil, "(* abc *", "main.pas(1,1): Error 10: Unexpected end of file (unterminated comment)"},
 		{"leeres #", nil, "x #;", "main.pas(1,3): Error 7: Error in integer constant"},
-		{"# zu groß", nil, "'a'#256", "main.pas(1,4): Error 76: Constant out of range"},
+		{"# zu groß", nil, "'a'#65536", "main.pas(1,4): Error 76: Constant out of range"},
+		{"# surrogat", nil, "x #$D800", "main.pas(1,3): Error 76: Constant out of range (surrogate)"},
+		{"# surrogat ende", nil, "#$DFFF", "main.pas(1,1): Error 76: Constant out of range (surrogate)"},
+		{"# noncharacter fffe", nil, "#$FFFE", "main.pas(1,1): Error 76: Constant out of range (noncharacter)"},
+		{"# noncharacter ffff", nil, "#65535", "main.pas(1,1): Error 76: Constant out of range (noncharacter)"},
+		{"# noncharacter fdd0", nil, "'a'#$FDD0", "main.pas(1,4): Error 76: Constant out of range (noncharacter)"},
+		{"esc im literal", nil, "x := 'a\x1bb'", "main.pas(1,8): Error 907: Invalid character in string literal (control character U+001B; use #27)"},
+		{"nul im literal", nil, "'\x00'", "main.pas(1,2): Error 907: Invalid character in string literal (control character U+0000; use #0)"},
+		{"noncharacter im literal", nil, "'ä\uFFFE'", "main.pas(1,3): Error 907: Invalid character in string literal (noncharacter U+FFFE)"},
+		{"noncharacter fdd0 im literal", nil, "'\uFDD0'", "main.pas(1,2): Error 907: Invalid character in string literal (noncharacter U+FDD0)"},
+		{"bidi im include", fstest.MapFS{"main.pas": {Data: []byte("x {$I b.inc}")}, "b.inc": {Data: []byte("\n{ \u202e }")}}, "",
+			"b.inc(2,3): Error 908: Bidirectional control character (U+202E; in strings use #$202E)"},
+		{"noncharacter ebene 16", nil, "'\U0010FFFF'", "main.pas(1,2): Error 907: Invalid character in string literal (noncharacter U+10FFFF)"},
 		{"#$ ohne ziffern", nil, "#$", "main.pas(1,1): Error 7: Error in integer constant"},
 		{"$ ohne ziffern", nil, "$G", "main.pas(1,1): Error 7: Error in integer constant"},
 		{"exponent fehlt", nil, "1e", "main.pas(1,1): Error 6: Error in real constant"},
@@ -326,5 +338,40 @@ func TestMissingMainFile(t *testing.T) {
 	_, err := New(source.NewLoader(fstest.MapFS{}, nil), "weg.pas", source.NewDefines())
 	if err == nil || err.Error() != "weg.pas: Error 15: File not found" {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// Zulässige Zeichen und #n-Werte rund um die neuen Grenzen (Etappe 14).
+func TestStringCharsAllowed(t *testing.T) {
+	tests := []struct {
+		src, value string
+		code       rune // CodePoint des Tokens, 0 = keiner
+	}{
+		{"'a\tb'", "a\tb", 0},      // Tabulator erlaubt
+		{"#27'[0m'", "\x1b[0m", 0}, // Steuerzeichen über #n
+		{"^[", "\x1b", 0},          // und über ^X
+		{"'a​b'", "a​b", 0},        // Null-Breite-Zeichen erlaubt
+		{"#256", "Ā", 0x100},       // WideChar-Konstante
+		{"#$20AC", "€", 0x20AC},    //
+		{"#$D7FF", "퟿", 0xD7FF},    // direkt vor den Surrogaten
+		{"#$E000", "", 0xE000},    // direkt dahinter
+		{"#$FFFD", "�", 0xFFFD},    // größter Wert vor den Noncharacters
+		{"'x'#$20AC", "x€", 0},     // gemischt: String mit UTF-8
+		{"#$20AC#$20AC", "€€", 0},  // zwei Zeichen: String
+		{"#255", "\xff", 0},        // bis 255 ein Byte (Char)
+	}
+	for _, tt := range tests {
+		toks, _, err := lexAll(t, tt.src, nil, nil)
+		if err != nil {
+			t.Errorf("%q: %v", tt.src, err)
+			continue
+		}
+		if len(toks) != 1 || toks[0].Kind != String || toks[0].Value != tt.value || toks[0].CodePoint != tt.code {
+			t.Errorf("%q: %+v, want Value %q CodePoint %#x", tt.src, toks, tt.value, tt.code)
+		}
+	}
+	// Steuerzeichen und Noncharacters in Kommentaren sind erlaubt.
+	if _, _, err := lexAll(t, "{ \x07 ￾ } x", nil, nil); err != nil {
+		t.Errorf("Kommentar: %v", err)
 	}
 }

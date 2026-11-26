@@ -107,6 +107,8 @@ type RealLit struct {
 type StrLit struct {
 	Base
 	Value string
+	// CodePoint ist bei genau einem #n über 255 der Codepoint (WideChar), sonst 0.
+	CodePoint rune
 }
 
 // NilLit ist nil.

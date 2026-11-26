@@ -1,0 +1,16 @@
+SmallInt 32767+1 = -32768
+SmallInt -32768-1 = 32767
+Word 65535+1 = 0
+Word 0-1 = 65535
+Record: 1 -32768
+Array: 0
+var-Parameter: 0
+Konstanten: 65535 -32768 -2 300
+SizeOf: 2 2 2 4 1 2 6 2
+Teilbereiche: 1000 -30000
+Umwandlung: -25536 65535 -1 32768
+Zuweisung aus Integer: 4464 4464
+Zuweisung von -1: -1 65535
+Grenzen: -32768 32767 0 65535 299
+Satz 4: 65000
+Dateigroesse: 10

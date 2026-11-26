@@ -864,7 +864,7 @@ func (p *parser) factor() ast.Expr {
 		p.next()
 		return x
 	case lexer.String:
-		x := &ast.StrLit{Base: ast.At(pos), Value: p.tok.Value}
+		x := &ast.StrLit{Base: ast.At(pos), Value: p.tok.Value, CodePoint: p.tok.CodePoint}
 		p.next()
 		return x
 	case lexer.Nil:

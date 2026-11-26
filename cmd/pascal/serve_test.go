@@ -81,9 +81,11 @@ func TestServe(t *testing.T) {
 }
 
 func TestServeTimeout(t *testing.T) {
-	big := "program P; var x: Integer; begin\n" + strings.Repeat("x := 1;\n", 300_000) + "end."
-	input := req(1, big, `, "limits": {"maxTokens": -1}`) + req(2, okProg, "")
-	resps, code, _ := serveLines(t, []string{"-timeout", "20ms"}, input)
+	// Die große Anfrage braucht über eine Sekunde, die kleine auch unter Last
+	// nur einen Bruchteil von 300 ms.
+	big := "program P; var x: Integer; begin\n" + strings.Repeat("x := 1;\n", 1_000_000) + "end."
+	input := req(1, big, `, "limits": {"maxTokens": -1, "maxSourceBytes": -1}`) + req(2, okProg, "")
+	resps, code, _ := serveLines(t, []string{"-timeout", "300ms"}, input)
 	if code != 0 || len(resps) != 2 {
 		t.Fatalf("Exit-Code %d, %d Antworten", code, len(resps))
 	}

@@ -32,6 +32,15 @@ var
 { Uhr in Nanosekunden: Id 0 = Echtzeit seit 1. 1. 1970 (UTC), 1 = monoton. }
 function _Clock(Id: LongInt): Real;
 
+{ UTF-8-Hilfsfunktionen (PLAN.md, Etappe 14). "Zeichen" heisst Unicode-
+  Codepoint; ungueltige Bytefolgen zaehlen nach der Unicode-Empfehlung
+  (maximal subpart) je Abschnitt als ein Zeichen #$FFFD, ebenso Zeichen ab
+  U+10000. Indizes sind wie bei Copy 1-basiert. }
+function UTF8Length(const S: string): Integer;
+function UTF8Next(const S: string; var Index: Integer): WideChar;
+function UTF8Index(const S: string; CharIndex: Integer): Integer;
+function UTF8Copy(const S: string; Index, Count: Integer): string;
+
 implementation
 
 type
@@ -2311,6 +2320,219 @@ begin
   T := _Clock(0);
   T := T - Int(T / 4294967296.0) * 4294967296.0;
   RandSeed := Trunc(T - 2147483648.0)
+end;
+
+{ ---------------------------------------------------- WideChar und UTF-8 }
+
+const
+  Replacement = $FFFD;
+
+{ Laenge einer UTF-8-Folge nach ihrem ersten Byte; 0 = nie gueltig
+  (80..C1 und F5..FF). }
+function SeqLen(B: Integer): Integer;
+begin
+  if B < $80 then
+    SeqLen := 1
+  else if B < $C2 then
+    SeqLen := 0
+  else if B < $E0 then
+    SeqLen := 2
+  else if B < $F0 then
+    SeqLen := 3
+  else if B < $F5 then
+    SeqLen := 4
+  else
+    SeqLen := 0
+end;
+
+{ Ist B als K-tes Folgebyte nach Lead gueltig? Das erste Folgebyte schliesst
+  Ueberlangkodierungen (E0, F0), Surrogate (ED) und Werte ueber U+10FFFF (F4)
+  aus. }
+function ContOk(Lead, K, B: Integer): Boolean;
+begin
+  if K = 1 then
+    case Lead of
+      $E0: ContOk := (B >= $A0) and (B <= $BF);
+      $ED: ContOk := (B >= $80) and (B <= $9F);
+      $F0: ContOk := (B >= $90) and (B <= $BF);
+      $F4: ContOk := (B >= $80) and (B <= $8F);
+    else
+      ContOk := (B >= $80) and (B <= $BF)
+    end
+  else
+    ContOk := (B >= $80) and (B <= $BF)
+end;
+
+{ Dekodiert das Zeichen ab S[I] (1 <= I <= Length(S)) und liefert in Width
+  die verbrauchten Bytes. Ungueltig: #$FFFD fuer den laengsten gueltigen
+  Anfang (mindestens ein Byte); Zeichen ab U+10000: #$FFFD fuer alle Bytes. }
+function DecodeAt(const S: string; I: Integer; var Width: Integer): LongInt;
+var
+  B, N, K, C: Integer;
+  R: LongInt;
+begin
+  B := Ord(S[I]);
+  N := SeqLen(B);
+  Width := 1;
+  if N = 1 then
+  begin
+    DecodeAt := B;
+    Exit
+  end;
+  DecodeAt := Replacement;
+  if N = 0 then
+    Exit;
+  case N of
+    2: R := B and $1F;
+    3: R := B and $0F;
+  else
+    R := B and $07
+  end;
+  for K := 1 to N - 1 do
+  begin
+    if I + K > Length(S) then
+      Exit;
+    C := Ord(S[I + K]);
+    if not ContOk(B, K, C) then
+      Exit;
+    R := (R shl 6) or (C and $3F);
+    Width := K + 1
+  end;
+  if R <= $FFFF then
+    DecodeAt := R
+end;
+
+{ WideChar als UTF-8 (1-3 Bytes); Surrogate werden zu U+FFFD, damit nie
+  ungueltiges UTF-8 entsteht. }
+function _WideCharToStr(W: LongInt): string;
+begin
+  W := W and $FFFF;
+  if (W >= $D800) and (W <= $DFFF) then
+    W := Replacement;
+  if W < $80 then
+  begin
+    Result[0] := #1;
+    Result[1] := Chr(W)
+  end
+  else if W < $800 then
+  begin
+    Result[0] := #2;
+    Result[1] := Chr($C0 or (W shr 6));
+    Result[2] := Chr($80 or (W and $3F))
+  end
+  else
+  begin
+    Result[0] := #3;
+    Result[1] := Chr($E0 or (W shr 12));
+    Result[2] := Chr($80 or ((W shr 6) and $3F));
+    Result[3] := Chr($80 or (W and $3F))
+  end
+end;
+
+{ Write(w:n): die Breite zaehlt Zeichen, nicht Bytes. }
+procedure _WriteWideChar(var F: TTextRec; W, Width: LongInt);
+var
+  S: string;
+  I: LongInt;
+begin
+  if not CheckMode(F.Mode, fmOutput) then
+    Exit;
+  for I := 2 to Width do
+    PutChar(F, ' ');
+  S := _WideCharToStr(W);
+  for I := 1 to Length(S) do
+    PutChar(F, S[I])
+end;
+
+{ Read(F, w): eine UTF-8-Folge; ungueltige Folgen wie DecodeAt (das erste
+  nicht passende Folgebyte bleibt fuer das naechste Read stehen). Am
+  Zeilenende #10, am Dateiende #26 wie _ReadChar. }
+function _ReadWideChar(var F: TTextRec): LongInt;
+var
+  C: Char;
+  B, N, K: Integer;
+  R: LongInt;
+begin
+  B := Ord(_ReadChar(F));
+  N := SeqLen(B);
+  if N = 1 then
+  begin
+    _ReadWideChar := B;
+    Exit
+  end;
+  _ReadWideChar := Replacement;
+  if N = 0 then
+    Exit;
+  case N of
+    2: R := B and $1F;
+    3: R := B and $0F;
+  else
+    R := B and $07
+  end;
+  for K := 1 to N - 1 do
+  begin
+    if not PeekChar(F, C) or not ContOk(B, K, Ord(C)) then
+      Exit;
+    Inc(F.BufPos);
+    R := (R shl 6) or (Ord(C) and $3F)
+  end;
+  if R <= $FFFF then
+    _ReadWideChar := R
+end;
+
+function UTF8Length(const S: string): Integer;
+var
+  I, W, N: Integer;
+begin
+  N := 0;
+  I := 1;
+  while I <= Length(S) do
+  begin
+    if DecodeAt(S, I, W) <> 0 then;
+    I := I + W;
+    Inc(N)
+  end;
+  UTF8Length := N
+end;
+
+function UTF8Next(const S: string; var Index: Integer): WideChar;
+var
+  W: Integer;
+begin
+  if (Index < 1) or (Index > Length(S)) then
+  begin
+    UTF8Next := #0;
+    Exit
+  end;
+  UTF8Next := WideChar(DecodeAt(S, Index, W));
+  Index := Index + W
+end;
+
+function UTF8Index(const S: string; CharIndex: Integer): Integer;
+var
+  I, W, N: Integer;
+begin
+  I := 1;
+  N := 1;
+  while (N < CharIndex) and (I <= Length(S)) do
+  begin
+    if DecodeAt(S, I, W) <> 0 then;
+    I := I + W;
+    Inc(N)
+  end;
+  UTF8Index := I
+end;
+
+function UTF8Copy(const S: string; Index, Count: Integer): string;
+var
+  A: Integer;
+begin
+  if Index < 1 then
+    Index := 1;
+  if Count < 0 then
+    Count := 0;
+  A := UTF8Index(S, Index);
+  UTF8Copy := Copy(S, A, UTF8Index(S, Index + Count) - A)
 end;
 
 { ------------------------------------------------------------ Parameter }

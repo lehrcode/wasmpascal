@@ -67,6 +67,16 @@ func narrow(x Expr, t types.Type) Expr {
 			return IntConst{V: int32(int8(c.V))}
 		}
 		return Un{Op: Ext8, X: x}
+	case MemU16:
+		if c, ok := x.(IntConst); ok {
+			return IntConst{V: int32(uint16(c.V))}
+		}
+		return Bin{Op: AndI, X: x, Y: IntConst{V: 0xFFFF}}
+	case MemI16:
+		if c, ok := x.(IntConst); ok {
+			return IntConst{V: int32(int16(c.V))}
+		}
+		return Un{Op: Ext16, X: x}
 	}
 	return x
 }
@@ -134,8 +144,6 @@ func (s *fnState) typecast(e *ast.CallExpr, tv check.TypeAndValue) Expr {
 	}
 	x := s.expr(e.Args[0])
 	switch {
-	case types.Is(tv.Type, types.Word):
-		return Bin{Op: AndI, X: x, Y: IntConst{V: 0xFFFF}}
 	case types.IsOrdinal(tv.Type):
 		return narrow(x, tv.Type)
 	}
@@ -350,7 +358,13 @@ func (s *fnState) strAddr(e ast.Expr) Expr {
 		if tv.Val.Kind == types.VString {
 			return IntConst{V: int32(s.l.stringAddr(tv.Val.Str))}
 		}
+		if types.Is(tv.Type, types.WideChar) {
+			return IntConst{V: int32(s.l.stringAddr(check.WideString(tv.Val.Int)))}
+		}
 		return IntConst{V: int32(s.l.stringAddr(string([]byte{byte(tv.Val.Int)})))}
+	}
+	if types.Is(tv.Type, types.WideChar) { // als UTF-8
+		return s.rtlString("_WideCharToStr", s.expr(e))
 	}
 	if types.Is(tv.Type, types.Char) {
 		t := s.temp(types.StringType)

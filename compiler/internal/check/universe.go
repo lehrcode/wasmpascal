@@ -152,7 +152,7 @@ var unsupported = []string{
 func newUniverse() *types.Scope {
 	u := types.NewScope(types.UniverseScope, nil, nil)
 	for _, t := range []*types.Basic{
-		types.Boolean, types.Char, types.ShortInt, types.Byte, types.Integer, types.Word,
+		types.Boolean, types.Char, types.WideChar, types.ShortInt, types.Byte, types.SmallInt, types.Integer, types.Word,
 		types.LongInt, types.Real, types.Single, types.Double, types.Extended, types.Comp,
 	} {
 		u.Insert(types.NewTypeName(lower(t.String()), t.String(), noPos, t))

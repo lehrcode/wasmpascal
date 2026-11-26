@@ -122,7 +122,13 @@ func (c *checker) typedConst(t types.Type, e ast.Expr) *types.Value {
 	if x.Mode != Constant {
 		c.fail(e.Pos(), source.ErrConstExpected, "")
 	}
+	if isWide(t) {
+		x = c.wideLiteral(x, e)
+	}
 	c.assignable(t, x, e)
+	if types.IsString(t) && types.Is(x.Type, types.WideChar) {
+		return types.StrVal(WideString(x.Val.Int))
+	}
 	return convertConst(t, x.Val)
 }
 
@@ -202,11 +208,20 @@ func (c *checker) typeExpr(e ast.TypeExpr) types.Type {
 		return &types.String{Max: n}
 	case *ast.SubrangeType:
 		lo, hi := c.constExpr(e.Lo), c.constExpr(e.Hi)
+		// Ist eine Grenze WideChar, wird ein Literal mit einem Zeichen auf der
+		// anderen Seite ebenfalls WideChar, ein Char erweitert.
+		if isWide(lo.Type) {
+			hi = c.wideLiteral(hi, e.Hi)
+		} else if isWide(hi.Type) {
+			lo = c.wideLiteral(lo, e.Lo)
+		}
 		if !types.IsOrdinal(lo.Type) || !types.IsOrdinal(hi.Type) {
 			c.fail(e.Pos(), source.ErrInvalidSubrangeBase, "")
 		}
 		base := host(lo.Type)
-		if host(hi.Type) != base {
+		if charPair(lo.Type, hi.Type) {
+			base = types.WideChar
+		} else if host(hi.Type) != base {
 			c.fail(e.Hi.Pos(), source.ErrTypeMismatch, "")
 		}
 		if lo.Val.Int > hi.Val.Int {

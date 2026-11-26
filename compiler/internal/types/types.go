@@ -53,8 +53,10 @@ type BasicKind int
 const (
 	KBoolean BasicKind = iota
 	KChar
+	KWideChar
 	KShortInt
 	KByte
+	KSmallInt
 	KInteger
 	KWord
 	KLongInt
@@ -84,14 +86,16 @@ func (b *Basic) IsInteger() bool { return b.Kind >= KShortInt && b.Kind <= KLong
 func (b *Basic) IsReal() bool { return b.Kind >= KReal }
 
 // Vordefinierte Typen. Integer hat den Bereich von LongInt (PLAN.md,
-// Festlegungen zu Wertebereichen); Word bleibt 0..65535, belegt aber 4 Byte.
+// Festlegungen zu Wertebereichen); SmallInt und Word belegen wie in TP 2 Byte.
 var (
 	Boolean  = &Basic{Kind: KBoolean, name: "Boolean", size: 1, Lo: 0, Hi: 1}
 	Char     = &Basic{Kind: KChar, name: "Char", size: 1, Lo: 0, Hi: 255}
+	WideChar = &Basic{Kind: KWideChar, name: "WideChar", size: 2, Lo: 0, Hi: 0xFFFF}
 	ShortInt = &Basic{Kind: KShortInt, name: "ShortInt", size: 1, Lo: -128, Hi: 127}
 	Byte     = &Basic{Kind: KByte, name: "Byte", size: 1, Lo: 0, Hi: 255}
+	SmallInt = &Basic{Kind: KSmallInt, name: "SmallInt", size: 2, Lo: -32768, Hi: 32767}
 	Integer  = &Basic{Kind: KInteger, name: "Integer", size: 4, Lo: MinLongInt, Hi: MaxLongInt}
-	Word     = &Basic{Kind: KWord, name: "Word", size: 4, Lo: 0, Hi: 65535}
+	Word     = &Basic{Kind: KWord, name: "Word", size: 2, Lo: 0, Hi: 65535}
 	LongInt  = &Basic{Kind: KLongInt, name: "LongInt", size: 4, Lo: MinLongInt, Hi: MaxLongInt}
 	Real     = &Basic{Kind: KReal, name: "Real", size: 8}
 	Single   = &Basic{Kind: KSingle, name: "Single", size: 4}
@@ -125,10 +129,14 @@ func (e *Enum) String() string {
 	return "(" + strings.Join(e.Names, ", ") + ")"
 }
 
-// Size: 1 Byte, wenn alle Werte in 0..255 passen, sonst 4.
+// Size: 1 Byte, wenn alle Werte in 0..255 passen, 2 Byte bis 65535, sonst 4
+// (wie TP).
 func (e *Enum) Size() int64 {
-	if len(e.Names) <= 256 {
+	switch {
+	case len(e.Names) <= 256:
 		return 1
+	case len(e.Names) <= 65536:
+		return 2
 	}
 	return 4
 }
@@ -148,11 +156,15 @@ func (s *Subrange) String() string {
 	return fmt.Sprintf("%s..%s", FormatOrd(s.Base, s.Lo), FormatOrd(s.Base, s.Hi))
 }
 
-// Size richtet sich nach dem Wertebereich (PLAN.md): 1 Byte, wenn alle Werte
-// in 0..255 oder -128..127 passen, sonst 4.
+// Size richtet sich wie in TP nach dem Wertebereich (PLAN.md): 1 Byte, wenn
+// alle Werte in 0..255 oder -128..127 passen, 2 Byte in 0..65535 oder
+// -32768..32767, sonst 4.
 func (s *Subrange) Size() int64 {
-	if (s.Lo >= 0 && s.Hi <= 255) || (s.Lo >= -128 && s.Hi <= 127) {
+	switch {
+	case (s.Lo >= 0 && s.Hi <= 255) || (s.Lo >= -128 && s.Hi <= 127):
 		return 1
+	case (s.Lo >= 0 && s.Hi <= 65535) || (s.Lo >= -32768 && s.Hi <= 32767):
+		return 2
 	}
 	return 4
 }
@@ -172,6 +184,11 @@ func FormatOrd(t Type, v int64) string {
 				return fmt.Sprintf("'%c'", rune(v))
 			}
 			return fmt.Sprintf("#%d", v)
+		case KWideChar:
+			if v >= 32 && v < 127 && v != '\'' {
+				return fmt.Sprintf("'%c'", rune(v))
+			}
+			return fmt.Sprintf("#$%04X", v)
 		case KBoolean:
 			if v == 0 {
 				return "False"

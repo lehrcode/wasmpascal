@@ -214,8 +214,11 @@ type Token struct {
 	// Name ist bei Bezeichnern und Schlüsselwörtern die normalisierte Form
 	// (Kleinbuchstaben, höchstens MaxIdentLen Zeichen) für Vergleiche.
 	Name string
-	// Value enthält bei String-Tokens die Bytes des Strings.
+	// Value enthält bei String-Tokens die Bytes des Strings (UTF-8).
 	Value string
+	// CodePoint ist bei String-Tokens aus genau einem #n mit n über 255 der
+	// Codepoint (eine WideChar-Konstante), sonst 0.
+	CodePoint rune
 	// IOChecks ist der Zustand des Schalters {$I+}/{$I-} an dieser Stelle.
 	IOChecks bool
 }

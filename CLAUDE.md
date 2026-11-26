@@ -33,8 +33,8 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
 | --- | --- | --- |
 | Byte, ShortInt, Char, Boolean | `i32` | 1 Byte; jede Zuweisung kürzt auf 8 Bit |
 | Integer, LongInt | `i32` | 4 Byte, beide −2³¹..2³¹−1 (`MaxInt` = 2147483647) |
-| Word | `i32` | 4 Byte, 0..65535, kein 16-Bit-Überlauf |
-| Aufzählungen, Teilbereiche | `i32` | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen, sonst 4 Byte |
+| SmallInt, Word, WideChar | `i32` | 2 Byte; jede Zuweisung kürzt auf 16 Bit (`SmallInt` mit Vorzeichen) |
+| Aufzählungen, Teilbereiche | `i32` | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen, 2 Byte in 0..65535 bzw. −32768..32767, sonst 4 Byte |
 | Real, Double, Extended, Comp | `f64` | 8 Byte |
 | Single | `f32` | 4 Byte |
 | Zeiger, `nil` | `i32` | 4 Byte |
@@ -51,13 +51,15 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
   Record/Array/String/Menge kopiert der Aufgerufene; verschachtelte Prozeduren bekommen einen Static Link als
   ersten Parameter; String-, Record-, Array- und Mengenergebnisse über eine Adresse des Aufrufers.
 - **Erweiterungen** (Tabelle in PLAN.md): `Result`, schreibgeschützte typisierte Konstanten, `Break`/`Continue`,
-  `Low`/`High`, `const`-Parameter, `for … in`, Funktionsaufrufe als Anweisung (immer), strukturierte
-  Funktionsergebnisse wie Delphi 1.0.
+  `Low`/`High`, `const`-Parameter, `for … in` (mit `WideChar` zeichenweise), Funktionsaufrufe als Anweisung (immer), strukturierte
+  Funktionsergebnisse wie Delphi 1.0, `WideChar` (Delphi 2.0), `SmallInt`.
 - **Adressfunktionen:** `@x`/`Addr` = lineare Adresse, `Ofs` als LongInt, `Seg` = 0, `Ptr(seg,ofs)` ignoriert `seg`,
   `CSeg`/`DSeg`/`SSeg`/`SPtr`/`PrefixSeg`/`FreePtr`/`FreeMin` sind Compilerfehler.
 - **Laufzeitfehler:** `Runtime error NNN at datei.pas(zeile) in Prozedur` (nur Dateiname, ohne Verzeichnis); Traps über Name Section und Custom Section
   `wasmpascal.lines`; `-nolines` lässt beides weg.
-- **Zeichensatz:** durchgehend UTF-8, `Char` = Byte, `Length` zählt Bytes, Bezeichner nur ASCII.
+- **Zeichensatz:** durchgehend UTF-8, `Char` = Byte, `Length` zählt Bytes, Bezeichner nur ASCII. `WideChar` = ein
+  Zeichen bis U+FFFF, als String UTF-8; `UTF8…`-Routinen in `rtl/system.pas`. Im Quelltext: Steuerzeichen (außer Tab)
+  und Noncharacters in Literalen verboten (907), Bidi-Steuerzeichen überall (908).
 
 ## Test-Harness
 
