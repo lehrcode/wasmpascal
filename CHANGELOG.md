@@ -11,8 +11,10 @@ ausdrücklich genannt. Einzelheiten zu jeder Änderung stehen in
 
 ## [Unreleased]
 
-Etappe 15: Unit `Dos` erweitert, Ortszeit. Etappe 16: Sprachumfang von
-Turbo Pascal 5.0 mit prozeduralen Typen und Exit-Prozeduren.
+## [0.3.0] - 2026-11-27
+
+Etappen 15 und 16: Sprachumfang von Turbo Pascal 5.0 mit prozeduralen Typen
+und Exit-Prozeduren, Unit `Dos` erweitert, Ortszeit.
 
 ### Hinzugefügt
 
@@ -30,7 +32,6 @@ Turbo Pascal 5.0 mit prozeduralen Typen und Exit-Prozeduren.
   rufen.
 - `RunError[(Code)]` (aus TP 5.0).
 - `{$A+}`/`{$A-}` wird angenommen (ohne Wirkung auf die Ausrichtung).
-
 - Unit `Dos`: `GetFAttr`, `GetFTime`, `FindFirst`, `FindNext`, `PackTime`,
   `UnpackTime` (aus TP 4.0) sowie `FExpand`, `FSplit`, `FSearch`, `GetEnv`,
   `EnvCount`, `EnvStr` und `DosVersion` (aus TP 5.0); Typen `SearchRec`,
@@ -138,6 +139,7 @@ Erste Version: Etappen 0 bis 13.
 - Dokumentation: README, Referenz der Units (`docs/units.md`), Abweichungen
   von TP (`docs/abweichungen.md`), MIT-Lizenz.
 
-[Unreleased]: https://github.com/lehrcode/wasmpascal/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lehrcode/wasmpascal/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lehrcode/wasmpascal/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lehrcode/wasmpascal/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lehrcode/wasmpascal/releases/tag/v0.1.0
