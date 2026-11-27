@@ -272,7 +272,7 @@ Das Programm kann an festgelegten Punkten anhalten und die Kontrolle an den Host
 
 ## Etappen mit Akzeptanzkriterien
 
-Sechzehn Etappen (0 bis 15). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
+Siebzehn Etappen (0 bis 16). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
 
 ### Etappe 0: Gerüst ✅
 
@@ -1256,6 +1256,174 @@ Ergebnisse liefern; `GetDate`/`GetTime` mit gesetztem Versatz Ortszeit
 liefern (geprüft mit fester Uhr) und `pascal run` den Versatz des Systems
 übergibt; alle bisherigen Tests sind grün.
 - *Erledigt (Nov 27, 2026).* `rtl/dos.pas` mit allen Routinen, Typen, Konstanten und `DosError`; Ortszeit über `WASMPASCAL_UTC_OFFSET`. System-Unit: WASI-Importe `environ_sizes_get`, `environ_get`, `fd_readdir`, `path_filestat_get`; im Interface `_EnvCount`, `_EnvStr`, `_FullPath`, `_FileName`, `_FileStat`, `_FileStatF`, `_DirOpen`, `_DirNext`, `_DirClose`; Umgebung unter `gojs` hinter `argv`. `runner.Options.Env` (mit `ExampleRun_env`) und eine Uhr für Tests im Paket; `pascal run` gibt die Umgebung des Rechners plus Versatz weiter; Loader: Option `env`, `fd_readdir`, `path_filestat_get`, `mtim`, Host-Vertrag um `readdirSync` und `mtimeMs` erweitert; `node-run.js` mit `--env`, `--setenv`, `--emptyenv`; Harness mit `name.env`. Herkunft geklärt: `DosVersion`, `EnvCount`, `EnvStr`, `FExpand`, `FSearch`, `FSplit`, `GetEnv` sind laut README zu TP 5.0 dort neu (Erweiterungstabelle). Nebenbei behoben: `GetTime` lieferte bei Bruchteilen wie 0,25 s wegen der `f64`-Genauigkeit der Nanosekunden manchmal einen Hundertstel zu wenig (gefunden durch die Tests mit fester Uhr). Tests: `testdata/etappe15/` (sieben Programme, WASI und `gojs`, auch mit Frame-Ablage), `runner/zeit_test.go` (zehn Fälle mit fester Uhr, Dateizeit), `TestProgramEnv`.
+
+### Etappe 16: Turbo Pascal 5.0 – prozedurale Typen, `ExitProc`
+
+**Ziel:** WasmPascal deckt den Sprachumfang von Turbo Pascal 5.0 ab (ohne
+Overlays und Debugger, die ohne DOS bedeutungslos sind) und darf sich in
+der Doku so nennen.
+
+**Entscheidungen (nach Rückfrage):**
+
+- Prozedurale Typen wie in TP 5.0. Damit wird `ExitProc` möglich, das es
+  schon in TP 4.0 gibt, WasmPascal aber bisher fehlt.
+- `VER50` ersetzt `VER40` als Bedingungssymbol.
+- `RunError[(Code)]` (neu in TP 5.0, einzige neue Routine der System-Unit)
+  kommt dazu.
+- `{$A+}`/`{$A-}` (neu in TP 5.0) wird angenommen und für `{$IFOPT}`
+  mitgeführt (Voreinstellung `A+`), wirkt aber nicht: Records und Arrays
+  sind immer natürlich ausgerichtet. Steht in `docs/abweichungen.md`.
+- Exit-Prozeduren laufen bei **jedem** Laufzeitfehler, auch nach einem
+  WASM-Trap; der Host stößt sie nach dem Trap an (Abschnitt unten).
+- Weiterhin weggelassen: Overlays (`Overlay`, `{$O}`), 8087-Emulation
+  (`{$E}`), Debugger-Direktiven (`{$D}`, `{$L}`), `Exec`, `SwapVectors`,
+  Interrupt-Vektoren, `DiskFree`/`DiskSize`, `SetFAttr` sowie die neuen
+  Dos-Routinen `GetCBreak`, `SetCBreak`, `GetVerify` und `SetVerify`.
+- Fehlernummern für prozedurale Typen wie in TP 5.0 (neue Nummern 133–145
+  laut README zu TP 5.0, z. B. 142 und 143), keine eigenen.
+
+#### Prozedurale Typen
+
+| Thema | Festlegung |
+| --- | --- |
+| Deklaration | `type TProc = procedure(X: Integer); TFunc = function(X: Real): Real;` Parameterlisten wie bei normalen Routinen (Wert-, `var`- und `const`-Parameter). Als Typ von Variablen, Parametern, Record-Feldern, Array-Elementen und typisierten Konstanten. |
+| Zuweisung | `P := Name` mit einer Prozedur oder Funktion, die auf oberster Ebene eines Programms oder einer Unit deklariert ist. Verschachtelte Routinen und Standardroutinen der System-Unit (`WriteLn`, `Length`, …) ergeben Error 143 („Invalid procedure or function reference“), wie in TP. `{$F+}` ist nicht nötig. |
+| Verträglichkeit | Gleiche Anzahl Parameter, paarweise identische Typen und Arten (Wert/`var`/`const`), bei Funktionen identischer Ergebnistyp. Parameternamen zählen nicht. Zwei prozedurale Typen mit gleicher Signatur sind zuweisungsverträglich. |
+| Aufruf | `P(1)`; eine parameterlose Prozedurvariable als Anweisung `P;`. Eine parameterlose Funktionsvariable `F` in einem Ausdruck ruft auf, außer das Ziel ist selbst prozedural (`G := F` kopiert), wie in TP. |
+| `nil` | `P := nil` ist erlaubt; `@P = nil`/`@P <> nil` prüft (`// TP-ANNAHME`). Ein Aufruf über `nil` ergibt Runtime error 216. |
+| `@` | `@Name` ist ein `Pointer` auf die Routine. `@P` mit einer Prozedurvariable liefert ihren Wert als `Pointer` (für Vergleiche und `ExitProc`). Der Rückweg `Pointer` → prozeduraler Typ geht nur über eine Typumwandlung `TProc(Ptr)`. |
+| Darstellung | `i32`: Index in die WASM-Funktionstabelle; 0 = `nil` (Slot 0 bleibt leer). Aufruf über `call_indirect` mit der WASM-Signatur des prozeduralen Typs; ein falscher Index oder eine falsche Signatur fängt WASM selbst ab (Trap → 216). Im Speicher 4 Byte. |
+| Speicher | Kein Static Link nötig, weil nur Routinen der obersten Ebene zugewiesen werden dürfen. |
+| Typisierte Konstanten | `const P: TProc = Name;` (auch in Records und Arrays). Der Tabellenindex steht erst im Codegenerator fest, `ir` schreibt die Bytes aber schon beim Kodieren der Konstanten. Deshalb hinterlässt `encode` einen Platzhalter (0) und trägt Stelle und Routine in eine Liste des `ir.Module` ein; der Codegenerator setzt dort den Index ein, bevor er das Datensegment schreibt. Die Routine zählt damit als adressiert. |
+
+**Scheduler:** Ein indirekter Aufruf kann jede Routine treffen, deren
+Adresse genommen wird. `analysis.MarkSuspendable` behandelt deshalb einen
+indirekten Aufruf als anhaltefähig, wenn eine adressierte Routine mit
+derselben WASM-Signatur anhaltefähig ist. Beim Fortsetzen ruft der
+Aufrufer über den im Frame gesicherten Tabellenindex erneut auf.
+Adressierte Routinen und indirekte Aufrufe stehen in einer eigenen Liste
+im `ir.Module`, damit der Aufrufgraph sie kennt.
+
+#### `ExitProc`, `ErrorAddr`, `ExitCode`
+
+- `ExitProc: Pointer` und `ErrorAddr: Pointer` sind neue Variablen der
+  System-Unit (TP 4.0).
+- Die Kette der Exit-Prozeduren läuft wie in TP in einer Schleife:
+  `P := ExitProc; ExitProc := nil; P aufrufen`, bis `ExitProc` nil bleibt.
+  Exit-Prozeduren dürfen `ExitProc` neu setzen (Verkettung), `ExitCode` und
+  `ErrorAddr` lesen und ändern und Anhaltepunkte benutzen (`WriteLn`,
+  `ReadLn`).
+- `ErrorAddr` ist nil, wenn kein Laufzeitfehler vorliegt, sonst ein Wert
+  ungleich nil (die Zeilennummer, `// TP-ANNAHME`). Setzt eine
+  Exit-Prozedur `ErrorAddr := nil`, unterbleibt die Meldung „Runtime
+  error …“, wie in TP.
+- **Normales Ende und `Halt`:** Die Laufzeit ruft die Kette selbst (am Ende
+  des Hauptprogramms und in `_Halt`), danach endet das Programm mit
+  `ExitCode`.
+- **Laufzeitfehler (geprüft oder Trap):** Ein Laufzeitfehler bleibt ein
+  Trap wie heute; `_RunError` und `RunError` laufen nicht selbst über die
+  Kette. So muss nicht jede Funktion mit einer Fehlerstelle anhaltefähig
+  werden, und auch Traps ohne Prüfung (Speicherzugriff außerhalb, 202, 207
+  bei `Trunc`/`Round`) sind abgedeckt. Nach dem Trap ruft der Host
+  (`runner`, `web/loader.js`) eine exportierte Routine (Arbeitsname
+  `_exit`) mit der Fehlernummer auf. Sie setzt den Schatten-Stack zurück,
+  setzt `ExitCode` und `ErrorAddr` und lässt die Kette laufen; danach liest
+  der Host `ExitCode` und `ErrorAddr` und meldet den Fehler nur, wenn
+  `ErrorAddr` nicht nil ist. Die Routine ist anhaltefähig wie das
+  Hauptprogramm: unter WASI mit eigener Treiberschleife wie `_start`, unter
+  `gojs` treibt sie der Loader mit `resume` wie `run`. Geprüft: Eine
+  wazero-Instanz bleibt nach einem Trap aufrufbar, eine Browser-Instanz
+  ebenso.
+- Ein Laufzeitfehler in einer Exit-Prozedur ist wieder ein Trap; der Host
+  ruft `_exit` erneut und die Kette läuft mit dem Rest weiter. Weil
+  `ExitProc` vor jedem Aufruf nil wird, endet das sicher.
+- **Grenze:** Fremde WASI-Laufzeiten ohne unseren Runner (`wasmtime`,
+  `node:wasi`) kennen `_exit` nicht; dort laufen bei Laufzeitfehlern keine
+  Exit-Prozeduren (normales Ende und `Halt` gehen). Steht in
+  `docs/abweichungen.md`.
+
+#### `RunError`
+
+`procedure RunError[(Code: Word)]` beendet das Programm mit Runtime error
+`Code` (ohne Parameter 0) an der Stelle des Aufrufs, wie in TP 5.0. Als
+Laufzeitroutine pflegt sie die Fehlerstelle nicht, die Meldung nennt also
+die Zeile des Aufrufers. Exit-Prozeduren laufen wie bei jedem anderen
+Laufzeitfehler.
+
+#### Bedingungssymbol
+
+`VER50` statt `VER40`; `WASMPASCAL` bleibt. Programme, die `VER40`
+abfragen, verhalten sich wie unter TP 5.0.
+
+#### Umsetzung (Hinweise)
+
+- `compiler/internal/types`: neuer Typ `Proc` (Signatur, Funktion oder
+  Prozedur); `IsOrdinal` nein, Größe 4.
+- `compiler/internal/check`: Deklaration, Verträglichkeit, Zuweisung mit
+  der Kontextregel (Aufruf oder Kopie), Error 143, `@`, Typumwandlung aus
+  `Pointer`, `nil`.
+- `compiler/internal/lexer`: Schalter `A` (Voreinstellung `+`) in den
+  Voreinstellungen, sonst ohne Wirkung.
+- `compiler/internal/ir`: `CallIndirect` (Signatur, Index-Wert) und
+  `FuncRef` (Tabellenindex einer Routine); Liste der adressierten Routinen
+  und der Platzhalter in typisierten Konstanten im Modul.
+- `compiler/internal/analysis`: indirekte Aufrufe im Aufrufgraph, Regel
+  oben; `_exit` ist eine weitere Wurzel wie das Hauptprogramm.
+- `compiler/internal/codegen` und `wasm`: Table-, Element- und
+  Typabschnitt für die Funktionstabelle, `call_indirect`; im
+  Dispatch-Code den Index im Frame sichern; Platzhalter im Datensegment
+  füllen; Export `_exit` samt Treiber unter WASI.
+- `rtl/system.pas`: `ExitProc`, `ErrorAddr`, `RunError`, die Schleife der
+  Exit-Prozeduren am Programmende und in `_Halt`, die Routine hinter
+  `_exit`.
+- `runner/rterror.go`, `web/loader.js`: nach einem Trap `_exit` aufrufen,
+  danach `ExitCode`/`ErrorAddr` auswerten; Ausgaben der Exit-Prozeduren
+  erscheinen vor der Meldung „Runtime error …“.
+
+#### Doku
+
+- Der ausdrückliche Hinweis „ohne OOP“ entfällt überall in der Doku
+  (`README.md` zweimal, `CLAUDE.md`, Kopf von `PLAN.md`); dass es keine
+  Objekte gibt, folgt aus „Turbo Pascal 5.0“ (OOP kam erst mit 5.5).
+  Bereits veröffentlichte Einträge in `CHANGELOG.md` (0.1.0) bleiben
+  unverändert.
+- Überall „Turbo Pascal 4.0“ → „Turbo Pascal 5.0“, wo der Sprachumfang
+  gemeint ist. Die Stellen:
+  - `README.md`: Einleitung, Abschnitt Sprache, Doku-Tabelle (Zeile zu
+    `docs/abweichungen.md`);
+  - `CLAUDE.md`: Kopfzeile, Verweis auf die Abweichungen, Arbeitsregel
+    „Im Zweifel TP 4.0 nachbilden“;
+  - `PLAN.md`: Titel, Ziel, Sprachumfang, Einleitung der
+    Erweiterungstabelle („über TP 5.0 hinaus“; die Zeilen der
+    Dos-Routinen aus TP 5.0 wandern dort heraus in den Sprachumfang),
+    Arbeitsregel „Im Zweifel … TP 4.0“;
+  - `docs/abweichungen.md`: Titel; Etappe-1-Zeile zu `VER40` als überholt
+    kennzeichnen;
+  - `docs/units.md`: Einleitung (Abweichungen von …);
+  - `web/index.html`: Untertitel;
+  - Paketdoku in `doc.go`, `compiler/compiler.go` und
+    `compiler/internal/parser`; Kommentar zu `VER40` in
+    `compiler/internal/source/cond.go`.
+  
+  Historische Aussagen bleiben („TP 4.0 kannte nur …“, die reservierten
+  Wörter von TP 4.0, die sich in 5.0 nicht geändert haben, Herkunftsangaben
+  wie „aus TP 4.0“).
+- `PLAN.md`: Typabbildung Zeile „Prozedurale Typen“ (`i32`, Tabellenindex,
+  4 Byte); Direktiven (`{$A}`); Weggelassen-Liste der Unit `Dos` anpassen
+  (die vier Routinen zu Break und Verify).
+- `docs/units.md`: `ExitProc`, `ErrorAddr`, `RunError`, prozedurale Typen
+  in den Grundlagen.
+- `docs/abweichungen.md`: Zeilen für Etappe 16 (Exit-Prozeduren bei
+  Laufzeitfehlern nur mit unserem Runner und Loader, `ErrorAddr`-Wert,
+  `{$A}` ohne Wirkung).
+
+**Fertig, wenn:** Programme mit Prozedurvariablen, Funktionsparametern,
+prozeduralen typisierten Konstanten und verketteten Exit-Prozeduren laufen
+unter WASI, `gojs` und mit dem Browser-Compiler gleich; Exit-Prozeduren
+laufen nach `Halt`, `RunError`, einem geprüften Laufzeitfehler und einem
+Trap (z. B. 216, 202), auch mit `WriteLn` darin und mit einem
+Laufzeitfehler in der Exit-Prozedur selbst; die Doku spricht von Turbo
+Pascal 5.0; alle bisherigen Tests sind grün.
 
 ## Arbeitsregeln für Claude Code
 
