@@ -33,3 +33,37 @@ func TestMarkSuspendable(t *testing.T) {
 		t.Errorf("Aufrufer von a: %v", Callers(m)[a])
 	}
 }
+
+// Ein indirekter Aufruf ist anhaltefähig, wenn eine Routine der
+// Funktionstabelle mit derselben Signatur anhalten kann.
+func TestMarkSuspendableIndirect(t *testing.T) {
+	mk := func(name string, params ...*ir.Var) *ir.Func {
+		f := &ir.Func{Name: name, Params: params}
+		f.Entry = f.NewBlock()
+		f.Entry.Term = ir.Return{}
+		return f
+	}
+	i32 := func() *ir.Var { return &ir.Var{Name: "x", VT: ir.I32, Scalar: true, Param: 0} }
+	main, other := mk("main"), mk("other")
+	lies, rechne := mk("lies", i32()), mk("rechne")
+	lies.Entry.Instrs = append(lies.Entry.Instrs, ir.Suspend{Reason: ir.IntConst{}, Arg: ir.IntConst{}, Dst: &ir.Var{Name: "r"}})
+	sigI := &ir.FuncSig{Params: []ir.ValType{ir.I32}}
+	sigV := &ir.FuncSig{}
+	main.Entry.Instrs = append(main.Entry.Instrs, ir.CallIndirect{Sig: sigI, Index: ir.IntConst{V: 1}, Args: []ir.Expr{ir.IntConst{}}})
+	other.Entry.Instrs = append(other.Entry.Instrs, ir.CallIndirect{Sig: sigV, Index: ir.IntConst{V: 2}})
+	m := &ir.Module{
+		Funcs: []*ir.Func{main, other, lies, rechne},
+		Table: []*ir.Func{lies, rechne},
+		Sigs:  map[string]*ir.FuncSig{ir.SigKey(sigI.Params, nil): sigI, ir.SigKey(nil, nil): sigV},
+	}
+	MarkSuspendable(m)
+	want := map[*ir.Func]bool{main: true, other: false, lies: true, rechne: false}
+	for f, w := range want {
+		if f.Suspendable != w {
+			t.Errorf("%s.Suspendable = %v, want %v", f.Name, f.Suspendable, w)
+		}
+	}
+	if !sigI.Suspendable || sigV.Suspendable {
+		t.Errorf("Signaturen: %v %v", sigI.Suspendable, sigV.Suspendable)
+	}
+}

@@ -367,6 +367,31 @@ type Call struct {
 	Pos  Pos
 }
 
+// FuncSig ist die WASM-Signatur eines indirekten Aufrufs (prozedurale
+// Typen, TP 5.0). Gleiche Signaturen teilen sich ein Objekt (Module.Sig).
+type FuncSig struct {
+	Params, Results []ValType
+	// Suspendable: Eine Routine der Funktionstabelle mit dieser Signatur
+	// kann anhalten (gesetzt von analysis); der Aufruf ist dann ein
+	// Fortsetzungspunkt wie ein direkter Aufruf einer anhaltefähigen Funktion.
+	Suspendable bool
+}
+
+// CallIndirect ruft die Routine mit dem Tabellenindex Index auf
+// (call_indirect). Index ist ein Wert, der beim Fortsetzen nicht neu
+// berechnet wird (in anhaltefähigen Funktionen ein Hilfswert im Frame).
+type CallIndirect struct {
+	Sig   *FuncSig
+	Index Expr
+	Args  []Expr
+	Dst   *Var
+	Pos   Pos
+}
+
+func (c CallIndirect) String() string {
+	return callString(c.Dst, "indirect["+c.Index.String()+"]", c.Args)
+}
+
 // Host ist eine importierte Funktion.
 type Host struct {
 	Module, Name string
@@ -562,4 +587,41 @@ type Module struct {
 	// _SuspendAction); nil ohne System-Unit. ResumeAction (gojs, rtl:
 	// _GoResumeAction) läuft vor dem Fortsetzen und liefert dessen Ergebnis.
 	SuspendAction, ResumeAction *Func
+	// ErrorExit (rtl: _ErrorExit) beendet das Programm nach einem
+	// Laufzeitfehler über die Exit-Prozeduren; der Host ruft sie über den
+	// Export _exit. nil ohne System-Unit.
+	ErrorExit *Func
+	// Table ist die Funktionstabelle für prozedurale Typen: Table[i] hat den
+	// Index i+1, Index 0 ist nil.
+	Table []*Func
+	// Sigs sind die Signaturen indirekter Aufrufe, nach SigKey.
+	Sigs map[string]*FuncSig
+}
+
+// SigKey ist der Schlüssel einer WASM-Signatur für Module.Sigs.
+func SigKey(params, results []ValType) string {
+	b := make([]byte, 0, len(params)+len(results)+1)
+	for _, p := range params {
+		b = append(b, byte('0'+p))
+	}
+	b = append(b, ':')
+	for _, r := range results {
+		b = append(b, byte('0'+r))
+	}
+	return string(b)
+}
+
+// WasmSig liefert Parameter- und Ergebnistypen der Funktion f in WASM.
+func (f *Func) WasmSig() (params, results []ValType) {
+	for _, p := range f.Params {
+		if p.Storage == Indirect {
+			params = append(params, I32)
+		} else {
+			params = append(params, p.VT)
+		}
+	}
+	if vt, ok := f.ResultVT(); ok {
+		results = []ValType{vt}
+	}
+	return params, results
 }

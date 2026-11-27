@@ -84,7 +84,7 @@ func TestFilePosition(t *testing.T) {
 
 func TestDefines(t *testing.T) {
 	d := NewDefines("Debug")
-	if !d.Defined("DEBUG") || !d.Defined("ver40") || !d.Defined("WasmPascal") || d.Defined("MSDOS") {
+	if !d.Defined("DEBUG") || !d.Defined("ver50") || !d.Defined("WasmPascal") || d.Defined("MSDOS") {
 		t.Errorf("Defines = %v", d)
 	}
 	c := d.Clone()

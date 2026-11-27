@@ -332,6 +332,18 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 		s.emit(Set{Var: code, Val: arg(0)})
 		s.terminate(Trap{CodeVar: code, Pos: s.at, KeepPos: s.rtl})
 		return nil
+	case check.BRunErrorTP:
+		// Bit 16 kennzeichnet die Nummer als gesetzt, damit auch
+		// RunError(0) kein „echter“ WASM-Trap (Nummer 0) ist; der Host
+		// nimmt nur die unteren 16 Bit.
+		var n Expr = IntConst{V: 0}
+		if len(args) == 1 {
+			n = Bin{Op: AndI, X: arg(0), Y: IntConst{V: 0xFFFF}}
+		}
+		code := s.temp(types.LongInt)
+		s.emit(Set{Var: code, Val: Bin{Op: OrI, X: n, Y: IntConst{V: 0x10000}}})
+		s.terminate(Trap{CodeVar: code, Pos: s.at, KeepPos: s.rtl})
+		return nil
 	case check.BParamCount:
 		return s.rtlValue("_ParamCount", types.Integer)
 	case check.BParamStr:
@@ -384,7 +396,13 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 		s.emit(Copy{Dst: s.designator(args[1]), Src: s.designator(args[0]), N: arg(2)})
 		return nil
 	case check.BAddr, check.BOfs:
-		return s.designator(args[0])
+		if p := s.l.info.ProcRefs[args[0]]; p != nil {
+			return IntConst{V: s.l.tableIndex(p)}
+		}
+		if _, ok := s.typeOf(args[0]).(*types.ProcType); ok && b.ID == check.BAddr {
+			return s.procValue(args[0])
+		}
+		return s.place(args[0])
 	case check.BPtr:
 		return arg(1)
 	case check.BMemGrow:

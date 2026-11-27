@@ -1,4 +1,4 @@
-// Package parser ist ein Recursive-Descent-Parser für Turbo Pascal 4.0 samt
+// Package parser ist ein Recursive-Descent-Parser für Turbo Pascal 5.0 samt
 // den Erweiterungen aus PLAN.md. Er bricht beim ersten Fehler ab.
 package parser
 
@@ -509,6 +509,18 @@ func (p *parser) typeExpr() ast.TypeExpr {
 			t.Elem = p.typeExpr()
 		}
 		return t
+	case lexer.Procedure, lexer.Function:
+		// prozeduraler Typ (TP 5.0)
+		t := &ast.ProcType{Base: ast.At(pos), IsFunc: p.tok.Kind == lexer.Function}
+		p.next()
+		if p.tok.Kind == lexer.LParen {
+			t.Params = p.params()
+		}
+		if t.IsFunc {
+			p.expect(lexer.Colon)
+			t.Result = p.paramType()
+		}
+		return t
 	case lexer.StringKw:
 		p.next()
 		t := &ast.StringType{Base: ast.At(pos)}
@@ -746,7 +758,14 @@ func (p *parser) stmt() ast.Stmt {
 		}
 		switch x.(type) {
 		case *ast.Ident, *ast.SelectorExpr, *ast.CallExpr:
-			return &ast.CallStmt{StmtBase: base, Call: x}
+			return &ast.CallStmt{StmtBase: base, Call: x, End: p.tok.Pos}
+		case *ast.IndexExpr, *ast.DerefExpr:
+			// parameterlose Prozedurvariable (A[1]; P^;); ob es eine ist,
+			// prüft erst die Typprüfung (sonst Error 91 an End)
+			switch p.tok.Kind {
+			case lexer.Semicolon, lexer.End, lexer.Else, lexer.Until:
+				return &ast.CallStmt{StmtBase: base, Call: x, End: p.tok.Pos}
+			}
 		}
 		p.failHere(source.ErrAssignExpected)
 	case lexer.Semicolon, lexer.End, lexer.Until, lexer.Else:

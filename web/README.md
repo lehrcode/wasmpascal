@@ -8,7 +8,7 @@ Browser-Demo und Laufzeitumgebung für Programme mit dem Ziel `gojs`.
 | `run.html` | führt ein fertiges `.wasm` (Ziel gojs) aus |
 | `beispiele/` | Beispielprogramme der Demo |
 | `wasm_exec.js` | unverändert aus Go 1.27.4 (`$(go env GOROOT)/lib/wasm/wasm_exec.js`); trägt Compiler und Programme |
-| `loader.js` | `WasmPascal.run(wasm, {args, write, readLine, signal})` für Browser und Node.js; übersetzt Traps in `Runtime error NNN at datei.pas(zeile) in Prozedur` |
+| `loader.js` | `WasmPascal.run(wasm, {args, write, readLine, signal})` für Browser und Node.js; übersetzt Traps in `Runtime error NNN at datei.pas(zeile) in Prozedur`, vorher laufen über den Export `_exit` die Exit-Prozeduren |
 | `terminal.js` | xterm.js-Terminal mit Zeileneditor für `index.html` und `run.html` |
 | `node-compile.js` | `node web/node-compile.js compiler.wasm [-o verz] datei.pas …` übersetzt mit dem Browser-Compiler |
 | `node-run.js` | `node web/node-run.js [--dir verz] [--env] [--setenv NAME=WERT …] prog.wasm [Argumente …]`, stdin/stdout wie unter WASI; mit `--dir` Dateizugriff unterhalb von `verz`, mit `--env` die Umgebung dieses Prozesses, mit `--setenv` einzelne Variablen |

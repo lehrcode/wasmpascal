@@ -1,12 +1,12 @@
-# Projektplan WasmPascal: Turbo-Pascal-4.0-Compiler nach WASM in Go
+# Projektplan WasmPascal: Turbo-Pascal-5.0-Compiler nach WASM in Go
 
 Nov 24, 2026 · @Christian Winkler
 
 ## Ziel und Rahmenbedingungen
 
-Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext in WebAssembly übersetzt. Modulpfad: `github.com/lehrcode/wasmpascal`; die CLI heißt `pascal`. Der Compiler läuft nativ und lässt sich selbst nach WASM kompilieren. Einen eigenen Interpreter gibt es nicht: `pascal run` kompiliert und führt das Modul sofort in wazero aus, im Browser übernimmt die Engine des Browsers.
+Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-5.0-Quelltext in WebAssembly übersetzt (bis Etappe 15: Turbo Pascal 4.0). Modulpfad: `github.com/lehrcode/wasmpascal`; die CLI heißt `pascal`. Der Compiler läuft nativ und lässt sich selbst nach WASM kompilieren. Einen eigenen Interpreter gibt es nicht: `pascal run` kompiliert und führt das Modul sofort in wazero aus, im Browser übernimmt die Engine des Browsers.
 
-**Sprachumfang:** Turbo Pascal 4.0 ohne OOP, plus die unten genannten Erweiterungen aus TP 7 und Delphi. Das umfasst Units, Records (auch variante), Aufzählungen, Teilbereiche, Mengen, Zeiger, ShortStrings, typisierte und untypisierte Dateien, verschachtelte Prozeduren und `var`-Parameter. Ziel ist weitgehende Quelltext-Kompatibilität, aber keine Binär- und keine Layout-Kompatibilität.
+**Sprachumfang:** Turbo Pascal 5.0, plus die unten genannten Erweiterungen aus TP 7 und Delphi. Das umfasst Units, Records (auch variante), Aufzählungen, Teilbereiche, Mengen, Zeiger, ShortStrings, typisierte und untypisierte Dateien, verschachtelte Prozeduren, `var`-Parameter, prozedurale Typen und Exit-Prozeduren (seit Etappe 16). Ziel ist weitgehende Quelltext-Kompatibilität, aber keine Binär- und keine Layout-Kompatibilität.
 
 **Bewusste Vereinfachungen:**
 
@@ -18,9 +18,9 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 - Es gibt keine Optimierungen. Konstante Ausdrücke werden nur dort ausgewertet, wo die Sprache es verlangt.
 - Laufzeitfehler beenden das Programm mit `Runtime error NNN at datei.pas(zeile) in Prozedur`, also mit Quelltextposition statt Adresse (siehe Abschnitt Laufzeitfehler mit Zeilennummern).
 
-**Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` und `.OBJ`-Linking, `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount` und (seit Etappe 15) den Routinen für Attribute, Dateizeit, Suche, Pfade und Umgebung. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen WhereX, WhereY, Window und KeyPressed (GotoXY nach Rückfrage nachgereicht, über ANSI); ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
+**Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` und `.OBJ`-Linking, `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount` und (seit Etappe 15) den Routinen für Attribute, Dateizeit, Suche, Pfade und Umgebung; die in TP 5.0 neuen `GetCBreak`, `SetCBreak`, `GetVerify`, `SetVerify` und `SwapVectors` fehlen ebenfalls. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen WhereX, WhereY, Window und KeyPressed (GotoXY nach Rückfrage nachgereicht, über ANSI); ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
 
-**Direktiven:** Unterstützt werden `{$I datei}`, `{$I-}`/`{$I+}` mit `IOResult` sowie `{$DEFINE}`, `{$UNDEF}`, `{$IFDEF}`, `{$IFNDEF}`, `{$IFOPT}`, `{$ELSE}` und `{$ENDIF}` (`{$UNDEF}` und `{$IFOPT}` seit Etappe 1, weil TP 4.0 sie kennt). Von {$M} wird nur die Stackgröße ausgewertet (siehe Größengrenzen). Alle anderen werden ignoriert. Boolesche Ausdrücke werden immer mit Kurzschlussauswertung berechnet (entspricht `{$B-}`).
+**Direktiven:** Unterstützt werden `{$I datei}`, `{$I-}`/`{$I+}` mit `IOResult` sowie `{$DEFINE}`, `{$UNDEF}`, `{$IFDEF}`, `{$IFNDEF}`, `{$IFOPT}`, `{$ELSE}` und `{$ENDIF}` (`{$UNDEF}` und `{$IFOPT}` seit Etappe 1, weil TP 4.0 sie kennt). Von {$M} wird nur die Stackgröße ausgewertet (siehe Größengrenzen). Alle anderen werden ignoriert, auch `{$A-}` (TP 5.0; Records und Arrays sind immer natürlich ausgerichtet), aber für `{$IFOPT}` mitgeführt. Boolesche Ausdrücke werden immer mit Kurzschlussauswertung berechnet (entspricht `{$B-}`).
 
 **Reservierte Wörter:** die von TP 4.0, zusätzlich immer `object`, `constructor`, `destructor` und `inherited`. Sie sind für eine spätere OOP-Erweiterung im Stil von TP 5.5/6.0 vorgemerkt, haben in diesem Plan aber noch keine Bedeutung; ihre Verwendung als Bezeichner ist ein Compilerfehler. Alle anderen später eingeführten Schlüsselwörter (`asm`, `library`, `exports`) bleiben normale Bezeichner.
 
@@ -37,7 +37,7 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 - `#nnn` bis 255 und `Chr(n)` über 127 erzeugen das rohe Byte; `#n` von 256 bis 65535 ist ein `WideChar` (ohne Surrogate und Noncharacters). Alte Programme, die Rahmen mit CP437-Nummern zeichnen (`#196`, `Chr(219)`), geben deshalb ungültiges UTF-8 aus; das ist eine bewusste Abweichung.
 - Textdateien (`Text`) werden als UTF-8 gelesen und geschrieben, ohne Umwandlung; typisierte und untypisierte Dateien sind ohnehin Rohbytes.
 
-**Erweiterungen aus späteren Versionen:** Diese Sprachmittel kommen über TP 4.0 hinaus dazu. Keines braucht ein neues reserviertes Wort; `Result`, `Break`, `Continue`, `Low` und `High` sind vordefinierte Bezeichner.
+**Erweiterungen aus späteren Versionen:** Diese Sprachmittel kommen über TP 5.0 hinaus dazu (bis Etappe 15 stand hier „über TP 4.0“; die Routinen der Unit `Dos` aus TP 5.0 gehören seit Etappe 16 zum Sprachumfang). Keines braucht ein neues reserviertes Wort; `Result`, `Break`, `Continue`, `Low` und `High` sind vordefinierte Bezeichner.
 
 | Erweiterung | Herkunft | Regeln |
 | --- | --- | --- |
@@ -50,7 +50,6 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 | Strukturierte Funktionsergebnisse | Delphi 1.0 | Funktionen dürfen alle Typen außer Dateien zurückgeben, also auch Records, Arrays und Mengen. Der Ergebnistyp ist ein Typbezeichner. Felder und Elemente des Ergebnisses setzt man über `Result`; `F.x` im Rumpf ist ein rekursiver Aufruf. |
 | `WideChar` | Delphi 2.0 | Ein Unicode-Zeichen bis U+FFFF, 2 Byte; Ordinal- und Zeichentyp ohne Arithmetik; als String eingesetzt UTF-8 (Etappe 14). |
 | `SmallInt` | Delphi | 16 Bit mit Vorzeichen, 2 Byte; jede Zuweisung kürzt auf 16 Bit (Etappe 14). |
-| `Dos`: `DosVersion`, `EnvCount`, `EnvStr`, `FExpand`, `FSearch`, `FSplit`, `GetEnv` | TP 5.0 | Laut README zu TP 5.0 dort neu; in WasmPascal seit Etappe 15. |
 | `for … in` | Delphi 2005 | Über Arrays (alle Elemente in Indexreihenfolge), Strings (Bytes als `Char`, mit `WideChar`-Laufvariable die UTF-8-Zeichen – eigene Erweiterung, Etappe 14) und Mengen (enthaltene Elemente aufsteigend). Die Schleifenvariable ist im Rumpf schreibgeschützt. Keine Enumeratoren, da es keine Klassen gibt. |
 
 Bewusst nicht aufgenommen: offene Array-Parameter (`array of T`) und Standardwerte für Parameter.
@@ -190,7 +189,7 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 | `string[n]` / `string` | Adresse (`i32`) | immer 256 Byte: Längenbyte + 255 Bytes UTF-8; beim Zuweisen auf `n` gekürzt |
 | `set of T` | Adresse (`i32`) | immer 32 Byte (256 Bit); Operationen mit `v128` |
 | Records, Arrays | Adresse (`i32`) | natürliche Ausrichtung; variante Teile überlagern sich wie eine Union |
-| Prozedurale Typen | gibt es in 4.0 nicht | – |
+| Prozedurale Typen | `i32` | 4 Byte: Index in die WASM-Funktionstabelle, 0 = `nil` (seit Etappe 16) |
 | Dateivariablen | Adresse (`i32`) | Laufzeit-Record (Handle, Modus, Puffer) |
 
 **Festlegungen zu Wertebereichen (nach Etappe 1):**
@@ -1257,7 +1256,7 @@ liefern (geprüft mit fester Uhr) und `pascal run` den Versatz des Systems
 übergibt; alle bisherigen Tests sind grün.
 - *Erledigt (Nov 27, 2026).* `rtl/dos.pas` mit allen Routinen, Typen, Konstanten und `DosError`; Ortszeit über `WASMPASCAL_UTC_OFFSET`. System-Unit: WASI-Importe `environ_sizes_get`, `environ_get`, `fd_readdir`, `path_filestat_get`; im Interface `_EnvCount`, `_EnvStr`, `_FullPath`, `_FileName`, `_FileStat`, `_FileStatF`, `_DirOpen`, `_DirNext`, `_DirClose`; Umgebung unter `gojs` hinter `argv`. `runner.Options.Env` (mit `ExampleRun_env`) und eine Uhr für Tests im Paket; `pascal run` gibt die Umgebung des Rechners plus Versatz weiter; Loader: Option `env`, `fd_readdir`, `path_filestat_get`, `mtim`, Host-Vertrag um `readdirSync` und `mtimeMs` erweitert; `node-run.js` mit `--env`, `--setenv`, `--emptyenv`; Harness mit `name.env`. Herkunft geklärt: `DosVersion`, `EnvCount`, `EnvStr`, `FExpand`, `FSearch`, `FSplit`, `GetEnv` sind laut README zu TP 5.0 dort neu (Erweiterungstabelle). Nebenbei behoben: `GetTime` lieferte bei Bruchteilen wie 0,25 s wegen der `f64`-Genauigkeit der Nanosekunden manchmal einen Hundertstel zu wenig (gefunden durch die Tests mit fester Uhr). Tests: `testdata/etappe15/` (sieben Programme, WASI und `gojs`, auch mit Frame-Ablage), `runner/zeit_test.go` (zehn Fälle mit fester Uhr, Dateizeit), `TestProgramEnv`.
 
-### Etappe 16: Turbo Pascal 5.0 – prozedurale Typen, `ExitProc`
+### Etappe 16: Turbo Pascal 5.0 – prozedurale Typen, `ExitProc` ✅
 
 **Ziel:** WasmPascal deckt den Sprachumfang von Turbo Pascal 5.0 ab (ohne
 Overlays und Debugger, die ohne DOS bedeutungslos sind) und darf sich in
@@ -1425,6 +1424,8 @@ Trap (z. B. 216, 202), auch mit `WriteLn` darin und mit einem
 Laufzeitfehler in der Exit-Prozedur selbst; die Doku spricht von Turbo
 Pascal 5.0; alle bisherigen Tests sind grün.
 
+- *Erledigt (Nov 27, 2026).* Prozedurale Typen in AST (`ast.ProcType`), Parser, `types.ProcType`, Typprüfung (`autoCall`, `operand`, `procRef`, `check.CallIndirect`, `Info.ProcRefs`), IR (`CallIndirect`, `FuncSig`, `Module.Table`/`Sigs`), Analyse und Codegenerator (Table- und Element-Abschnitt, `call_indirect`, Index im Frame); `RunError`, `ExitProc`, `ErrorAddr`, `_Halt`/`_ErrorExit`/`Terminate` in `rtl/system.pas`, Export `_exit` mit Auswertung in `runner` und `web/loader.js`; `VER50`, Schalter `A`. Abweichungen von den Hinweisen oben: (1) Der Tabellenindex steht schon beim Lowering fest (Reihenfolge der ersten Verwendung), deshalb braucht `encode` keinen Platzhalter; (2) `_ErrorExit` kehrt nie zurück, sondern endet wie `Halt` über `SuspendHalt`; nach einem Laufzeitfehler kodiert der Exit-Code `ExitCode * 2 + 1` (Meldung) bzw. `ExitCode * 2` (`ErrorAddr = nil`), so wirken auch `Halt` in einer Exit-Prozedur und Anhaltepunkte ohne eigenes Protokoll; (3) das Programmende ist `_Halt(0)` (TP-ANNAHME: ein im Hauptprogramm gesetzter `ExitCode` zählt nicht); (4) `RunError` setzt Bit 16 der Fehlernummer, damit `RunError(0)` kein echter Trap ist; (5) Aufrufe als Anweisung auch über Index und Zeiger (`A[1];`, `P^;`), Error 91 sonst erst in der Typprüfung; (6) Error 142 für den Aufruf einer Variable, die keine Prozedurvariable ist (bisher 143), `@` und `Addr` auf verschachtelte Routinen ergeben 143 (bisher 83); (7) `Addr(Routine)` wie `@Routine`. Tests: `testdata/etappe16/` (14 Programme, 8 Fehlerfälle, WASI, `gojs`, Frame-Ablage), Golden-Tests `38_prozedurtypen` und `prozedurtypen.sym`, `TestMarkSuspendableIndirect`.
+
 ## Arbeitsregeln für Claude Code
 
 - **Eine Etappe nach der anderen.** Am Ende jeder Etappe: Tests grün, `go vet` sauber, `gofmt` angewendet, Commit mit aussagekräftiger Nachricht, kurzer Bericht (was geht, was fehlt, offene Fragen). Dann auf Freigabe warten.
@@ -1433,7 +1434,7 @@ Pascal 5.0; alle bisherigen Tests sind grün.
 - **WASM-Tauglichkeit des Compilers:** kein `os/exec`, keine cgo-Abhängigkeiten, Dateizugriff im Compiler nur über ein `fs.FS`-artiges Interface, damit der Browser Quelltexte aus dem Speicher liefern kann. Beide `GOOS=js`- und `GOOS=wasip1`-Builds in jedem Test-Lauf prüfen.
 - **Fehlermeldungen:** Format `datei.pas(zeile,spalte): Error NN: Text`, angelehnt an TP. Abbruch beim ersten Fehler.
 - **Codegenerator von Anfang an auf den Scheduler auslegen:** IR immer als CFG; jede Variable muss sich wahlweise in den Frame auslagern lassen. Auch wenn die Zustandsmaschinen erst in Etappe 8 kommen.
-- **Keine eigenmächtigen Erweiterungen** des Sprachumfangs. Im Zweifel das Verhalten von TP 4.0 nachbilden und Abweichungen in `docs/abweichungen.md` festhalten.
+- **Keine eigenmächtigen Erweiterungen** des Sprachumfangs. Im Zweifel das Verhalten von TP 5.0 nachbilden und Abweichungen in `docs/abweichungen.md` festhalten.
 - **Keine Raterei bei TP-Verhalten:** Wenn das genaue Verhalten unklar ist (Ausgabeformat, Randfälle), eine plausible Annahme treffen, im Code mit `// TP-ANNAHME:` markieren und im Bericht nennen.
 - **Laufzeit in Pascal bevorzugen.** Neue Laufzeitfunktionen zuerst in `rtl/*.pas` schreiben; nur wenn das nicht geht, als Intrinsic in Go/WASM.
 - **`PLAN.md` und `docs/abweichungen.md` pflegen:** erledigte Etappen abhaken, Entscheidungen kurz festhalten.

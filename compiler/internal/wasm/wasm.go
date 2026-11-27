@@ -97,6 +97,11 @@ type Module struct {
 	Types   []FuncType
 	Imports []Import
 	Funcs   []*Func
+	// Table: Tabelle 0 (funcref) für call_indirect; Table[i] ist der
+	// Funktionsindex an Position i+1, Position 0 bleibt leer (nil).
+	Table []uint32
+	// NeedTable legt die Tabelle auch ohne Einträge an (call_indirect).
+	NeedTable bool
 	// Speicher 0 mit MemMin Seiten (64 KB); ohne Obergrenze.
 	MemMin  uint32
 	Globals []Global
@@ -149,6 +154,13 @@ func (m *Module) Encode() []byte {
 		}
 		out = section(out, 3, b)
 	}
+	if len(m.Table) > 0 || m.NeedTable {
+		var b []byte
+		b = AppendU32(b, 1)
+		b = append(b, 0x70, 0x00) // funcref, nur Minimum
+		b = AppendU32(b, uint32(len(m.Table)+1))
+		out = section(out, 4, b)
+	}
 	{
 		var b []byte
 		b = AppendU32(b, 1)
@@ -180,6 +192,18 @@ func (m *Module) Encode() []byte {
 			b = AppendU32(b, e.Index)
 		}
 		out = section(out, 7, b)
+	}
+	if len(m.Table) > 0 {
+		var b []byte
+		b = AppendU32(b, 1)
+		b = append(b, 0x00, OpI32Const) // aktiv, Tabelle 0, ab Position 1
+		b = AppendS32(b, 1)
+		b = append(b, OpEnd)
+		b = AppendU32(b, uint32(len(m.Table)))
+		for _, f := range m.Table {
+			b = AppendU32(b, f)
+		}
+		out = section(out, 9, b)
 	}
 	if len(m.Funcs) > 0 {
 		var b []byte

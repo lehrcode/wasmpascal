@@ -8,14 +8,22 @@ import "github.com/lehrcode/wasmpascal/compiler/internal/ir"
 type CallGraph map[*ir.Func][]*ir.Func
 
 // Callers baut den Aufrufgraph (Aufgerufener → Aufrufer) über alle Funktionen,
-// einschließlich der Laufzeit-Units.
+// einschließlich der Laufzeit-Units. Ein indirekter Aufruf (prozedurale
+// Typen) gilt als Aufruf jeder Routine der Funktionstabelle mit derselben
+// WASM-Signatur.
 func Callers(m *ir.Module) CallGraph {
+	bySig := tableBySig(m)
 	g := CallGraph{}
 	for _, f := range m.Funcs {
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
-				if c, ok := in.(ir.Call); ok {
+				switch c := in.(type) {
+				case ir.Call:
 					g[c.Fn] = append(g[c.Fn], f)
+				case ir.CallIndirect:
+					for _, callee := range bySig[c.Sig] {
+						g[callee] = append(g[callee], f)
+					}
 				}
 			}
 		}
@@ -23,9 +31,23 @@ func Callers(m *ir.Module) CallGraph {
 	return g
 }
 
+// tableBySig ordnet die Routinen der Funktionstabelle den Signaturen
+// indirekter Aufrufe zu.
+func tableBySig(m *ir.Module) map[*ir.FuncSig][]*ir.Func {
+	bySig := map[*ir.FuncSig][]*ir.Func{}
+	for _, f := range m.Table {
+		if fs := m.Sigs[ir.SigKey(f.WasmSig())]; fs != nil {
+			bySig[fs] = append(bySig[fs], f)
+		}
+	}
+	return bySig
+}
+
 // MarkSuspendable setzt Func.Suspendable für jede Funktion, die direkt (über
-// einen Anhaltepunkt ir.Suspend) oder transitiv anhalten kann. Alle anderen
-// werden normal und strukturiert übersetzt und kosten nichts extra.
+// einen Anhaltepunkt ir.Suspend) oder transitiv anhalten kann, und
+// FuncSig.Suspendable für Signaturen, über die eine anhaltefähige Routine
+// indirekt aufgerufen werden kann. Alle anderen werden normal und
+// strukturiert übersetzt und kosten nichts extra.
 func MarkSuspendable(m *ir.Module) {
 	var work []*ir.Func
 	for _, f := range m.Funcs {
@@ -43,6 +65,14 @@ func MarkSuspendable(m *ir.Module) {
 			if !c.Suspendable {
 				c.Suspendable = true
 				work = append(work, c)
+			}
+		}
+	}
+	for fs, fns := range tableBySig(m) {
+		fs.Suspendable = false
+		for _, f := range fns {
+			if f.Suspendable {
+				fs.Suspendable = true
 			}
 		}
 	}

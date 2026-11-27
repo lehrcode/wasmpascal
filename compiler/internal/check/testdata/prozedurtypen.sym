@@ -1,0 +1,14 @@
+type TProc = TProc (size 4, align 4)
+type TFunc = TFunc (size 4, align 4)
+type TZahl = TZahl (size 4, align 4)
+var P: TProc (size 4)
+var F: TFunc (size 4)
+var Z: TZahl (size 4)
+var I: Integer (size 4)
+procedure Hallo [level 1]
+function Quadrat(X: Real): Real [level 1]
+  result Result: Real (size 8)
+  param X: Real (size 8)
+function Eins: Integer [level 1]
+  result Result: Integer (size 4)
+const K: TFunc = Quadrat (size 4)

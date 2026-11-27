@@ -1,0 +1,4 @@
+ExitProc nil: TRUE
+Hauptprogramm
+Erste
+Zweite: ExitCode 0, ErrorAddr nil: TRUE

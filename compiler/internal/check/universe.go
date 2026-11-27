@@ -101,6 +101,7 @@ const (
 	BGoSetSP
 	BGoArgc
 	BGoArgv
+	BRunErrorTP // RunError[(Code)] aus TP 5.0
 	bUnsupported
 
 	// BWasiBase + i ist abi.Intrinsics[i].
@@ -136,7 +137,7 @@ var builtinProcs = []struct {
 	{"ParamStr", BParamStr, true}, {"Random", BRandom, true}, {"Pi", BPi, true},
 	{"Ptr", BPtr, true}, {"Addr", BAddr, true}, {"Ofs", BOfs, true}, {"Seg", BSeg, true},
 	{"_MemGrow", BMemGrow, true}, {"_MemSize", BMemSize, true}, {"_HeapBase", BHeapBase, true},
-	{"_RunError", BRunError, false}, {"_Suspend", BSuspend, true},
+	{"_RunError", BRunError, false}, {"_Suspend", BSuspend, true}, {"RunError", BRunErrorTP, false},
 	{"_GoSetSP", BGoSetSP, false}, {"_GoArgc", BGoArgc, true}, {"_GoArgv", BGoArgv, true},
 }
 

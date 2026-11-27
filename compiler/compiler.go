@@ -1,4 +1,4 @@
-// Package compiler übersetzt Turbo-Pascal-4.0-Quelltext in ein WebAssembly-Modul.
+// Package compiler übersetzt Turbo-Pascal-5.0-Quelltext in ein WebAssembly-Modul.
 //
 // Das Paket nutzt nur die Go-Standardbibliothek und baut auch mit GOOS=js und
 // GOOS=wasip1. Quelltexte werden ausschließlich über Options.FS gelesen, damit

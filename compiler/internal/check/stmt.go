@@ -41,9 +41,21 @@ func (c *checker) call(e *ast.CallExpr, stmt bool) TypeAndValue {
 	case *types.TypeName:
 		c.info.Calls[e] = &Call{Kind: CallTypecast, Type: s.Type}
 		return c.typecast(e, s.Type)
+	case *types.Unit, *types.Label, *types.Const:
+		c.fail(e.Fun.Pos(), source.ErrInvalidProcRef, "")
 	}
-	c.fail(e.Fun.Pos(), source.ErrInvalidProcRef, "")
-	return TypeAndValue{}
+	// Aufruf über eine Prozedurvariable (TP 5.0)
+	x := c.exprNoCall(e.Fun)
+	pt, ok := x.Type.(*types.ProcType)
+	if !ok || (x.Mode != Variable && x.Mode != Value) {
+		c.fail(e.Fun.Pos(), source.ErrProcVarExpected, "")
+	}
+	c.info.Calls[e] = &Call{Kind: CallIndirect, Sig: pt.Sig, Fun: e.Fun}
+	c.args(e, pt.Sig.Params)
+	if pt.IsFunc {
+		return TypeAndValue{Mode: Value, Type: pt.Sig.Result}
+	}
+	return TypeAndValue{Mode: NoValue}
 }
 
 // argCount prüft die Zahl der Argumente wie TP: zu viele ergibt `")" expected`
@@ -73,14 +85,14 @@ func (c *checker) args(e *ast.CallExpr, params []*types.Param) {
 				c.fail(a.Pos(), source.ErrVarIdentExpected, "")
 			}
 		default:
-			c.assignable(p.Type, c.expr(a), a)
+			c.assignable(p.Type, c.operand(p.Type, a), a)
 		}
 	}
 }
 
 // varArg prüft ein Argument für einen var-Parameter: eine beschreibbare Variable.
 func (c *checker) varArg(a ast.Expr) TypeAndValue {
-	x := c.expr(a)
+	x := c.exprNoCall(a)
 	if x.Mode != Variable {
 		c.fail(a.Pos(), source.ErrVarIdentExpected, "")
 	}
@@ -103,6 +115,13 @@ func (c *checker) typecast(e *ast.CallExpr, t types.Type) TypeAndValue {
 	_, tPtr := t.(*types.Pointer)
 	_, xPtr := x.Type.(*types.Pointer)
 	xPtr = xPtr || x.Type == types.Nil
+	// Pointer ↔ prozeduraler Typ wie Zeiger untereinander (TP 5.0: TProc(P))
+	if _, ok := t.(*types.ProcType); ok {
+		tPtr = true
+	}
+	if _, ok := x.Type.(*types.ProcType); ok {
+		xPtr = true
+	}
 	switch {
 	case types.IsOrdinal(t) && types.IsOrdinal(x.Type):
 		if x.Mode == Constant {
@@ -173,6 +192,19 @@ func (c *checker) stmt(s ast.Stmt) {
 		// wird verworfen (wie {$X+} in TP 6/7 und Delphi, hier immer an). Wie
 		// dort gilt das nicht für die Standardfunktionen der System-Unit.
 		x := c.exprOrType(s.Call)
+		if pt, ok := x.Type.(*types.ProcType); ok && (x.Mode == Variable || x.Mode == Value) && c.info.Calls[s.Call] == nil {
+			// parameterlose Prozedurvariable als Anweisung: P;
+			if len(pt.Sig.Params) > 0 {
+				c.fail(s.End, source.ErrLParenExpected, "")
+			}
+			c.info.Calls[s.Call] = &Call{Kind: CallIndirect, Sig: pt.Sig, Fun: s.Call}
+			c.record(s.Call, TypeAndValue{Mode: Value, Type: pt.Sig.Result})
+			break
+		}
+		switch s.Call.(type) {
+		case *ast.IndexExpr, *ast.DerefExpr:
+			c.fail(s.End, source.ErrAssignExpected, "")
+		}
 		if x.Mode != NoValue && !c.isProcCall(s.Call) {
 			c.fail(s.Call.Pos(), source.ErrInvalidVarRef, "")
 		}
@@ -259,7 +291,7 @@ func (c *checker) isProcCall(e ast.Expr) bool {
 		key = sel.Sel
 	}
 	call := c.info.Calls[key]
-	return call != nil && call.Kind == CallProc
+	return call != nil && (call.Kind == CallProc || call.Kind == CallIndirect)
 }
 
 func (c *checker) assign(s *ast.AssignStmt) {
@@ -283,7 +315,7 @@ func (c *checker) assign(s *ast.AssignStmt) {
 		}
 		dst = x.Type
 	}
-	c.assignable(dst, c.expr(s.Rhs), s.Rhs)
+	c.assignable(dst, c.operand(dst, s.Rhs), s.Rhs)
 }
 
 // forVar prüft die Laufvariable: eine einfache, beschreibbare Variable des

@@ -258,6 +258,19 @@ func typeSx(t TypeExpr) sx {
 		return l(packed(t.Packed, "file-of"), typeSx(t.Elem))
 	case *PointerType:
 		return l("^", typeSx(t.Elem))
+	case *ProcType:
+		head := "procedure-type"
+		if t.IsFunc {
+			head = "function-type"
+		}
+		kids := []sx{}
+		if t.Params != nil {
+			kids = append(kids, paramsSx(t.Params))
+		}
+		if t.Result != nil {
+			kids = append(kids, l("result", typeSx(t.Result)))
+		}
+		return la(head, kids)
 	}
 	panic(fmt.Sprintf("ast.Sprint: unbekannter Typ %T", t))
 }
@@ -299,11 +312,7 @@ func declSx(d Decl) sx {
 		}
 		kids := []sx{a(d.Name.Name)}
 		if d.Params != nil {
-			ps := []sx{}
-			for _, g := range d.Params {
-				ps = append(ps, l(modeNames[g.Mode], la("", idents(g.Names)), typeSx(g.Type)))
-			}
-			kids = append(kids, la("params", ps))
+			kids = append(kids, paramsSx(d.Params))
 		}
 		if d.Result != nil {
 			kids = append(kids, l("result", typeSx(d.Result)))
@@ -317,6 +326,14 @@ func declSx(d Decl) sx {
 		return la(head, kids)
 	}
 	panic(fmt.Sprintf("ast.Sprint: unbekannte Deklaration %T", d))
+}
+
+func paramsSx(gs []*ParamGroup) sx {
+	ps := []sx{}
+	for _, g := range gs {
+		ps = append(ps, l(modeNames[g.Mode], la("", idents(g.Names)), typeSx(g.Type)))
+	}
+	return la("params", ps)
 }
 
 func stmtSx(s Stmt) sx {

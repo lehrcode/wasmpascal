@@ -19,6 +19,7 @@ const (
 	VNil              // nil
 	VList             // Array-Konstante (typisierte Konstanten)
 	VRecord           // Record-Konstante; Elems in Feldreihenfolge, nil = nicht belegt
+	VProc             // Routine als Wert einer typisierten Konstante (Proc)
 )
 
 // Value ist der Wert einer Konstante.
@@ -29,6 +30,7 @@ type Value struct {
 	Str   string
 	Set   [4]uint64
 	Elems []*Value
+	Proc  *Proc
 }
 
 // IntVal erzeugt einen Ordinalwert.
@@ -75,6 +77,8 @@ func (v *Value) Format(t Type) string {
 		return fmt.Sprintf("%q", v.Str)
 	case VNil:
 		return "nil"
+	case VProc:
+		return v.Proc.Text()
 	case VSet:
 		var elemT Type
 		if s, ok := t.(*Set); ok {

@@ -37,7 +37,7 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 	l := &lowerer{
 		info:    info,
 		opts:    opts,
-		m:       &Module{StackSize: opts.StackSize},
+		m:       &Module{StackSize: opts.StackSize, Sigs: map[string]*FuncSig{}},
 		funcs:   map[*types.Proc]*Func{},
 		vars:    map[*types.Var]*Var{},
 		strs:    map[string]int64{},
@@ -45,6 +45,7 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 		files:   map[string]int{},
 		copyIns: map[*Func][]copyIn{},
 		hosts:   map[int]*Host{},
+		table:   map[*types.Proc]int32{},
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -90,13 +91,18 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 		if p, ok := info.SystemImpl.Syms["_goresumeaction"].(*types.Proc); ok {
 			l.m.ResumeAction = l.funcs[p]
 		}
+		l.m.ErrorExit = l.rtl("_ErrorExit")
 	}
-	// Hauptprogramm: erst die Initialisierungen, am Ende _Done (im exit-Block)
+	// Hauptprogramm: erst die Initialisierungen, am Ende _Halt(0) (im exit-Block)
 	l.mainInits = inits
 	l.body(main, nil, prog.Block.Body.Stmts)
 	for _, d := range bodies {
 		p := info.Procs[d]
 		l.body(l.funcs[p], p, d.Block.Body.Stmts)
+	}
+	// Funktionstabelle in der Reihenfolge der ersten Verwendung
+	for _, p := range l.tableProcs {
+		l.m.Table = append(l.m.Table, l.funcs[p])
 	}
 	// Erst jetzt steht das Datensegment fest: BSS-Adressen nachtragen.
 	l.m.BSSBase = types.AlignTo(DataBase+int64(len(l.m.Data)), 16)
@@ -119,6 +125,10 @@ type lowerer struct {
 	copyIns map[*Func][]copyIn
 	hosts   map[int]*Host
 	rtlMode bool // es werden Routinen einer Laufzeit-Unit angelegt
+	// table: Index der Routinen in der Funktionstabelle (ab 1);
+	// tableProcs in Reihenfolge der Indizes.
+	table      map[*types.Proc]int32
+	tableProcs []*types.Proc
 	// mainInits sind die Initialisierungen der Units, die das Hauptprogramm
 	// zu Beginn aufruft.
 	mainInits []*Func
@@ -175,7 +185,7 @@ func (l *lowerer) rtl(name string) *Func {
 // scalar liefert Wert- und Speicherdarstellung eines skalaren Typs.
 func scalar(t types.Type) (vt ValType, mem MemType, ok bool) {
 	switch t.(type) {
-	case *types.Pointer, types.NilType:
+	case *types.Pointer, types.NilType, *types.ProcType:
 		return I32, MemI32, true
 	}
 	switch {
@@ -272,15 +282,59 @@ func (l *lowerer) setConstAddr(v [4]uint64) int64 {
 	return a
 }
 
+// tableIndex liefert den Index einer Routine in der Funktionstabelle und
+// trägt sie bei der ersten Verwendung ein. Weil der Index hier schon
+// feststeht, kann er direkt in Code und Datensegment stehen.
+func (l *lowerer) tableIndex(p *types.Proc) int32 {
+	if i, ok := l.table[p]; ok {
+		return i
+	}
+	l.tableProcs = append(l.tableProcs, p)
+	i := int32(len(l.tableProcs))
+	l.table[p] = i
+	return i
+}
+
+// funcSig liefert die WASM-Signatur eines prozeduralen Typs, nach denselben
+// Regeln wie newFunc für Routinen der obersten Ebene.
+func (l *lowerer) funcSig(sig *types.Signature) *FuncSig {
+	var params, results []ValType
+	if sig.Result != nil {
+		if vt, _, ok := scalar(sig.Result); ok {
+			results = []ValType{vt}
+		} else {
+			params = append(params, I32) // Adresse des Ergebnisses
+		}
+	}
+	for _, p := range sig.Params {
+		vt, _, ok := scalar(p.Type)
+		if p.Mode == types.ByVar || p.Type == nil || !ok {
+			vt = I32
+		}
+		params = append(params, vt)
+	}
+	key := SigKey(params, results)
+	fs, ok := l.m.Sigs[key]
+	if !ok {
+		fs = &FuncSig{Params: params, Results: results}
+		l.m.Sigs[key] = fs
+	}
+	return fs
+}
+
 // encode schreibt einen Konstantenwert im Speicherformat des Typs t.
-func encode(t types.Type, v *types.Value) []byte {
+func (l *lowerer) encode(t types.Type, v *types.Value) []byte {
 	b := make([]byte, t.Size())
-	put(b, t, v)
+	l.put(b, t, v)
 	return b
 }
 
-func put(b []byte, t types.Type, v *types.Value) {
+func (l *lowerer) put(b []byte, t types.Type, v *types.Value) {
 	if v == nil {
+		return
+	}
+	if v.Kind == types.VProc {
+		binary.LittleEndian.PutUint32(b, uint32(l.tableIndex(v.Proc)))
 		return
 	}
 	switch t := t.(type) {
@@ -291,13 +345,13 @@ func put(b []byte, t types.Type, v *types.Value) {
 			return
 		}
 		for i, e := range v.Elems {
-			put(b[int64(i)*es:], t.Elem, e)
+			l.put(b[int64(i)*es:], t.Elem, e)
 		}
 		return
 	case *types.Record:
 		for i, e := range v.Elems {
 			f := t.Fields[i]
-			put(b[f.Offset:], f.Type, e)
+			l.put(b[f.Offset:], f.Type, e)
 		}
 		return
 	case *types.String:
@@ -351,7 +405,7 @@ func (l *lowerer) declare(s *types.Scope, parent *Func, prefix string) {
 				checkSupported(sym.Type, sym.Pos())
 				v := newVar(sym.Text(), sym.Type)
 				v.Storage = Global
-				v.Init = encode(sym.Type, sym.Val)
+				v.Init = l.encode(sym.Type, sym.Val)
 				v.Offset = l.alloc(sym.Type.Size(), sym.Type.Align(), v.Init)
 				l.vars[sym] = v
 				l.m.Globals = append(l.m.Globals, v)
@@ -455,9 +509,13 @@ func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt) {
 	s.cur = f.Entry
 	s.exit = f.NewBlock()
 	if f == l.m.Main && l.info.SystemImpl != nil {
+		// Programmende wie Halt(0): Exit-Prozeduren, Ausgabe leeren, beenden.
+		// TP-ANNAHME: Wie in TP endet das Programm mit Halt(0); ein im
+		// Hauptprogramm gesetzter ExitCode zählt also nicht, nur einer aus
+		// einer Exit-Prozedur.
 		saved := s.cur
 		s.cur = s.exit
-		s.callRtl("_Done", nil)
+		s.callRtl("_Halt", nil, IntConst{V: 0})
 		s.cur = saved
 	}
 	s.exit.Term = Return{}

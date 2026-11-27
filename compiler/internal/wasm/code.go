@@ -2,25 +2,26 @@ package wasm
 
 // Opcodes (Auswahl).
 const (
-	OpUnreachable byte = 0x00
-	OpNop         byte = 0x01
-	OpBlock       byte = 0x02
-	OpLoop        byte = 0x03
-	OpIf          byte = 0x04
-	OpElse        byte = 0x05
-	OpEnd         byte = 0x0B
-	OpBr          byte = 0x0C
-	OpBrIf        byte = 0x0D
-	OpBrTable     byte = 0x0E
-	OpReturn      byte = 0x0F
-	OpCall        byte = 0x10
-	OpDrop        byte = 0x1A
-	OpSelect      byte = 0x1B
-	OpLocalGet    byte = 0x20
-	OpLocalSet    byte = 0x21
-	OpLocalTee    byte = 0x22
-	OpGlobalGet   byte = 0x23
-	OpGlobalSet   byte = 0x24
+	OpUnreachable  byte = 0x00
+	OpNop          byte = 0x01
+	OpBlock        byte = 0x02
+	OpLoop         byte = 0x03
+	OpIf           byte = 0x04
+	OpElse         byte = 0x05
+	OpEnd          byte = 0x0B
+	OpBr           byte = 0x0C
+	OpBrIf         byte = 0x0D
+	OpBrTable      byte = 0x0E
+	OpReturn       byte = 0x0F
+	OpCall         byte = 0x10
+	OpCallIndirect byte = 0x11
+	OpDrop         byte = 0x1A
+	OpSelect       byte = 0x1B
+	OpLocalGet     byte = 0x20
+	OpLocalSet     byte = 0x21
+	OpLocalTee     byte = 0x22
+	OpGlobalGet    byte = 0x23
+	OpGlobalSet    byte = 0x24
 
 	OpI32Load    byte = 0x28
 	OpF32Load    byte = 0x2A

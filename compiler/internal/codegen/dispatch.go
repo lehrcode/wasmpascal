@@ -45,6 +45,8 @@ func resumePoint(in ir.Instr) bool {
 		return true
 	case ir.Call:
 		return in.Fn.Suspendable
+	case ir.CallIndirect:
+		return in.Sig.Suspendable
 	}
 	return false
 }
@@ -138,9 +140,9 @@ func (fg *funcGen) segment(k int, seg segment, first map[*ir.Block]int) {
 		switch in := seg.block.Instrs[i].(type) {
 		case ir.Suspend:
 			fg.suspend(in)
-		case ir.Call:
+		case ir.Call, ir.CallIndirect:
 			fg.instr(in)
-			if in.Fn.Suspendable && fg.fn.Suspendable {
+			if resumePoint(in) && fg.fn.Suspendable {
 				// abwickeln, wenn der Aufgerufene angehalten hat
 				c.Index(wasm.OpGlobalGet, globalState)
 				c.I32Const(stateUnwinding)
@@ -220,9 +222,33 @@ func (fg *funcGen) suspend(in ir.Suspend) {
 // mehr anhält; nach jedem Anhalten führt die Laufzeit (_SuspendAction) die
 // Aktion aus, dann wird fortgesetzt.
 func (g *generator) driver() *wasm.Func {
+	return g.driverFor(func(c *wasm.Code) { c.Index(wasm.OpCall, g.funcIndex[g.m.Main]) }, wasm.FuncType{})
+}
+
+// exitDriver erzeugt _exit(code, line) für wasi: Nach einem Laufzeitfehler
+// (Trap) ruft der Host diesen Export; er setzt Schatten-Stack und Scheduler
+// zurück und führt die Laufzeit _ErrorExit (Exit-Prozeduren, Programmende)
+// wie _start aus, auch über Anhaltepunkte hinweg.
+func (g *generator) exitDriver() *wasm.Func {
+	var pre wasm.Code
+	pre.I32Const(stateNormal)
+	pre.Index(wasm.OpGlobalSet, globalState)
+	pre.I32Const(int32(g.stackTop))
+	pre.Index(wasm.OpGlobalSet, globalSP)
+	f := g.driverFor(func(c *wasm.Code) {
+		c.Index(wasm.OpLocalGet, 0)
+		c.Index(wasm.OpLocalGet, 1)
+		c.Index(wasm.OpCall, g.funcIndex[g.m.ErrorExit])
+	}, wasm.FuncType{Params: []wasm.ValType{wasm.I32, wasm.I32}})
+	f.Code = append(pre.B, f.Code...)
+	return f
+}
+
+// driverFor ruft call in einer Schleife wie driver.
+func (g *generator) driverFor(call func(*wasm.Code), typ wasm.FuncType) *wasm.Func {
 	var c wasm.Code
 	c.Block(wasm.OpLoop, wasm.BlockEmpty)
-	c.Index(wasm.OpCall, g.funcIndex[g.m.Main])
+	call(&c)
 	c.Index(wasm.OpGlobalGet, globalState)
 	c.I32Const(stateUnwinding)
 	c.Op(wasm.OpI32Eq)
@@ -239,7 +265,7 @@ func (g *generator) driver() *wasm.Func {
 	c.Index(wasm.OpGlobalSet, globalSP)
 	c.Index(wasm.OpBr, 1)
 	c.Op(wasm.OpEnd, wasm.OpEnd, wasm.OpEnd)
-	return &wasm.Func{Type: g.mod.TypeIndex(wasm.FuncType{}), Code: c.B}
+	return &wasm.Func{Type: g.mod.TypeIndex(typ), Code: c.B}
 }
 
 // gojsExports erzeugt die Schnittstelle von GOOS=js GOARCH=wasm für
@@ -287,9 +313,38 @@ func (g *generator) gojsExports() {
 	resume.Index(wasm.OpGlobalSet, globalState)
 	resume.I32Const(int32(g.stackTop))
 	resume.Index(wasm.OpGlobalSet, globalSP)
-	resume.Index(wasm.OpCall, g.funcIndex[m.Main])
+	if m.ErrorExit != nil {
+		// fortsetzen, was angehalten hat: Hauptprogramm oder _exit
+		resume.Index(wasm.OpGlobalGet, globalRoot)
+		resume.Block(wasm.OpIf, wasm.BlockEmpty)
+		resume.I32Const(0)
+		resume.I32Const(0)
+		resume.Index(wasm.OpCall, g.funcIndex[m.ErrorExit])
+		resume.Op(wasm.OpElse)
+		resume.Index(wasm.OpCall, g.funcIndex[m.Main])
+		resume.Op(wasm.OpEnd)
+	} else {
+		resume.Index(wasm.OpCall, g.funcIndex[m.Main])
+	}
 	after(&resume)
 	resume.Op(wasm.OpEnd)
+
+	// _exit(code, line): nach einem Laufzeitfehler (Trap) vom Loader
+	// gerufen, führt _ErrorExit aus (Exit-Prozeduren, Programmende)
+	var exit wasm.Code
+	if m.ErrorExit != nil {
+		exit.I32Const(1)
+		exit.Index(wasm.OpGlobalSet, globalRoot)
+		exit.I32Const(stateNormal)
+		exit.Index(wasm.OpGlobalSet, globalState)
+		exit.I32Const(int32(g.stackTop))
+		exit.Index(wasm.OpGlobalSet, globalSP)
+		exit.Index(wasm.OpLocalGet, 0)
+		exit.Index(wasm.OpLocalGet, 1)
+		exit.Index(wasm.OpCall, g.funcIndex[m.ErrorExit])
+		after(&exit)
+		exit.Op(wasm.OpEnd)
+	}
 
 	var getsp wasm.Code
 	getsp.Index(wasm.OpGlobalGet, globalGoSP)
@@ -306,6 +361,11 @@ func (g *generator) gojsExports() {
 		{Name: "run", Kind: wasm.ExportFunc, Index: base},
 		{Name: "resume", Kind: wasm.ExportFunc, Index: base + 1},
 		{Name: "getsp", Kind: wasm.ExportFunc, Index: base + 2},
+	}
+	if m.ErrorExit != nil {
+		mod.Funcs = append(mod.Funcs,
+			&wasm.Func{Type: mod.TypeIndex(wasm.FuncType{Params: []wasm.ValType{wasm.I32, wasm.I32}}), Code: exit.B})
+		mod.Exports = append(mod.Exports, wasm.Export{Name: "_exit", Kind: wasm.ExportFunc, Index: base + 3})
 	}
 }
 

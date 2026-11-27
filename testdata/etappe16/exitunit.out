@@ -1,0 +1,5 @@
+[log] eins
+!! zwei
+!! Programmende
+[log] 3 Meldungen, ExitCode 2
+[Exit-Code 2]

@@ -1,10 +1,10 @@
 # CLAUDE.md – WasmPascal
 
-Turbo-Pascal-4.0-Compiler (ohne OOP, plus einige TP-7-/Delphi-Erweiterungen) nach WebAssembly, geschrieben in Go.
+Turbo-Pascal-5.0-Compiler (plus einige TP-7-/Delphi-Erweiterungen) nach WebAssembly, geschrieben in Go.
 Modul `github.com/lehrcode/wasmpascal`, CLI `pascal` (`build` | `run` | `check` | `serve`).
 
 **Verbindlich ist [PLAN.md](PLAN.md).** Diese Datei fasst nur die Arbeitsregeln und die Typabbildung zusammen;
-bei Widerspruch gilt PLAN.md. Abweichungen von TP 4.0 stehen in `docs/abweichungen.md`.
+bei Widerspruch gilt PLAN.md. Abweichungen von TP 5.0 stehen in `docs/abweichungen.md`.
 `docs/units.md` ist die Referenz der Units System, Crt und Dos für Programmierer; bei Änderungen an
 Standardroutinen oder `rtl/*.pas` mitpflegen.
 
@@ -22,7 +22,7 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
   Jede exportierte API hat Doku-Kommentar und mindestens ein `Example`-Test. `cmd/pascal` nutzt nur die öffentliche API (für `serve` zusätzlich `internal/compilereq`).
 - **Fehlermeldungen:** `datei.pas(zeile,spalte): Error NN: Text`, Abbruch beim ersten Fehler.
 - **Codegenerator auf den Scheduler auslegen:** IR immer als CFG; jede Variable muss sich in den Frame auslagern lassen.
-- **Keine eigenmächtigen Spracherweiterungen.** Im Zweifel TP 4.0 nachbilden, Abweichungen in `docs/abweichungen.md`.
+- **Keine eigenmächtigen Spracherweiterungen.** Im Zweifel TP 5.0 nachbilden, Abweichungen in `docs/abweichungen.md`.
 - **Unklares TP-Verhalten:** plausible Annahme treffen, im Code mit `// TP-ANNAHME:` markieren, im Bericht nennen.
 - **Laufzeit in Pascal bevorzugen** (`rtl/*.pas`); Intrinsics in Go/WASM nur, wenn es nicht anders geht.
 - **PLAN.md und `docs/abweichungen.md` pflegen:** erledigte Etappen abhaken, Entscheidungen festhalten.
@@ -38,6 +38,7 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
 | Real, Double, Extended, Comp | `f64` | 8 Byte |
 | Single | `f32` | 4 Byte |
 | Zeiger, `nil` | `i32` | 4 Byte |
+| Prozedurale Typen | `i32` | 4 Byte: Index in die Funktionstabelle, 0 = `nil`; Aufruf mit `call_indirect` |
 | `string[n]`/`string` | Adresse | immer 256 Byte (Längenbyte + 255 Bytes UTF-8), beim Zuweisen auf `n` gekürzt |
 | `set of T` | Adresse | immer 32 Byte, Operationen mit `v128` |
 | Records, Arrays | Adresse | natürliche Ausrichtung, Varianten als Union |
@@ -53,10 +54,15 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
 - **Erweiterungen** (Tabelle in PLAN.md): `Result`, schreibgeschützte typisierte Konstanten, `Break`/`Continue`,
   `Low`/`High`, `const`-Parameter, `for … in` (mit `WideChar` zeichenweise), Funktionsaufrufe als Anweisung (immer), strukturierte
   Funktionsergebnisse wie Delphi 1.0, `WideChar` (Delphi 2.0), `SmallInt`.
-- **Adressfunktionen:** `@x`/`Addr` = lineare Adresse, `Ofs` als LongInt, `Seg` = 0, `Ptr(seg,ofs)` ignoriert `seg`,
+- **Prozedurale Typen (TP 5.0):** nur Routinen der obersten Ebene zuweisbar (sonst 143); der Tabellenindex steht
+  schon in `ir` fest (`lowerer.tableIndex`), auch in typisierten Konstanten; indirekte Aufrufe sind anhaltefähig,
+  wenn eine Routine der Tabelle mit gleicher WASM-Signatur es ist (`analysis`).
+- **Adressfunktionen:** `@x`/`Addr` = lineare Adresse (bei Routinen und Prozedurvariablen der Tabellenindex), `Ofs` als LongInt, `Seg` = 0, `Ptr(seg,ofs)` ignoriert `seg`,
   `CSeg`/`DSeg`/`SSeg`/`SPtr`/`PrefixSeg`/`FreePtr`/`FreeMin` sind Compilerfehler.
 - **Laufzeitfehler:** `Runtime error NNN at datei.pas(zeile) in Prozedur` (nur Dateiname, ohne Verzeichnis); Traps über Name Section und Custom Section
-  `wasmpascal.lines`; `-nolines` lässt beides weg.
+  `wasmpascal.lines`; `-nolines` lässt beides weg. Nach dem Trap ruft der Host den Export `_exit(code, zeile)`
+  (Exit-Prozeduren, `_ErrorExit` in `rtl/system.pas`); das Programm endet mit Exit-Code `ExitCode*2+1` (Meldung)
+  bzw. `ExitCode*2` (`ErrorAddr = nil`). Programmende und `Halt` laufen über `_Halt` und die Kette.
 - **Zeichensatz:** durchgehend UTF-8, `Char` = Byte, `Length` zählt Bytes, Bezeichner nur ASCII. `WideChar` = ein
   Zeichen bis U+FFFF, als String UTF-8; `UTF8…`-Routinen in `rtl/system.pas`. Im Quelltext: Steuerzeichen (außer Tab)
   und Noncharacters in Literalen verboten (907), Bidi-Steuerzeichen überall (908).
@@ -71,7 +77,7 @@ Parser-Golden-Tests: `compiler/internal/parser/testdata/*.pas` → `*.ast`, neu 
 Symbol-Golden-Tests der Typprüfung: `compiler/internal/check/testdata/*.pas` → `*.sym`, neu schreiben mit
 `go test ./compiler/internal/check -update`.
 
-## Pipeline (Stand Etappe 10)
+## Pipeline (Stand Etappe 16)
 
 `source` → `lexer` → `parser` (AST) → `check` (Typprüfung, `check.Info`) → `ir.Lower` (CFG) → `analysis` (anhaltefähige Funktionen) →
 `codegen.Generate` (Ablage, Frames, Static Links; strukturierter Kontrollfluss oder Dispatch-Schleife für
@@ -80,7 +86,8 @@ anhaltefähige Funktionen und `goto`, siehe `codegen/dispatch.go`) → `wasm` (E
 Laufzeit in Pascal; `crt.pas` und `dos.pas` liegen daneben und werden per `uses` gefunden (nach Programmverzeichnis und `-I`). Routinen mit `_` am Anfang ruft der Compiler direkt auf; WASI erreicht die Laufzeit über
 Intrinsics aus `compiler/internal/abi`. Laufzeitroutinen (`Func.RTL`) pflegen die Fehlerstelle nicht.
 Laufzeitfehler: exportierte Globale `__rt_*` plus Custom Section `wasmpascal.lines`, ausgewertet in
-`runner/rterror.go` bzw. `web/loader.js`.
+`runner/rterror.go` bzw. `web/loader.js`; danach Export `_exit` (WASI mit eigener Treiberschleife wie `_start`,
+gojs über `resume` mit Global `globalRoot`).
 
 Ziele: Nur die unterste Schicht von `rtl/system.pas` unterscheidet sich, per `{$IFDEF GOJS}`; ohne Symbol gilt WASI.
 Je Ziel getrennt sind Konsole, Eingabe, Uhr, Argumente und Anhaltepunkte (`SysWrite`, `SysRead`, `_Clock`, `SysArgs`,

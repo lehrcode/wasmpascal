@@ -406,6 +406,12 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 		count(1, 1)
 		c.intExpr(args[0])
 		return none
+	case BRunErrorTP:
+		count(0, 1)
+		if len(args) == 1 {
+			c.assignable(types.Word, c.intExpr(args[0]), args[0])
+		}
+		return none
 	case BGoSetSP:
 		count(1, 1)
 		c.intExpr(args[0])
@@ -427,7 +433,16 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 		return val(types.PointerType)
 	case BAddr, BOfs, BSeg:
 		count(1, 1)
-		x := c.expr(args[0])
+		if b.ID == BAddr { // Addr(Routine) und Addr(P) wie @ (TP 5.0)
+			if p, ok := c.procRef(args[0]); ok {
+				c.procRefValue(args[0], p)
+				return val(types.PointerType)
+			}
+		}
+		x := c.exprNoCall(args[0])
+		if _, isProc := x.Type.(*types.ProcType); isProc && b.ID == BAddr {
+			return val(types.PointerType)
+		}
 		if x.Mode != Variable {
 			c.fail(args[0].Pos(), source.ErrVarIdentExpected, "")
 		}

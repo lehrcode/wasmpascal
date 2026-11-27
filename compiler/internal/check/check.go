@@ -38,15 +38,31 @@ const (
 	CallProc     CallKind = iota // eigene Prozedur oder Funktion
 	CallBuiltin                  // Standardprozedur/-funktion
 	CallTypecast                 // Typumwandlung T(x)
+	CallIndirect                 // Aufruf über eine Prozedurvariable (TP 5.0)
 )
 
 // Call beschreibt einen aufgelösten Aufruf (CallExpr, oder Ident/Selector ohne
-// Klammern bei parameterlosen Aufrufen).
+// Klammern bei parameterlosen Aufrufen; bei CallIndirect auch IndexExpr,
+// DerefExpr und andere Ausdrücke eines prozeduralen Typs).
 type Call struct {
 	Kind    CallKind
 	Proc    *types.Proc
 	Builtin *types.Builtin
 	Type    types.Type // Zieltyp bei Typumwandlungen
+	// Bei CallIndirect: Signatur des prozeduralen Typs und der Ausdruck, der
+	// die Prozedurvariable liefert (bei Aufrufen ohne Klammern der Knoten
+	// selbst).
+	Sig *types.Signature
+	Fun ast.Expr
+}
+
+// Result liefert den Ergebnistyp eines Aufrufs eigener Routinen (direkt
+// oder indirekt), nil bei Prozeduren.
+func (c *Call) Result() types.Type {
+	if c.Kind == CallIndirect {
+		return c.Sig.Result
+	}
+	return c.Proc.Sig.Result
 }
 
 // Info sammelt die Ergebnisse der Typprüfung für die späteren Stufen.
@@ -56,6 +72,9 @@ type Info struct {
 	Uses   map[*ast.Ident]types.Symbol
 	Fields map[*ast.Ident]*types.Field // Feldzugriffe (auch implizit über with)
 	Calls  map[ast.Expr]*Call
+	// ProcRefs sind Bezeichner, die eine Routine als Wert bezeichnen (@P,
+	// Zuweisung an eine Prozedurvariable, typisierte Konstanten).
+	ProcRefs map[ast.Expr]*types.Proc
 	// WithRecs ordnet Bezeichner, die über with auf ein Feld zugreifen, dem
 	// Record-Ausdruck der with-Anweisung zu.
 	WithRecs map[*ast.Ident]ast.Expr
@@ -112,6 +131,7 @@ func Check(file ast.File, conf Config) (info *Info, err error) {
 			Uses:     map[*ast.Ident]types.Symbol{},
 			Fields:   map[*ast.Ident]*types.Field{},
 			Calls:    map[ast.Expr]*Call{},
+			ProcRefs: map[ast.Expr]*types.Proc{},
 			WithRecs: map[*ast.Ident]ast.Expr{},
 			Procs:    map[*ast.ProcDecl]*types.Proc{},
 			Scopes:   map[ast.Node]*types.Scope{},

@@ -255,7 +255,7 @@ begin
     A[I] := I mod 251;
   for I := 1 to 1000 do
     B[I] := I * 3;
-  WriteLn(A[1], ' ', A[1000000], ' ', B[1000], ' ', C[3], ' ', Ofs(B) - Ofs(A))
+  WriteLn(A[1], ' ', A[1000000], ' ', B[1000], ' ', C[3], ' ', (Ofs(B) - Ofs(A)) div 4)
 end.
 `
 	res, err, _ := compileSrc(t, src, Options{})
@@ -269,7 +269,7 @@ end.
 	if _, err := runner.Run(context.Background(), res.Wasm, runner.Options{Stdout: &out}); err != nil {
 		t.Fatal(err)
 	}
-	if want := "1 16 3000 9 1000000\n"; out.String() != want {
+	if want := "1 16 3000 9 250000\n"; out.String() != want { // B ist auf 4 ausgerichtet
 		t.Errorf("Ausgabe %q, erwartet %q", out.String(), want)
 	}
 	// Ohne Grenze für statische Daten geht auch ein Array von 300 MB schnell.

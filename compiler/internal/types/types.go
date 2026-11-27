@@ -448,6 +448,42 @@ func (s *Signature) String() string {
 	return b.String()
 }
 
+// ProcType ist ein prozeduraler Typ (procedure(...) bzw. function(...): T,
+// TP 5.0). Ein Wert ist der Index der Routine in der WASM-Funktionstabelle,
+// 0 ist nil.
+type ProcType struct {
+	named
+	Sig    *Signature
+	IsFunc bool
+}
+
+func (p *ProcType) String() string {
+	if p.name != "" {
+		return p.name
+	}
+	if p.IsFunc {
+		return "function" + p.Sig.String()
+	}
+	return "procedure" + p.Sig.String()
+}
+func (p *ProcType) Size() int64  { return 4 }
+func (p *ProcType) Align() int64 { return 4 }
+
+// SameProcSig meldet, ob zwei Signaturen für prozedurale Typen verträglich
+// sind: gleiche Zahl, Art und Typen der Parameter, gleicher Ergebnistyp;
+// Parameternamen zählen nicht.
+func SameProcSig(a, b *Signature) bool {
+	if len(a.Params) != len(b.Params) || a.Result != b.Result {
+		return false
+	}
+	for i := range a.Params {
+		if a.Params[i].Mode != b.Params[i].Mode || a.Params[i].Type != b.Params[i].Type {
+			return false
+		}
+	}
+	return true
+}
+
 // ---------------------------------------------------------------------------
 // Hilfsfunktionen
 

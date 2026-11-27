@@ -16,7 +16,7 @@ Bezeichner, die mit `_` beginnen, gehören zur Laufzeit und sind nicht für
 Programme gedacht.
 
 Zum Lesen der Signaturen: `var` heißt, dass eine Variable übergeben werden
-muss; Teile in `[ ]` sind optional. Abweichungen von Turbo Pascal 4.0 sind
+muss; Teile in `[ ]` sind optional. Abweichungen von Turbo Pascal 5.0 sind
 mit **Abweichung** markiert und in [abweichungen.md](abweichungen.md)
 begründet.
 
@@ -42,7 +42,8 @@ begründet.
 
 Dazu die Typkonstruktoren der Sprache: `string` und `string[n]` (immer
 256 Byte, höchstens 255 Bytes Text), `array`, `record`, `set of`, `file`,
-`file of T`, `^T`, Aufzählungen und Teilbereiche. Aufzählungen und
+`file of T`, `^T`, Aufzählungen, Teilbereiche und prozedurale Typen
+(`procedure(…)`, `function(…): T`, 4 Byte; siehe unten). Aufzählungen und
 Teilbereiche belegen wie in TP 1, 2 oder 4 Byte, je nach Wertebereich.
 
 Jede Zuweisung an eine Variable mit 1 oder 2 Byte kürzt den Wert auf diese
@@ -95,6 +96,49 @@ end.
   `s = 'ä'` ergibt `'Ã'` (das erste UTF-8-Byte). Die Zeichen eines Strings
   liefern `UTF8Next` und `for w in s do` (siehe Strings).
 
+#### Prozedurale Typen
+
+Wie in TP 5.0 kann eine Variable eine Prozedur oder Funktion aufnehmen:
+
+```pascal
+type
+  TFunc = function(X: Real): Real;
+
+function Quadrat(X: Real): Real;
+begin
+  Quadrat := X * X
+end;
+
+function Summe(F: TFunc; N: Integer): Real;   { Funktionsparameter }
+var I: Integer; S: Real;
+begin
+  S := 0;
+  for I := 1 to N do S := S + F(I);
+  Summe := S
+end;
+
+var F: TFunc;
+begin
+  F := Quadrat;              { Zuweisung ohne Aufruf }
+  WriteLn(F(3):0:1);         { 9.0 }
+  WriteLn(Summe(Quadrat, 3):0:1)   { 14.0 }
+end.
+```
+
+- Zuweisen lassen sich nur Prozeduren und Funktionen, die auf oberster
+  Ebene eines Programms oder einer Unit stehen; verschachtelte Routinen und
+  Standardroutinen wie `WriteLn` ergeben Error 143. Parameter (Anzahl, Art,
+  Typen) und Ergebnistyp müssen übereinstimmen, die Namen nicht.
+- Eine parameterlose Funktionsvariable `F` ruft im Ausdruck auf (`I := F`);
+  nur bei der Zuweisung an eine andere Prozedurvariable (`G := F`) wird
+  kopiert. Eine parameterlose Prozedurvariable ist als Anweisung ein Aufruf
+  (`P;`, auch `A[1];` oder `R.P;`).
+- `nil` ist erlaubt; geprüft wird mit `@P = nil`, denn `@P` liefert den Wert
+  als `Pointer`. `@Name` ist ein `Pointer` auf die Routine, `TProc(Ptr)`
+  wandelt zurück. Ein Aufruf über `nil` ergibt Laufzeitfehler 216.
+- Typisierte Konstanten dürfen Routinen enthalten:
+  `const Ops: array[1..2] of TBinOp = (Plus, Minus);`.
+
 ### Konstanten
 
 | Name | Wert |
@@ -112,7 +156,9 @@ end.
 | `Output` | `Text` | Standardausgabe; `Write`/`WriteLn` ohne Datei schreiben hierhin |
 | `RandSeed` | `LongInt` | Startwert des Zufallsgenerators; ein fester Wert ergibt immer dieselbe Folge |
 | `FileMode` | `Byte` | Zugriffsart für `Reset` typisierter und untypisierter Dateien: 0 nur lesen, 1 nur schreiben, 2 lesen und schreiben (Standard) |
-| `ExitCode` | `Integer` | vorhanden, aber ohne Wirkung; den Exit-Code setzt `Halt(n)` |
+| `ExitCode` | `Integer` | Exit-Code des Programms; setzt `Halt(n)` bzw. ein Laufzeitfehler (die Fehlernummer). Eine Exit-Prozedur darf ihn ändern; im Hauptprogramm gesetzt zählt er nicht, weil das Programmende wie `Halt(0)` wirkt |
+| `ExitProc` | `Pointer` | Kette der Exit-Prozeduren (siehe Programmablauf), anfangs `nil` |
+| `ErrorAddr` | `Pointer` | In einer Exit-Prozedur: nach einem Laufzeitfehler nicht `nil` (**Abweichung:** die Zeilennummer statt einer Adresse), sonst `nil`. Auf `nil` gesetzt, unterbleibt die Meldung „Runtime error …“ |
 
 ### Ein- und Ausgabe mit Text
 
@@ -294,16 +340,44 @@ Jeder Zugriff über einen `nil`-Zeiger ergibt Laufzeitfehler 216.
 
 | Signatur | Beschreibung |
 | --- | --- |
-| `Halt[(Code: Word)]` | Beendet das Programm, schreibt vorher `Output` und gibt `Code` (Standard 0) als Exit-Code zurück. |
+| `Halt[(Code: Word)]` | Beendet das Programm: setzt `ExitCode` auf `Code` (Standard 0), ruft die Exit-Prozeduren, schreibt `Output` und gibt `ExitCode` als Exit-Code zurück. |
+| `RunError[(Code: Word)]` | Beendet das Programm mit Laufzeitfehler `Code` (Standard 0) an der Stelle des Aufrufs (aus TP 5.0). |
 | `Exit` | Verlässt die aktuelle Prozedur oder Funktion; im Hauptprogramm endet das Programm. |
 | `Break` | Verlässt die innerste Schleife (Erweiterung aus TP 7). |
 | `Continue` | Springt zum nächsten Durchlauf der innersten Schleife (Erweiterung aus TP 7). |
 | `ParamCount: Integer` | Anzahl der Kommandozeilenargumente. |
 | `ParamStr(N): string` | Argument `N`; `ParamStr(0)` ist der Programmname (Dateiname ohne `.pas`), außerhalb des Bereichs `''`. |
 
+**Exit-Prozeduren:** Am Programmende, nach `Halt` und nach einem
+Laufzeitfehler ruft die Laufzeit die Prozedur, auf die `ExitProc` zeigt,
+und setzt `ExitProc` vorher auf `nil`; das wiederholt sich, bis `ExitProc`
+`nil` bleibt. Eine Unit hängt sich so in die Kette ein:
+
+```pascal
+var AltExit: Pointer;
+
+procedure MeinEnde;
+begin
+  ExitProc := AltExit;       { Kette fortsetzen }
+  if ErrorAddr <> nil then
+    WriteLn('Abbruch mit Fehler ', ExitCode)
+end;
+
+begin
+  AltExit := ExitProc;
+  ExitProc := @MeinEnde
+end.
+```
+
+Exit-Prozeduren dürfen schreiben, lesen und `Delay` benutzen. Ein
+Laufzeitfehler darin beendet nur diese Prozedur; die Kette läuft weiter,
+gemeldet wird der letzte Fehler. **Abweichung:** Nach einem Laufzeitfehler
+laufen Exit-Prozeduren nur mit `pascal run`, dem Go-Paket `runner` und dem
+Loader für Browser und Node.js, nicht in anderen WASI-Laufzeiten.
+
 ### Nicht vorhanden
 
-Diese Bezeichner der System-Unit von TP 4.0 setzen das Speichermodell von
+Diese Bezeichner der System-Unit von TP 4.0 und 5.0 setzen das Speichermodell von
 DOS voraus. Ihre Verwendung ergibt Error 902 (Not supported by WasmPascal):
 
 `CSeg`, `DSeg`, `SSeg`, `SPtr`, `PrefixSeg`, `FreePtr`, `FreeMin`,
@@ -446,13 +520,14 @@ Umgebung dürfen zusammen höchstens etwa 8 KB lang sein (Grenze von
 `wasm_exec.js`).
 
 Alle anderen Routinen der Unit Dos (z. B. `Exec`, `SetDate`, `SetFAttr`,
-`DiskFree`) gibt es nicht.
+`DiskFree`, `GetCBreak`, `SetVerify`, `SwapVectors`) gibt es nicht.
 
 ## Laufzeitfehler
 
 Ein Laufzeitfehler beendet das Programm mit einer Meldung wie
 `Runtime error 200 at zahlen.pas(42) in Auswerten`; der Exit-Code ist die
-Fehlernummer.
+Fehlernummer. Vorher laufen die Exit-Prozeduren (siehe Programmablauf); sie
+können die Meldung unterdrücken und den Exit-Code ändern.
 
 | Nummer | Bedeutung |
 | --- | --- |

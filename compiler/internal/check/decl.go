@@ -117,6 +117,18 @@ func (c *checker) typedConst(t types.Type, e ast.Expr) *types.Value {
 			v.Elems[idx] = c.typedConst(t.Fields[idx].Type, fi.Value)
 		}
 		return v
+	case *types.ProcType:
+		// Routine der obersten Ebene oder nil (TP 5.0)
+		if _, isNil := e.(*ast.NilLit); isNil {
+			c.expr(e)
+			return &types.Value{Kind: types.VNil}
+		}
+		p, ok := c.procRef(e)
+		if !ok {
+			c.fail(e.Pos(), source.ErrConstExpected, "")
+		}
+		c.assignable(t, c.procRefValue(e, p), e)
+		return &types.Value{Kind: types.VProc, Proc: p}
 	}
 	x := c.expr(e)
 	if x.Mode != Constant {
@@ -268,6 +280,8 @@ func (c *checker) typeExpr(e ast.TypeExpr) types.Type {
 			}
 		}
 		return f
+	case *ast.ProcType:
+		return &types.ProcType{Sig: c.paramSig(e.Params, e.Result), IsFunc: e.IsFunc}
 	case *ast.PointerType:
 		p := &types.Pointer{}
 		switch el := e.Elem.(type) {
@@ -400,8 +414,14 @@ func (c *checker) varDecl(d *ast.VarDecl) {
 // Prozeduren
 
 func (c *checker) signature(d *ast.ProcDecl) *types.Signature {
+	return c.paramSig(d.Params, d.Result)
+}
+
+// paramSig prüft Parameterliste und Ergebnistyp einer Routine oder eines
+// prozeduralen Typs.
+func (c *checker) paramSig(params []*ast.ParamGroup, result ast.TypeExpr) *types.Signature {
 	sig := &types.Signature{}
-	for _, g := range d.Params {
+	for _, g := range params {
 		var t types.Type
 		if g.Type != nil {
 			t = c.typeExpr(g.Type)
@@ -417,12 +437,12 @@ func (c *checker) signature(d *ast.ProcDecl) *types.Signature {
 			sig.Params = append(sig.Params, p)
 		}
 	}
-	if d.Result != nil {
+	if result != nil {
 		// Wie in Delphi 1.0 sind alle Ergebnistypen außer Dateien erlaubt,
 		// also auch Records, Arrays und Mengen.
-		sig.Result = c.typeExpr(d.Result)
+		sig.Result = c.typeExpr(result)
 		if containsFile(sig.Result) {
-			c.fail(d.Result.Pos(), source.ErrInvalidResultType, "")
+			c.fail(result.Pos(), source.ErrInvalidResultType, "")
 		}
 	}
 	return sig

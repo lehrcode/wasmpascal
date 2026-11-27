@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"github.com/tetratelabs/wazero/sys"
 )
@@ -69,8 +70,10 @@ func (e *RuntimeError) Error() string {
 
 // Run führt ein mit compiler.TargetWASI erzeugtes Modul aus und liefert den
 // Exit-Code (Halt). Ein Laufzeitfehler kommt als *RuntimeError zurück; der
-// Exit-Code ist dann die Fehlernummer, wie in TP. Ein Abbruch von ctx beendet
-// das Programm; Run liefert dann ctx.Err().
+// Exit-Code ist dann die Fehlernummer, wie in TP. Nach einem Laufzeitfehler
+// laufen wie in TP die Exit-Prozeduren des Programms (ExitProc); sie dürfen
+// die Meldung unterdrücken (dann ist err nil) und den Exit-Code ändern. Ein
+// Abbruch von ctx beendet das Programm; Run liefert dann ctx.Err().
 func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -140,8 +143,56 @@ func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err erro
 	if errors.As(err, &exitErr) {
 		return int(exitErr.ExitCode()), nil
 	}
-	if rte := runtimeError(mod, wasm, err); rte != nil {
+	rte := runtimeError(mod, wasm, err)
+	if rte == nil {
+		return 0, fmt.Errorf("runner: %w", err)
+	}
+	return errorExit(ctx, mod, wasm, rte)
+}
+
+// maxErrorExits begrenzt die Laufzeitfehler in Exit-Prozeduren. Jede läuft
+// höchstens einmal (ExitProc wird vor dem Aufruf nil); die Grenze schützt nur
+// vor einem Fehler in der Laufzeit selbst.
+const maxErrorExits = 1000
+
+// errorExit beendet das Programm nach einem Laufzeitfehler wie TP: Der Export
+// _exit(code, line) führt die Exit-Prozeduren aus und beendet das Programm
+// über proc_exit mit ExitCode * 2 + 1, wenn die Meldung erscheinen soll
+// (ErrorAddr <> nil), sonst ExitCode * 2. Ein weiterer Laufzeitfehler in
+// einer Exit-Prozedur ersetzt den ersten; die Kette läuft weiter. Module
+// ohne _exit enden sofort mit dem Fehler.
+func errorExit(ctx context.Context, mod api.Module, wasm []byte, rte *RuntimeError) (int, error) {
+	exit := mod.ExportedFunction("_exit")
+	if exit == nil {
 		return rte.Code, rte
 	}
-	return 0, fmt.Errorf("runner: %w", err)
+	for i := 0; i < maxErrorExits; i++ {
+		line := uint64(0)
+		if g := mod.ExportedGlobal("__rt_line"); g != nil {
+			line = g.Get()
+		}
+		_, err := exit.Call(ctx, uint64(uint32(rte.Code)), line)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
+		var exitErr *sys.ExitError
+		if errors.As(err, &exitErr) {
+			packed := int32(exitErr.ExitCode())
+			code := int(packed >> 1)
+			if packed&1 == 0 {
+				return code, nil
+			}
+			rte.Code = code
+			return code, rte
+		}
+		if err == nil {
+			break
+		}
+		next := runtimeError(mod, wasm, err)
+		if next == nil {
+			return 0, fmt.Errorf("runner: %w", err)
+		}
+		rte = next
+	}
+	return rte.Code, rte
 }

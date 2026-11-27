@@ -103,6 +103,9 @@ func (s *fnState) expr(e ast.Expr) Expr {
 			return c
 		}
 	}
+	if p := s.l.info.ProcRefs[e]; p != nil { // Routine als Wert
+		return IntConst{V: s.l.tableIndex(p)}
+	}
 	switch e := e.(type) {
 	case *ast.Ident:
 		if call := s.l.info.Calls[e]; call != nil {
@@ -116,11 +119,17 @@ func (s *fnState) expr(e ast.Expr) Expr {
 		if call := s.l.info.Calls[e.Sel]; call != nil {
 			return s.call(e.Sel, call, nil)
 		}
+		if call := s.l.info.Calls[e]; call != nil { // Funktionsvariable R.F
+			return s.call(e, call, nil)
+		}
 		if v, ok := s.directVar(e); ok && v.Scalar {
 			return Get{Var: v}
 		}
 		return Load{Addr: s.designator(e), Mem: memOf(tv.Type)}
 	case *ast.IndexExpr, *ast.DerefExpr:
+		if call := s.l.info.Calls[e]; call != nil { // parameterlose Funktionsvariable
+			return s.call(e, call, nil)
+		}
 		return Load{Addr: s.designator(e), Mem: memOf(tv.Type)}
 	case *ast.CallExpr:
 		call := s.l.info.Calls[e]
@@ -168,7 +177,41 @@ func (s *fnState) unary(e *ast.UnaryExpr) Expr {
 	case lexer.Plus:
 		return s.expr(e.X)
 	}
-	return s.designator(e.X) // @x
+	// @x; @Routine und @P (Prozedurvariable) liefern den Tabellenindex
+	if p := s.l.info.ProcRefs[e.X]; p != nil {
+		return IntConst{V: s.l.tableIndex(p)}
+	}
+	if _, ok := t.(*types.ProcType); ok {
+		return s.procValue(e.X)
+	}
+	return s.designator(e.X)
+}
+
+// procValue liefert den Wert einer Prozedurvariable (Tabellenindex), ohne
+// sie aufzurufen, auch wenn der Ausdruck selbst ein Aufruf ohne Klammern ist.
+func (s *fnState) procValue(e ast.Expr) Expr {
+	switch e.(type) {
+	case *ast.Ident, *ast.SelectorExpr:
+		if s.l.info.Fields[selIdent(e)] == nil {
+			if v, ok := s.directVar(e); ok && v.Scalar {
+				return Get{Var: v}
+			}
+		}
+		return Load{Addr: s.place(e), Mem: MemI32}
+	case *ast.IndexExpr, *ast.DerefExpr:
+		return Load{Addr: s.place(e), Mem: MemI32}
+	}
+	return s.expr(e)
+}
+
+// selIdent liefert den Bezeichner eines Ident bzw. den Selektor eines
+// SelectorExpr.
+func selIdent(e ast.Expr) *ast.Ident {
+	if sel, ok := e.(*ast.SelectorExpr); ok {
+		return sel.Sel
+	}
+	id, _ := e.(*ast.Ident)
+	return id
 }
 
 var intOps = map[lexer.Kind]Op{
@@ -287,10 +330,28 @@ func (s *fnState) addr(e ast.Expr) Expr {
 // Aggregat-Funktionsergebnisses (in einer Hilfsvariable).
 func (s *fnState) designator(e ast.Expr) Expr {
 	switch e := e.(type) {
-	case *ast.Ident:
+	case *ast.Ident, *ast.IndexExpr, *ast.DerefExpr:
 		if call := s.l.info.Calls[e]; call != nil {
 			return s.aggregateCall(call, nil)
 		}
+	case *ast.SelectorExpr:
+		if _, isField := s.l.info.Fields[e.Sel]; !isField {
+			if call := s.l.info.Calls[e.Sel]; call != nil {
+				return s.aggregateCall(call, nil)
+			}
+		}
+		if call := s.l.info.Calls[e]; call != nil {
+			return s.aggregateCall(call, nil)
+		}
+	}
+	return s.place(e)
+}
+
+// place ist designator ohne Aufrufe ohne Klammern: die Adresse der
+// Variable selbst (auch einer Prozedurvariable).
+func (s *fnState) place(e ast.Expr) Expr {
+	switch e := e.(type) {
+	case *ast.Ident:
 		if f, ok := s.l.info.Fields[e]; ok { // Feld über with
 			return add(Get{Var: s.withs[s.l.info.WithRecs[e]]}, f.Offset)
 		}
@@ -299,9 +360,6 @@ func (s *fnState) designator(e ast.Expr) Expr {
 	case *ast.SelectorExpr:
 		if f, ok := s.l.info.Fields[e.Sel]; ok {
 			return add(s.addr(e.X), f.Offset)
-		}
-		if call := s.l.info.Calls[e.Sel]; call != nil {
-			return s.aggregateCall(call, nil)
 		}
 		v, _ := s.directVar(e)
 		return Addr{Var: s.addressed(v)}
@@ -332,7 +390,7 @@ func (s *fnState) designator(e ast.Expr) Expr {
 	case *ast.CallExpr:
 		call := s.l.info.Calls[e]
 		switch call.Kind {
-		case check.CallProc:
+		case check.CallProc, check.CallIndirect:
 			return s.aggregateCall(call, e.Args)
 		case check.CallTypecast:
 			return s.designator(e.Args[0])
@@ -434,8 +492,8 @@ func (s *fnState) setAddr(e ast.Expr) Expr {
 // aggregateCall ruft eine Funktion mit Aggregat-Ergebnis auf; das Ergebnis
 // landet in einer Hilfsvariable, deren Adresse zurückkommt.
 func (s *fnState) aggregateCall(call *check.Call, args []ast.Expr) Expr {
-	tmp := s.temp(call.Proc.Sig.Result)
-	s.emitCall(call.Proc, args, tmp)
+	tmp := s.temp(call.Result())
+	s.emitCallOf(call, args, tmp)
 	return Addr{Var: tmp}
 }
 
@@ -447,9 +505,43 @@ func (s *fnState) call(at ast.Node, call *check.Call, args []ast.Expr) Expr {
 	if call.Kind == check.CallBuiltin {
 		return s.builtin(at, call.Builtin, args)
 	}
-	tmp := s.temp(call.Proc.Sig.Result)
-	s.emitCall(call.Proc, args, tmp)
+	tmp := s.temp(call.Result())
+	s.emitCallOf(call, args, tmp)
 	return Get{Var: tmp}
+}
+
+// emitCallOf ruft eine eigene Routine direkt oder über eine
+// Prozedurvariable auf.
+func (s *fnState) emitCallOf(call *check.Call, args []ast.Expr, dst *Var) {
+	if call.Kind == check.CallIndirect {
+		s.emitIndirect(call, args, dst)
+		return
+	}
+	s.emitCall(call.Proc, args, dst)
+}
+
+// emitIndirect erzeugt einen Aufruf über eine Prozedurvariable. Der
+// Tabellenindex kommt in einen Hilfswert, damit ein Fortsetzen nach dem
+// Anhalten dieselbe Routine trifft (PLAN.md, Etappe 16); nil ist
+// Runtime error 216.
+func (s *fnState) emitIndirect(call *check.Call, args []ast.Expr, dst *Var) {
+	idx := s.temp(types.LongInt)
+	s.emit(Set{Var: idx, Val: s.procValue(call.Fun)})
+	s.check(Un{Op: EqzI, X: Get{Var: idx}}, ErrNilPointer)
+	var in []Expr
+	if r := call.Sig.Result; r != nil {
+		if _, _, ok := scalar(r); !ok {
+			if dst == nil {
+				dst = s.temp(r)
+			}
+			in = append(in, Addr{Var: dst})
+			dst = nil
+		}
+	}
+	for i, prm := range call.Sig.Params {
+		in = append(in, s.arg(args[i], prm.Mode, prm.Type))
+	}
+	s.emit(CallIndirect{Sig: s.l.funcSig(call.Sig), Index: Get{Var: idx}, Args: in, Dst: dst, Pos: s.at})
 }
 
 // emitCall erzeugt den Aufruf; dst nimmt das Ergebnis auf (bei Aggregaten
@@ -476,7 +568,7 @@ func (s *fnState) emitCall(p *types.Proc, args []ast.Expr, dst *Var) {
 // arg übersetzt ein Argument für einen Parameter der Art mode und des Typs t.
 func (s *fnState) arg(a ast.Expr, mode types.ParamMode, t types.Type) Expr {
 	if mode == types.ByVar || t == nil {
-		return s.designator(a)
+		return s.place(a)
 	}
 	if _, _, ok := scalar(t); ok {
 		return s.value(a, t)
@@ -512,9 +604,12 @@ func (s *fnState) callStmt(e ast.Expr) {
 		}
 	}
 	call := s.l.info.Calls[key]
+	if call == nil && key != e { // Prozedurvariable R.P als Anweisung
+		call = s.l.info.Calls[e]
+	}
 	if call.Kind == check.CallBuiltin {
 		s.builtin(at, call.Builtin, args)
 		return
 	}
-	s.emitCall(call.Proc, args, nil)
+	s.emitCallOf(call, args, nil)
 }

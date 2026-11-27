@@ -53,10 +53,11 @@ type Lexer struct {
 	prev      Kind
 }
 
-// defaultSwitches sind die Voreinstellungen der Schalter von TP 4.0. Außer I
-// haben sie keine Wirkung, werden aber für {$IFOPT} mitgeführt.
+// defaultSwitches sind die Voreinstellungen der Schalter von TP 5.0 (A kam
+// mit 5.0 dazu). Außer I haben sie keine Wirkung, werden aber für {$IFOPT}
+// mitgeführt; {$A-} ändert die Ausrichtung nicht (docs/abweichungen.md).
 var defaultSwitches = map[byte]bool{
-	'B': false, 'D': true, 'E': true, 'F': false, 'I': true, 'L': true,
+	'A': true, 'B': false, 'D': true, 'E': true, 'F': false, 'I': true, 'L': true,
 	'N': false, 'R': false, 'S': true, 'T': false, 'V': true,
 }
 

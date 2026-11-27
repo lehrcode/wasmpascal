@@ -14,8 +14,10 @@
 //   // result = { exitCode, error }  (error: WasmPascal.RuntimeError oder null)
 //
 // Ein Laufzeitfehler erscheint wie unter WASI als Meldung
-// "Runtime error NNN at datei.pas(zeile) in Prozedur" auf fd 2; exitCode ist
-// dann die Fehlernummer. Mehrere Programme dürfen gleichzeitig laufen.
+// "Runtime error NNN at datei.pas(zeile) in Prozedur" auf fd 2, nachdem die
+// Exit-Prozeduren gelaufen sind (Export _exit); exitCode ist dann die
+// Fehlernummer bzw. der ExitCode der Exit-Prozeduren. Mehrere Programme
+// dürfen gleichzeitig laufen.
 //
 // Dateien: Das Programm greift über WASI-Aufrufe (fd_read, path_open, …) auf
 // Dateien zu; der Loader setzt sie auf files um, einen synchronen Host mit
@@ -162,8 +164,9 @@
 	// Fehlerstelle steht in den exportierten Globalen __rt_*.
 	function runtimeError(module, exports, err) {
 		const get = (name) => (exports[name] instanceof WebAssembly.Global ? exports[name].value >>> 0 : 0);
-		let code = get("__rt_code");
-		if (code === 0) {
+		// RunError setzt Bit 16 (auch RunError(0) ist kein echter Trap)
+		let code = get("__rt_code") & 0xffff;
+		if (get("__rt_code") === 0) {
 			code = trapCode(err);
 		}
 		const file = get("__rt_file");
@@ -539,6 +542,20 @@
 				resolve(result);
 			};
 
+			// Meldung eines Laufzeitfehlers ausgeben und beenden
+			const report = (rte) => {
+				if (lastByte !== 10) {
+					write(2, encoder.encode("\n"));
+				}
+				write(2, encoder.encode(rte.message + "\n"));
+				finish({ exitCode: rte.code, error: rte });
+			};
+
+			// Laufzeitfehler, nach dem gerade _exit läuft (Exit-Prozeduren);
+			// bis dahin null. errorExits zählt sie (Schutz vor Endlosschleifen).
+			let pending = null;
+			let errorExits = 0;
+
 			const fail = (err) => {
 				if (done) {
 					return;
@@ -551,11 +568,21 @@
 					return;
 				}
 				const rte = runtimeError(module, exports, err);
-				if (lastByte !== 10) {
-					write(2, encoder.encode("\n"));
+				if (typeof exports._exit !== "function" || ++errorExits > 1000) {
+					report(rte);
+					return;
 				}
-				write(2, encoder.encode(rte.message + "\n"));
-				finish({ exitCode: rte.code, error: rte });
+				// Wie TP: erst die Exit-Prozeduren (_exit), dann die Meldung.
+				// Das Programm endet danach über go.exit mit ExitCode * 2 + 1
+				// (Meldung) bzw. ExitCode * 2 (ErrorAddr = nil).
+				pending = rte;
+				const line = exports.__rt_line instanceof WebAssembly.Global ? exports.__rt_line.value : 0;
+				stopTimers();
+				try {
+					enter(() => exports._exit(rte.code, line));
+				} catch (e) {
+					fail(e);
+				}
 			};
 
 			const ctx = {
@@ -586,7 +613,18 @@
 				opts.signal.addEventListener("abort", onAbort);
 			}
 
-			go.exit = (code) => finish({ exitCode: code, error: null });
+			go.exit = (code) => {
+				if (pending === null) {
+					finish({ exitCode: code, error: null });
+					return;
+				}
+				const exitCode = code >> 1;
+				if ((code & 1) === 0) {
+					finish({ exitCode, error: null });
+					return;
+				}
+				report(new RuntimeError(exitCode, pending.file, pending.line, pending.proc));
+			};
 
 			const resume = go._resume.bind(go);
 			go._resume = () => {

@@ -157,6 +157,12 @@ func (c *checker) isAssignable(dst types.Type, x TypeAndValue) bool {
 		return ok && (s.Elem == nil || d.Elem == nil || host(s.Elem) == host(d.Elem))
 	case *types.Pointer:
 		return pointersCompatible(d, src)
+	case *types.ProcType:
+		if src == types.Nil {
+			return true
+		}
+		sp, ok := src.(*types.ProcType)
+		return ok && sp.IsFunc == d.IsFunc && types.SameProcSig(d.Sig, sp.Sig)
 	}
 	return false
 }
@@ -170,8 +176,15 @@ func (c *checker) record(e ast.Expr, x TypeAndValue) TypeAndValue {
 }
 
 // expr prüft einen Ausdruck, der einen Wert liefern muss (auch Variable oder
-// Konstante).
+// Konstante). Eine parameterlose Funktionsvariable wird dabei aufgerufen,
+// wie in TP 5.0; wo der prozedurale Wert selbst gemeint ist, gilt
+// exprNoCall bzw. operand.
 func (c *checker) expr(e ast.Expr) TypeAndValue {
+	return c.autoCall(e, c.exprNoCall(e))
+}
+
+// exprNoCall ist expr ohne den Aufruf parameterloser Funktionsvariablen.
+func (c *checker) exprNoCall(e ast.Expr) TypeAndValue {
 	x := c.exprOrType(e)
 	switch x.Mode {
 	case TypeExpr:
@@ -180,6 +193,76 @@ func (c *checker) expr(e ast.Expr) TypeAndValue {
 		c.fail(e.Pos(), source.ErrInvalidProcRef, "")
 	}
 	return x
+}
+
+// autoCall macht aus einer parameterlosen Funktionsvariable einen Aufruf.
+func (c *checker) autoCall(e ast.Expr, x TypeAndValue) TypeAndValue {
+	pt, ok := x.Type.(*types.ProcType)
+	if !ok || !pt.IsFunc || len(pt.Sig.Params) > 0 || c.info.ProcRefs[e] != nil {
+		return x
+	}
+	// Schon ein anderer Aufruf (Funktion mit prozeduralem Ergebnis)? Ein
+	// früherer autoCall desselben Knotens zählt nicht: Manche Argumente
+	// werden zweimal geprüft (Write erkennt erst die Datei).
+	if call := c.info.Calls[e]; call != nil && (call.Kind != CallIndirect || call.Fun != e) {
+		return x
+	}
+	c.info.Calls[e] = &Call{Kind: CallIndirect, Sig: pt.Sig, Fun: e}
+	return c.record(e, TypeAndValue{Mode: Value, Type: pt.Sig.Result})
+}
+
+// operand prüft e als Wert für ein Ziel vom Typ dst. Ist dst prozedural,
+// bezeichnet ein Routinenname die Routine selbst und eine Prozedurvariable
+// ihren Wert (kein Aufruf).
+func (c *checker) operand(dst types.Type, e ast.Expr) TypeAndValue {
+	if _, ok := dst.(*types.ProcType); !ok {
+		return c.expr(e)
+	}
+	if p, ok := c.procRef(e); ok {
+		return c.procRefValue(e, p)
+	}
+	return c.exprNoCall(e)
+}
+
+// procRef meldet, ob e eine Routine als Wert bezeichnet (Bezeichner oder
+// Unit.Name). Erlaubt sind nur Routinen der obersten Ebene; verschachtelte
+// Routinen und Standardroutinen ergeben Error 143, wie in TP.
+func (c *checker) procRef(e ast.Expr) (*types.Proc, bool) {
+	var sym types.Symbol
+	var id *ast.Ident
+	switch e := e.(type) {
+	case *ast.Ident:
+		if _, isField := c.withFieldLookup(e); isField {
+			return nil, false
+		}
+		sym, _ = c.scope.Lookup(e.Name)
+		id = e
+	case *ast.SelectorExpr:
+		s, ok := c.qualified(e)
+		if !ok {
+			return nil, false
+		}
+		sym, id = s, e.Sel
+	default:
+		return nil, false
+	}
+	switch s := sym.(type) {
+	case *types.Proc:
+		if s.Level > 1 {
+			c.fail(id.Pos(), source.ErrInvalidProcRef, "")
+		}
+		c.info.Uses[id] = s
+		c.info.ProcRefs[e] = s
+		return s, true
+	case *types.Builtin:
+		c.fail(id.Pos(), source.ErrInvalidProcRef, "")
+	}
+	return nil, false
+}
+
+// procRefValue ist der Wert einer Routine als prozeduraler Typ.
+func (c *checker) procRefValue(e ast.Expr, p *types.Proc) TypeAndValue {
+	return c.record(e, TypeAndValue{Mode: Value, Type: &types.ProcType{Sig: p.Sig, IsFunc: p.IsFunc}})
 }
 
 // constExpr prüft einen Konstantenausdruck.
@@ -422,7 +505,16 @@ func (c *checker) index(e *ast.IndexExpr) TypeAndValue {
 
 func (c *checker) unary(e *ast.UnaryExpr) TypeAndValue {
 	if e.Op == lexer.At {
+		// @Routine: Zeiger auf die Routine; @P mit einer Prozedurvariable:
+		// ihr Wert als Pointer (TP 5.0)
+		if p, ok := c.procRef(e.X); ok {
+			c.procRefValue(e.X, p)
+			return TypeAndValue{Mode: Value, Type: types.PointerType}
+		}
 		x := c.exprOrType(e.X)
+		if _, isProc := x.Type.(*types.ProcType); isProc && (x.Mode == Variable || x.Mode == Value) {
+			return TypeAndValue{Mode: Value, Type: types.PointerType}
+		}
 		if x.Mode != Variable || x.ReadOnly {
 			c.fail(e.X.Pos(), source.ErrInvalidAt, "")
 		}

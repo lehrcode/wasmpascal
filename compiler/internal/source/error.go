@@ -109,6 +109,7 @@ const (
 	ErrFilesMustBeVar      = 126
 	ErrHeaderMismatch      = 131
 	ErrInvalidFormat       = 135
+	ErrProcVarExpected     = 142
 	ErrInvalidProcRef      = 143
 
 	ErrInvalidUTF8       = 900
@@ -196,6 +197,7 @@ var messages = map[int]string{
 	ErrFilesMustBeVar:      "Files must be var parameters",
 	ErrHeaderMismatch:      "Header does not match previous definition",
 	ErrInvalidFormat:       "Invalid format specifier",
+	ErrProcVarExpected:     "Procedure or function variable expected",
 	ErrInvalidProcRef:      "Invalid procedure or function reference",
 	ErrSyntax:              "Syntax error",
 	ErrRealConst:           "Error in real constant",

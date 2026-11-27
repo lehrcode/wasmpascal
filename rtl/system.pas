@@ -8,7 +8,7 @@
     _HeapBase       erste Adresse hinter dem Schatten-Stack
     _MemSize        Speichergroesse in Seiten zu 64 KB
     _MemGrow(n)     memory.grow, liefert -1 bei Fehlschlag
-    _RunError(n)    Laufzeitfehler n an der Stelle des Aufrufers
+    _RunError(n)    Laufzeitfehler n an der Stelle des Aufrufers (auch RunError)
     _FdWrite usw.   WASI-Aufrufe (compiler/internal/abi), Ergebnis: errno
     _GoWasmWrite    Importe aus wasm_exec.js fuer das Ziel gojs (Go-Stack sp)
     _Suspend(g, a)  Anhaltepunkt des Schedulers
@@ -28,6 +28,13 @@ var
   RandSeed: LongInt;
   FileMode: Byte;
   ExitCode: Integer;
+  { Exit-Prozeduren (TP 4.0): Am Programmende, nach Halt und nach einem
+    Laufzeitfehler ruft die Laufzeit ExitProc, bis es nil bleibt; vor jedem
+    Aufruf wird ExitProc nil. ErrorAddr ist nach einem Laufzeitfehler nicht
+    nil (die Zeilennummer); eine Exit-Prozedur, die es auf nil setzt,
+    unterdrueckt die Meldung. }
+  ExitProc: Pointer;
+  ErrorAddr: Pointer;
 
 { Uhr in Nanosekunden: Id 0 = Echtzeit seit 1. 1. 1970 (UTC), 1 = monoton. }
 function _Clock(Id: LongInt): Real;
@@ -2822,17 +2829,70 @@ end;
 
 { ---------------------------------------------------------- Programmende }
 
+type
+  TExitProc = procedure;
+
+var
+  ErrorExiting: Boolean;  { Programmende nach einem Laufzeitfehler (_ErrorExit) }
+
 procedure _Done;
 begin
   FlushText(TTextRec(Output))
 end;
 
-{ Halt ist ein Anhaltepunkt: Die Laufzeit beendet das Programm in der
-  Aktion (WASI: proc_exit, gojs: wasmExit). }
+{ Ruft die Exit-Prozeduren wie TP: vor jedem Aufruf wird ExitProc nil,
+  damit eine Prozedur die Kette fortsetzen kann (ExitProc := Alt). }
+procedure ExitChain;
+var
+  P: TExitProc;
+begin
+  while ExitProc <> nil do
+  begin
+    P := TExitProc(ExitProc);
+    ExitProc := nil;
+    P
+  end
+end;
+
+{ Beendet das Programm: Exit-Prozeduren, Ausgabe leeren, dann der
+  Anhaltepunkt SuspendHalt (WASI: proc_exit, gojs: wasmExit). Nach einem
+  Laufzeitfehler meldet der Exit-Code dem Host zusaetzlich, ob ErrorAddr
+  noch gesetzt ist: ExitCode * 2 + 1 mit Meldung, ExitCode * 2 ohne. }
+procedure Terminate;
+var
+  Code: LongInt;
+begin
+  ExitChain;
+  _Done;
+  Code := ExitCode;
+  if ErrorExiting then
+  begin
+    Code := Code * 2;
+    if ErrorAddr <> nil then
+      Code := Code + 1
+  end;
+  Suspend(SuspendHalt, Code)
+end;
+
+{ Halt und das Programmende (Halt(0)). }
 procedure _Halt(Code: LongInt);
 begin
-  _Done;
-  Suspend(SuspendHalt, Code)
+  ExitCode := Code;
+  ErrorAddr := nil;
+  Terminate
+end;
+
+{ Nach einem Laufzeitfehler (Trap) ruft der Host diese Routine ueber den
+  Export _exit, mit Fehlernummer und Zeile der Fehlerstelle (0 = unbekannt).
+  TP-ANNAHME: ErrorAddr ist die Zeilennummer als Zeiger (mindestens 1). }
+procedure _ErrorExit(Code, Line: LongInt);
+begin
+  ErrorExiting := True;
+  ExitCode := Code;
+  if Line < 1 then
+    Line := 1;
+  ErrorAddr := Ptr(0, Line);
+  Terminate
 end;
 
 procedure InitText(var F: TTextRec; Handle, Mode: LongInt);
@@ -2866,6 +2926,9 @@ begin
   RandSeed := 0;
   FileMode := 2;
   ExitCode := 0;
+  ExitProc := nil;
+  ErrorAddr := nil;
+  ErrorExiting := False;
   LastYield := NowMs;
   InitText(TTextRec(Input), 0, fmInput);
   InitText(TTextRec(Output), 1, fmOutput)

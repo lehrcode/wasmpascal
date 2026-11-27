@@ -1,4 +1,7 @@
-# Abweichungen von Turbo Pascal 4.0
+# Abweichungen von Turbo Pascal 5.0
+
+Bis Etappe 15 war Turbo Pascal 4.0 der Maßstab; ältere Zeilen nennen deshalb
+oft TP 4.0.
 
 Bewusste Abweichungen und getroffene Annahmen. Die grundsätzlichen Abweichungen
 (Typabbildung, Speichermodell, UTF-8, Erweiterungen) stehen in `PLAN.md`; hier
@@ -13,7 +16,7 @@ kommen die Einzelentscheidungen dazu, die während der Umsetzung fallen.
 | 1 | Dateiende | Ein Strg+Z (`#26`) beendet die Quelldatei wie unter DOS. |
 | 1 | Steuerzeichen `^X` | `^` gefolgt von einem Zeichen aus `@`..`_` oder `a`..`z` ist ein Steuerzeichen (`Ord xor 64`), wenn danach kein Bezeichnerzeichen folgt und das `^` nicht hinter einem Operanden (Bezeichner, `)`, `]`, `^`) oder im Typkontext steht. Den Typkontext setzt der Parser (`type P = ^T`). `^a` = `^A` (`// TP-ANNAHME`). |
 | 1 | Bedingte Übersetzung | Zusätzlich zu den im Plan genannten Direktiven werden `{$UNDEF}` und `{$IFOPT x+}` unterstützt, weil TP 4.0 sie kennt und ein ignoriertes `{$IFOPT}` das `{$ENDIF}` aus dem Gleichgewicht brächte. Die Schalter werden dafür mitgeführt, wirken aber (außer `I`) nicht. |
-| 1 | Vordefinierte Symbole | `VER40` und `WASMPASCAL`. `MSDOS` und `CPU86` fehlen bewusst, weil DOS-spezifische Teile nicht existieren. |
+| 1 | Vordefinierte Symbole | (*Überholt durch Etappe 16:* `VER50` statt `VER40`.) `VER40` und `WASMPASCAL`. `MSDOS` und `CPU86` fehlen bewusst, weil DOS-spezifische Teile nicht existieren. |
 | 1 | `{$I datei}` | Ohne Endung wird `.pas` angenommen. Gesucht wird im Verzeichnis der einbindenden Datei, dann in den `-I`-Pfaden; `\` gilt als Trenner, Groß-/Kleinschreibung ist egal. Höchstens 16 Ebenen, sonst Error 9. |
 | 1 | Fehlernummern | Unzulässiges ASCII-Zeichen: Error 5; `#n` über 255: Error 76; fehlplatziertes `{$ELSE}`/`{$ENDIF}` und fehlerhafte Direktiven: Error 17; fehlendes `{$ENDIF}`: Error 10 am Dateiende (jeweils `// TP-ANNAHME`). Eigene Nummern ab 900: 900 ungültiges UTF-8, 901 Nicht-ASCII-Zeichen außerhalb von Strings und Kommentaren. |
 | 1 | CLI | Die CLI liest Dateien über ein `os.DirFS` der Laufwerkswurzel und zeigt Pfade in Meldungen relativ zum Arbeitsverzeichnis. |
@@ -113,4 +116,13 @@ kommen die Einzelentscheidungen dazu, die während der Umsetzung fallen.
 | 15 | Dos: Suchen | `SearchRec.Name` und `PathStr`/`DirStr`/`NameStr`/`ExtStr` haben 255 Bytes statt 12/79/67/8/4. `*` und `*.*` passen auf alle Namen (`// TP-ANNAHME` für Namen ohne Punkt), Vergleich ohne Rücksicht auf Groß-/Kleinschreibung, `?` steht für ein Byte. `.` und `..` werden nie geliefert, die Reihenfolge bestimmt der Rechner. Ohne `FindClose` bleibt der Zustand einer abgebrochenen Suche bis Programmende belegt. `fd_readdir`-Cookies müssen in 31 Bit passen (wazero und der Loader zählen hoch). |
 | 15 | Dos: Pfade | `FExpand` liefert `/pfad` wie `GetDir` (Trenner `/`, kein Laufwerk, keine Großschreibung); `..` über die Wurzel hinaus bleibt in der Wurzel (`// TP-ANNAHME`, wie DOS). `FSplit` arbeitet rein auf der Zeichenkette und kennt `\` und `/`. |
 | 15 | Dos: Umgebung | `GetEnv` vergleicht zuerst exakt, dann ohne Rücksicht auf Groß-/Kleinschreibung (`// TP-ANNAHME`). `DosVersion` ist immer 5.0. Unter `gojs` sind die Variablen nach Namen sortiert (so legt `wasm_exec.js` sie ab), und Argumente plus Umgebung sind auf etwa 8 KB begrenzt. |
-| 15 | Dos: Herkunft | `DosVersion`, `EnvCount`, `EnvStr`, `FExpand`, `FSearch`, `FSplit` und `GetEnv` gibt es erst ab TP 5.0 (README zu TP 5.0, „New library routines“); sie stehen in der Tabelle der Erweiterungen in PLAN.md. |
+| 15 | Dos: Herkunft | `DosVersion`, `EnvCount`, `EnvStr`, `FExpand`, `FSearch`, `FSplit` und `GetEnv` gibt es erst ab TP 5.0 (README zu TP 5.0, „New library routines“); sie stehen in der Tabelle der Erweiterungen in PLAN.md. (*Seit Etappe 16* gehören sie zum Sprachumfang TP 5.0.) |
+| 16 | Prozedurale Typen | Zuweisbar sind nur Routinen der obersten Ebene; verschachtelte Routinen und Standardroutinen ergeben Error 143, auch bei `@` und `Addr` (TP liefert dort eine Adresse). `{$F+}` ist nicht nötig. Der Wert ist ein Index in die WASM-Funktionstabelle, keine Adresse; `@P` und `Addr(P)` liefern ihn als `Pointer`, `TProc(Ptr)` wandelt zurück. Ein falscher Index oder eine falsche Signatur beim Aufruf ergibt Runtime error 216. |
+| 16 | Prozedurvariablen vergleichen | `P = nil` und `P = Q` sind Fehler (bei Funktionsvariablen ruft der Ausdruck auf); verglichen wird wie in TP über `@P = nil` bzw. `@P = @Q` (`// TP-ANNAHME`). |
+| 16 | Fehlernummern | Error 142 „Procedure or function variable expected“, wenn eine Variable ohne prozeduralen Typ mit Argumenten aufgerufen wird (bisher 143); 88 `"(" expected` für eine Prozedurvariable mit Parametern ohne Argumente. |
+| 16 | Exit-Prozeduren | Wie in TP: `ExitProc` wird vor jedem Aufruf nil, die Kette läuft am Programmende, nach `Halt` und nach jedem Laufzeitfehler (auch nach echten WASM-Traps wie 207 bei `Trunc` oder 202). Exit-Prozeduren dürfen anhalten (`ReadLn`, `Delay`). Nach einem Laufzeitfehler laufen sie nur mit `runner` bzw. `web/loader.js`, die nach dem Trap den Export `_exit` rufen; andere WASI-Laufzeiten (`wasmtime`, `node:wasi`) beenden das Programm sofort. Ein Laufzeitfehler in einer Exit-Prozedur ersetzt den ersten, die Kette läuft weiter. |
+| 16 | `ErrorAddr` | Nach einem Laufzeitfehler die Zeilennummer der Fehlerstelle als Zeiger (`Ptr(0, Zeile)`, mindestens 1; `// TP-ANNAHME`), sonst nil. Die Meldung nennt die Fehlerstelle aus dem Trap und als Nummer den `ExitCode` nach den Exit-Prozeduren. |
+| 16 | Programmende | Wie `Halt(0)`: Ein im Hauptprogramm gesetzter `ExitCode` zählt nicht, nur einer aus einer Exit-Prozedur (`// TP-ANNAHME`). |
+| 16 | `RunError` | `RunError` ohne Parameter ergibt Runtime error 0. Die Meldung nennt die Zeile des Aufrufs. |
+| 16 | `{$A}` | Wird angenommen und für `{$IFOPT}` mitgeführt (Voreinstellung `A+`), ändert die Ausrichtung aber nicht: Records und Arrays sind immer natürlich ausgerichtet. |
+| 16 | Nicht vorhanden | Aus TP 5.0 fehlen Overlays (`Overlay`, `{$O}`), 8087-Emulation (`{$E}`), Debugger-Direktiven und aus `Dos` `GetCBreak`, `SetCBreak`, `GetVerify`, `SetVerify` und `SwapVectors`. |

@@ -11,9 +11,25 @@ ausdrücklich genannt. Einzelheiten zu jeder Änderung stehen in
 
 ## [Unreleased]
 
-Etappe 15: Unit `Dos` erweitert, Ortszeit.
+Etappe 15: Unit `Dos` erweitert, Ortszeit. Etappe 16: Sprachumfang von
+Turbo Pascal 5.0 mit prozeduralen Typen und Exit-Prozeduren.
 
 ### Hinzugefügt
+
+- Prozedurale Typen wie in TP 5.0: `type TFunc = function(X: Real): Real;`,
+  Prozedur- und Funktionsvariablen, Funktionsparameter, Arrays, Records und
+  typisierte Konstanten mit Routinen, `@Routine`, `@P = nil`, `TProc(Ptr)`.
+  Zuweisbar sind Routinen der obersten Ebene; Aufrufe über `nil` ergeben
+  Runtime error 216. Indirekt aufgerufene Routinen dürfen anhalten
+  (`ReadLn`, `Delay`).
+- `ExitProc`, `ErrorAddr` und verkettete Exit-Prozeduren wie in TP: am
+  Programmende, nach `Halt` und nach jedem Laufzeitfehler, auch nach
+  WASM-Traps. Eine Exit-Prozedur kann die Meldung „Runtime error …“
+  unterdrücken (`ErrorAddr := nil`) und `ExitCode` ändern. Dafür exportiert
+  jedes Modul `_exit`, das `runner` und `web/loader.js` nach einem Trap
+  rufen.
+- `RunError[(Code)]` (aus TP 5.0).
+- `{$A+}`/`{$A-}` wird angenommen (ohne Wirkung auf die Ausrichtung).
 
 - Unit `Dos`: `GetFAttr`, `GetFTime`, `FindFirst`, `FindNext`, `PackTime`,
   `UnpackTime` (aus TP 4.0) sowie `FExpand`, `FSplit`, `FSearch`, `GetEnv`,
@@ -29,6 +45,13 @@ Etappe 15: Unit `Dos` erweitert, Ortszeit.
 
 ### Geändert
 
+- **Inkompatibel:** Das vordefinierte Symbol heißt `VER50` statt `VER40`.
+- Die Dokumentation nennt Turbo Pascal 5.0 als Sprachumfang; der Hinweis
+  „ohne OOP“ entfällt (Objekte kamen erst mit TP 5.5).
+- Das Programmende wirkt wie `Halt(0)` und läuft über die Exit-Prozeduren;
+  unter WASI endet ein Programm dadurch immer über `proc_exit`.
+- Der Aufruf einer Variable ohne prozeduralen Typ (`I(1)`) ergibt Error 142
+  statt 143; `@` auf eine verschachtelte Routine ergibt Error 143 statt 83.
 - `GetDate`, `GetTime` und Dateizeiten liefern Ortszeit statt UTC, wenn
   `WASMPASCAL_UTC_OFFSET` gesetzt ist (`pascal run` und der Browser setzen
   sie). Der Versatz gilt für den ganzen Lauf.

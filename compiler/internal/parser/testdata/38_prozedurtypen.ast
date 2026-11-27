@@ -1,0 +1,23 @@
+(program prozedurtypen
+  (type tproc (procedure-type))
+  (type tfunc (function-type (params (value (x) real)) (result real)))
+  (type tvar
+    (procedure-type
+      (params (var (a) integer) (const (s) string) (value (b c) longint))))
+  (type trec
+    (record (field (f) (function-type (result boolean))) (field (p) tproc)))
+  (var (p) tproc)
+  (var (q) (procedure-type (params (value (x) integer))))
+  (var (a) (array ((.. 1 2)) tproc))
+  (var (pp) (^ tproc))
+  (procedure hallo (begin (empty)))
+  (begin
+    (:= p hallo)
+    (call p)
+    (call q 1)
+    (:= (index a 1) hallo)
+    (call (index a 1))
+    (call new pp)
+    (:= (^ pp) hallo)
+    (call (^ pp))
+    (if (= (@ p) nil) (:= p (call tproc (@ hallo))))))

@@ -131,7 +131,7 @@ func TestErrors(t *testing.T) {
 		{"begin x := ; end.", "t.pas(1,12): Error 42: Error in expression"},
 		{"begin x := 1; else end.", "t.pas(1,15): Error 113: Error in statement"},
 		{"begin (x) end.", "t.pas(1,7): Error 113: Error in statement"},
-		{"begin a[1] end.", `t.pas(1,12): Error 91: ":=" expected`},
+		{"begin a[1] 1 end.", `t.pas(1,12): Error 91: ":=" expected`},
 		{"begin x := (1, 2) end.", `t.pas(1,14): Error 89: ")" expected`},
 		{"begin repeat x := 1 until end.", "t.pas(1,27): Error 42: Error in expression"},
 		{"begin with do end.", "t.pas(1,12): Error 2: Identifier expected"},

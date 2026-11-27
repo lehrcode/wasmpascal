@@ -308,7 +308,17 @@ type PointerType struct {
 	Elem TypeExpr // NamedType oder StringType
 }
 
+// ProcType ist ein prozeduraler Typ procedure(...) bzw. function(...): T
+// (TP 5.0).
+type ProcType struct {
+	Base
+	IsFunc bool
+	Params []*ParamGroup
+	Result TypeExpr
+}
+
 func (*NamedType) typeNode()    {}
+func (*ProcType) typeNode()     {}
 func (*StringType) typeNode()   {}
 func (*SubrangeType) typeNode() {}
 func (*EnumType) typeNode()     {}
@@ -417,10 +427,13 @@ type AssignStmt struct {
 	Lhs, Rhs Expr
 }
 
-// CallStmt ist ein Prozeduraufruf (Ident, SelectorExpr oder CallExpr).
+// CallStmt ist ein Prozeduraufruf (Ident, SelectorExpr oder CallExpr; über
+// eine Prozedurvariable auch IndexExpr oder DerefExpr). End ist die Stelle
+// des Tokens nach dem Aufruf.
 type CallStmt struct {
 	StmtBase
 	Call Expr
+	End  source.Pos
 }
 
 // IfStmt ist if Cond then Then [else Else].

@@ -1,7 +1,7 @@
 # WasmPascal
 
-Ein Compiler für Turbo Pascal 4.0 (ohne OOP, mit einigen Erweiterungen aus
-TP 7 und Delphi 1.0) nach WebAssembly, geschrieben in Go. Die Laufzeit ist
+Ein Compiler für Turbo Pascal 5.0 (mit einigen Erweiterungen aus TP 7 und
+Delphi) nach WebAssembly, geschrieben in Go. Die Laufzeit ist
 selbst in Pascal geschrieben. Übersetzte Programme laufen unter WASI (z. B.
 mit wazero oder Node.js) oder im Browser; der Compiler selbst läuft auch als
 WebAssembly im Browser.
@@ -35,8 +35,11 @@ end.
 
 ## Umfang
 
-- **Sprache:** Turbo Pascal 4.0 ohne OOP, mit Units, `goto`, Mengen, Zeigern
-  und typisierten Konstanten; dazu `Result`, `Break`/`Continue`, `Low`/`High`,
+- **Sprache:** Turbo Pascal 5.0 mit Units, `goto`, Mengen, Zeigern,
+  typisierten Konstanten und prozeduralen Typen (`type TFunc = function(X:
+  Real): Real`, Funktionsparameter, Tabellen von Routinen); Exit-Prozeduren
+  über `ExitProc`, auch nach Laufzeitfehlern, und `RunError`. Dazu
+  `Result`, `Break`/`Continue`, `Low`/`High`,
   `const`-Parameter, `for … in`, Funktionen mit Record- oder
   Array-Ergebnis, `SmallInt` und `WideChar`. `Integer` hat 32 Bit, `Word`
   und `SmallInt` 16 Bit wie in TP.
@@ -136,7 +139,9 @@ default:
 ```
 
 Das Modul aus `compiler.Compile` (Standardziel WASI Preview 1) läuft auch
-ohne `runner`, z. B. mit `node:wasi`.
+ohne `runner`, z. B. mit `node:wasi`. Nur Exit-Prozeduren nach einem
+Laufzeitfehler brauchen `runner` oder den Loader: Sie rufen nach dem Trap den
+Export `_exit` des Moduls.
 
 Quelltexte aus fremder Hand darf `compiler.Compile` direkt übersetzen. Arbeit
 und Speicher begrenzt `compiler.Options.Limits`; der Nullwert sind sichere
@@ -295,7 +300,7 @@ Start und Schnittstellen beschreibt [web/README.md](web/README.md).
 | Datei | Inhalt |
 | --- | --- |
 | [docs/units.md](docs/units.md) | Referenz der Units System, Crt und Dos: Typen, Routinen, Laufzeitfehler |
-| [docs/abweichungen.md](docs/abweichungen.md) | Wo und warum WasmPascal von Turbo Pascal 4.0 abweicht |
+| [docs/abweichungen.md](docs/abweichungen.md) | Wo und warum WasmPascal von Turbo Pascal 5.0 abweicht |
 | [CHANGELOG.md](CHANGELOG.md) | Änderungen je Version |
 | [PLAN.md](PLAN.md) | Sprachumfang, Erweiterungen, Typabbildung, Speichermodell, Architektur, Etappen |
 | [web/README.md](web/README.md) | Browser-Demo, Loader mit Datei-Host, `pascalCompile`, Node-Werkzeuge |

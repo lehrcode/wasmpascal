@@ -10,7 +10,7 @@ begin
 {$ELSE}
   WriteLn('still');
 {$ENDIF}
-{$IFNDEF VER40}
+{$IFNDEF VER50}
   das hier wird nie gelesen ä ö ü
 {$ENDIF}
   for i := 1 to Anzahl do Write(i)

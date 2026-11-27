@@ -27,7 +27,9 @@ func runtimeError(mod api.Module, wasm []byte, trap error) *RuntimeError {
 	file, _ := get("__rt_file")
 	line, _ := get("__rt_line")
 	fn, _ := get("__rt_func")
-	e := &RuntimeError{Code: int(code)}
+	// RunError setzt Bit 16, damit auch RunError(0) von einem echten Trap
+	// (Nummer 0) zu unterscheiden ist.
+	e := &RuntimeError{Code: int(code & 0xFFFF)}
 	if code == 0 {
 		e.Code = trapCode(trap.Error())
 	}

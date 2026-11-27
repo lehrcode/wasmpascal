@@ -19,9 +19,10 @@ func NewDefines(syms ...string) Defines {
 }
 
 // Predefined sind die Symbole, die in jeder Übersetzung definiert sind.
-// VER40 wie in Turbo Pascal 4.0; WASMPASCAL kennzeichnet diesen Compiler.
-// MSDOS und CPU86 fehlen bewusst, weil die DOS-spezifischen Teile nicht existieren.
-var Predefined = []string{"VER40", "WASMPASCAL"}
+// VER50 wie in Turbo Pascal 5.0 (bis Etappe 15 VER40); WASMPASCAL
+// kennzeichnet diesen Compiler. MSDOS und CPU86 fehlen bewusst, weil die
+// DOS-spezifischen Teile nicht existieren.
+var Predefined = []string{"VER50", "WASMPASCAL"}
 
 // Define setzt ein Symbol.
 func (d Defines) Define(s string) { d[strings.ToUpper(s)] = true }

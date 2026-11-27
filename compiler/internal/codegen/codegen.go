@@ -44,6 +44,7 @@ const (
 	globalGoSP = 9  // Go-Stackzeiger für wasm_exec.js (Export getsp)
 	globalArgc = 10 // Argumente von run(argc, argv)
 	globalArgv = 11
+	globalRoot = 12 // gojs: was resume fortsetzt (0 Hauptprogramm, 1 _exit)
 )
 
 var hostGlobals = map[int]uint32{ir.GlobalGoSP: globalGoSP, ir.GlobalArgc: globalArgc, ir.GlobalArgv: globalArgv}
@@ -84,6 +85,10 @@ func Generate(m *ir.Module, opts Options) []byte {
 	for i, f := range m.Funcs {
 		g.funcIndex[f] = uint32(len(mod.Imports) + i)
 	}
+	for _, f := range m.Table {
+		mod.Table = append(mod.Table, g.funcIndex[f])
+	}
+	mod.NeedTable = len(m.Sigs) > 0
 
 	g.stackBase = types.AlignTo(max(ir.DataBase+int64(len(m.Data)), m.BSSBase+m.BSSSize), 16)
 	g.stackTop = g.stackBase + types.AlignTo(m.StackSize, 16)
@@ -92,7 +97,7 @@ func Generate(m *ir.Module, opts Options) []byte {
 		return wasm.Global{Type: wasm.I32, Mutable: true, Init: wasm.AppendS32([]byte{wasm.OpI32Const}, int32(v))}
 	}
 	mod.Globals = []wasm.Global{i32(g.stackTop), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0), i32(0),
-		i32(0), i32(0), i32(0)}
+		i32(0), i32(0), i32(0), i32(0)}
 	if len(m.Data) > 0 {
 		mod.Data = []wasm.Data{{Offset: ir.DataBase, Bytes: m.Data}}
 	}
@@ -116,6 +121,11 @@ func Generate(m *ir.Module, opts Options) []byte {
 		mod.Exports = []wasm.Export{
 			{Name: "memory", Kind: wasm.ExportMemory, Index: 0},
 			{Name: "_start", Kind: wasm.ExportFunc, Index: start},
+		}
+		if m.ErrorExit != nil {
+			mod.Exports = append(mod.Exports, wasm.Export{Name: "_exit", Kind: wasm.ExportFunc,
+				Index: uint32(len(mod.Imports) + len(mod.Funcs))})
+			mod.Funcs = append(mod.Funcs, g.exitDriver())
 		}
 	}
 	for i := globalCode; i <= globalResume; i++ {
@@ -593,6 +603,16 @@ func (fg *funcGen) instr(in ir.Instr) {
 		fg.call(in.Args, in.Dst, func() { c.Index(wasm.OpCall, fg.g.funcIndex[in.Fn]) }, hasResult)
 		if !fg.g.opts.NoLines && !fg.fn.RTL {
 			fg.setPos(in.Pos) // nach der Rückkehr gilt wieder die eigene Stelle
+		}
+	case ir.CallIndirect:
+		typ := fg.g.mod.TypeIndex(wasm.FuncType{Params: valTypes(in.Sig.Params), Results: valTypes(in.Sig.Results)})
+		fg.call(in.Args, in.Dst, func() {
+			fg.expr(in.Index)
+			c.Index(wasm.OpCallIndirect, typ)
+			c.B = append(c.B, 0) // Tabelle 0
+		}, len(in.Sig.Results) > 0)
+		if !fg.g.opts.NoLines && !fg.fn.RTL {
+			fg.setPos(in.Pos)
 		}
 	case ir.HostCall:
 		fg.call(in.Args, in.Dst, func() { c.Index(wasm.OpCall, fg.g.hostIndex[in.Fn]) }, len(in.Fn.Result) > 0)
