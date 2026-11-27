@@ -52,7 +52,8 @@ end.
 - **Units:** `System` (Ein- und Ausgabe, Text-, typisierte und untypisierte
   Dateien samt `FileMode`, Verzeichnisse, Strings, Mathematik, Heap), `Crt`
   (Farben, `ClrScr`, `GotoXY`, `Delay`, `ReadKey` zeilenweise) und `Dos`
-  (Datum und Uhrzeit). Alles Nutzbare beschreibt
+  (Datum und Uhrzeit in Ortszeit, `FindFirst`/`FindNext`, `GetFAttr`,
+  `GetFTime`, `FExpand`, `FSplit`, `FSearch`, `GetEnv`). Alles Nutzbare beschreibt
   [docs/units.md](docs/units.md); `WhereX`, `WhereY`, `Window` und
   `KeyPressed` fehlen.
 - **Ziele:** WASI (CLI mit wazero, `node:wasi`, …) und `gojs` für Browser und

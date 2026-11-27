@@ -364,15 +364,89 @@ Farben für `TextColor` und `TextBackground`:
 
 ## Dos
 
-Nur Datum und Uhrzeit. Beide sind **UTC**, weil WASI keine Zeitzone kennt.
+Datum und Uhrzeit, Dateiattribute und Dateizeit, Verzeichnissuche, Pfade und
+Umgebungsvariablen. Fehler melden die Routinen in `DosError`, nicht über
+`IOResult`.
+
+### Konstanten, Typen, Variablen
+
+| Name | Bedeutung |
+| --- | --- |
+| `ReadOnly = $01`, `Hidden = $02`, `SysFile = $04`, `VolumeID = $08`, `Directory = $10`, `Archive = $20`, `AnyFile = $3F` | Dateiattribute. **Abweichung:** Nur `Directory` und `Hidden` haben eine Wirkung (siehe unten). |
+| `PathStr`, `DirStr`, `NameStr`, `ExtStr` | **Abweichung:** alle `string` mit 255 Bytes (TP: 79, 67, 8, 4), damit lange Namen ganz bleiben. |
+| `DateTime = record Year, Month, Day, Hour, Min, Sec: Word end` | Zerlegte Zeit für `PackTime`/`UnpackTime`. |
+| `SearchRec = record Fill; Attr: Byte; Time, Size: LongInt; Name: string end` | Ergebnis von `FindFirst`/`FindNext`; `Fill` ist intern. **Abweichung:** `Name` mit 255 Bytes (TP: 12). |
+| `DosError: Integer` | Fehler der letzten Routine: 0 ok, 2 Datei fehlt, 3 Pfad fehlt, 6 Datei nicht geöffnet, 18 keine weiteren Dateien. |
+
+### Datum und Uhrzeit
 
 | Signatur | Beschreibung |
 | --- | --- |
 | `GetDate(var Year, Month, Day, DayOfWeek: Word)` | Aktuelles Datum; `DayOfWeek` 0 = Sonntag … 6 = Samstag. |
 | `GetTime(var Hour, Minute, Second, Sec100: Word)` | Aktuelle Uhrzeit; `Sec100` sind Hundertstelsekunden. |
+| `PackTime(var T: DateTime; var P: LongInt)` | Zeit in das gepackte DOS-Format (Sekunden nur gerade). |
+| `UnpackTime(P: LongInt; var T: DateTime)` | gepackte DOS-Zeit zerlegen. |
 
-Alle anderen Routinen der Unit Dos von TP 4.0 (z. B. `FindFirst`, `Exec`,
-`SetDate`) gibt es nicht.
+**Ortszeit:** Datum, Uhrzeit und Dateizeiten gelten in Ortszeit. Den Versatz
+zu UTC liest die Unit beim Programmstart aus der Umgebungsvariable
+`WASMPASCAL_UTC_OFFSET` (Minuten östlich von UTC, z. B. `60` für MEZ);
+`pascal run` und der Browser setzen sie selbst. Fehlt sie, gilt UTC.
+**Abweichung:** Der Versatz bleibt für den ganzen Lauf gleich – ein Wechsel
+der Sommerzeit während des Laufs und Dateizeiten aus der anderen
+Jahreshälfte sind um eine Stunde verschoben.
+
+### Dateien und Verzeichnisse
+
+| Signatur | Beschreibung |
+| --- | --- |
+| `GetFAttr(var F; var Attr: Word)` | Attribute der Datei, die mit `Assign` an `F` hängt (offen oder geschlossen). Fehlt sie: `Attr` = 0, `DosError` = 2 bzw. 3. |
+| `GetFTime(var F; var Time: LongInt)` | Änderungszeit der **geöffneten** Datei `F` als gepackte DOS-Zeit; nicht geöffnet: `DosError` = 6. |
+| `FindFirst(Path: PathStr; Attr: Word; var S: SearchRec)` | Erster Eintrag, der auf das Muster im letzten Teil von `Path` passt (`*` und `?`, Groß-/Kleinschreibung egal; `*` und `*.*` passen auf alle Namen, auch ohne Punkt). Normale Dateien immer, Verzeichnisse nur mit `Directory` in `Attr`, versteckte nur mit `Hidden`. Kein Treffer: `DosError` = 18, Verzeichnis fehlt: 3. |
+| `FindNext(var S: SearchRec)` | Nächster Eintrag; am Ende `DosError` = 18. |
+
+```pascal
+var S: SearchRec;
+begin
+  FindFirst('*.pas', 0, S);
+  while DosError = 0 do
+  begin
+    WriteLn(S.Name, ' ', S.Size);
+    FindNext(S)
+  end
+end.
+```
+
+- **Attribute (Abweichung):** Nur zwei haben eine Wirkung: `Directory` für
+  Verzeichnisse und `Hidden` für Namen, die mit einem Punkt beginnen
+  (Unix-Konvention). `ReadOnly`, `SysFile`, `Archive` und `VolumeID` werden
+  nie gemeldet und beim Suchen ignoriert; eine normale Datei hat `Attr` = 0.
+- **Suche (Abweichung):** `.` und `..` werden nie geliefert; die Reihenfolge
+  bestimmt der Rechner (nicht sortiert). Den Suchzustand gibt `FindNext` am
+  Ende frei; bricht ein Programm eine Suche vorher ab, bleibt er bis
+  Programmende belegt (TP 4.0 kennt kein `FindClose`). `?` steht für ein
+  Byte, ein Umlaut braucht also `??`.
+
+### Pfade und Umgebung (aus TP 5.0)
+
+| Signatur | Beschreibung |
+| --- | --- |
+| `FExpand(Path: PathStr): PathStr` | Vollständiger Pfad ab der Wurzel wie bei `GetDir`: `FExpand('..\b\c.pas')` in `/a` ergibt `/b/c.pas`. **Abweichung:** `/` als Trenner, kein Laufwerk, keine Großschreibung; `..` über die Wurzel hinaus bleibt in der Wurzel. |
+| `FSplit(Path: PathStr; var Dir: DirStr; var Name: NameStr; var Ext: ExtStr)` | Zerlegt `Path`: `Dir` mit abschließendem Trenner (`\` oder `/`), `Ext` mit Punkt (ab dem letzten Punkt im Namen). |
+| `FSearch(Path: PathStr; DirList: string): PathStr` | Sucht eine **Datei** zuerst im aktuellen Verzeichnis, dann in den Verzeichnissen aus `DirList` (getrennt mit `;`); liefert den gefundenen Pfad oder `''`. |
+| `GetEnv(EnvVar: string): string` | Wert der Umgebungsvariable; zuerst der exakte Name, dann ohne Rücksicht auf Groß-/Kleinschreibung. Fehlt sie: `''`. |
+| `EnvCount: Integer` | Anzahl der Umgebungsvariablen. |
+| `EnvStr(Index: Integer): string` | `'NAME=WERT'` der `Index`-ten Variable (ab 1), außerhalb `''`. |
+| `DosVersion: Word` | Immer 5: `Lo(DosVersion)` = 5, `Hi(DosVersion)` = 0. |
+
+Woher die Umgebung kommt: `pascal run` gibt die Umgebung des Rechners weiter,
+`runner.Options.Env` und die Option `env` des Loaders genau die angegebenen
+Variablen. Im Browser ohne `env` enthält sie nur `WASMPASCAL_UTC_OFFSET`.
+Unter `gojs` sind die Variablen nach Namen sortiert, und Argumente plus
+Umgebung dürfen zusammen höchstens etwa 8 KB lang sein (Grenze von
+`wasm_exec.js`).
+
+Alle anderen Routinen der Unit Dos (z. B. `Exec`, `SetDate`, `SetFAttr`,
+`DiskFree`) gibt es nicht.
 
 ## Laufzeitfehler
 

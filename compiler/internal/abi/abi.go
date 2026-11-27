@@ -46,6 +46,10 @@ var WASI = []Intrinsic{
 	{"_ClockTimeGet", wasi, "clock_time_get", []ParamKind{I32, I64U, I32}, true},
 	{"_ProcExit", wasi, "proc_exit", []ParamKind{I32}, false},
 	{"_PollOneoff", wasi, "poll_oneoff", []ParamKind{I32, I32, I32, I32}, true},
+	{"_EnvironSizesGet", wasi, "environ_sizes_get", []ParamKind{I32, I32}, true},
+	{"_EnvironGet", wasi, "environ_get", []ParamKind{I32, I32}, true},
+	{"_FdReaddir", wasi, "fd_readdir", []ParamKind{I32, I32, I32, I64U, I32}, true},
+	{"_PathFilestatGet", wasi, "path_filestat_get", []ParamKind{I32, I32, I32, I32, I32}, true},
 }
 
 // GoJS sind die Intrinsics für das Ziel gojs: Funktionen des Moduls "gojs"

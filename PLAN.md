@@ -18,7 +18,7 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 - Es gibt keine Optimierungen. Konstante Ausdrücke werden nur dort ausgewertet, wo die Sprache es verlangt.
 - Laufzeitfehler beenden das Programm mit `Runtime error NNN at datei.pas(zeile) in Prozedur`, also mit Quelltextposition statt Adresse (siehe Abschnitt Laufzeitfehler mit Zeilennummern).
 
-**Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` und `.OBJ`-Linking, `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount`. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen WhereX, WhereY, Window und KeyPressed (GotoXY nach Rückfrage nachgereicht, über ANSI); ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
+**Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` und `.OBJ`-Linking, `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount` und (seit Etappe 15) den Routinen für Attribute, Dateizeit, Suche, Pfade und Umgebung. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen WhereX, WhereY, Window und KeyPressed (GotoXY nach Rückfrage nachgereicht, über ANSI); ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
 
 **Direktiven:** Unterstützt werden `{$I datei}`, `{$I-}`/`{$I+}` mit `IOResult` sowie `{$DEFINE}`, `{$UNDEF}`, `{$IFDEF}`, `{$IFNDEF}`, `{$IFOPT}`, `{$ELSE}` und `{$ENDIF}` (`{$UNDEF}` und `{$IFOPT}` seit Etappe 1, weil TP 4.0 sie kennt). Von {$M} wird nur die Stackgröße ausgewertet (siehe Größengrenzen). Alle anderen werden ignoriert. Boolesche Ausdrücke werden immer mit Kurzschlussauswertung berechnet (entspricht `{$B-}`).
 
@@ -50,6 +50,7 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-4.0-Quelltext i
 | Strukturierte Funktionsergebnisse | Delphi 1.0 | Funktionen dürfen alle Typen außer Dateien zurückgeben, also auch Records, Arrays und Mengen. Der Ergebnistyp ist ein Typbezeichner. Felder und Elemente des Ergebnisses setzt man über `Result`; `F.x` im Rumpf ist ein rekursiver Aufruf. |
 | `WideChar` | Delphi 2.0 | Ein Unicode-Zeichen bis U+FFFF, 2 Byte; Ordinal- und Zeichentyp ohne Arithmetik; als String eingesetzt UTF-8 (Etappe 14). |
 | `SmallInt` | Delphi | 16 Bit mit Vorzeichen, 2 Byte; jede Zuweisung kürzt auf 16 Bit (Etappe 14). |
+| `Dos`: `DosVersion`, `EnvCount`, `EnvStr`, `FExpand`, `FSearch`, `FSplit`, `GetEnv` | TP 5.0 | Laut README zu TP 5.0 dort neu; in WasmPascal seit Etappe 15. |
 | `for … in` | Delphi 2005 | Über Arrays (alle Elemente in Indexreihenfolge), Strings (Bytes als `Char`, mit `WideChar`-Laufvariable die UTF-8-Zeichen – eigene Erweiterung, Etappe 14) und Mengen (enthaltene Elemente aufsteigend). Die Schleifenvariable ist im Rumpf schreibgeschützt. Keine Enumeratoren, da es keine Klassen gibt. |
 
 Bewusst nicht aufgenommen: offene Array-Parameter (`array of T`) und Standardwerte für Parameter.
@@ -1087,7 +1088,7 @@ Nummern; alle bisherigen Tests (mit geprüften Diffs) sind unter WASI,
 `gojs` und mit dem Browser-Compiler grün.
 - *Erledigt (Nov 26, 2026).* `SmallInt` neu, `Word`, Teilbereiche und Aufzählungen mit 2 Byte (IR `MemI16`/`MemU16`, `Ext16`); `WideChar` als Basistyp hinter `Char`, Verträglichkeit über `charPair`/`isWide` statt über `host` (sonst würden `'a'..'z'`-Teilbereiche zu `WideChar`), Literale mit einem Zeichen über `wideLiteral` im Kontext (Zuweisung, Parameter, Vergleich, `case`, typisierte Konstante, Teilbereich, Array-Index); `#n` bis 65535 mit `CodePoint` im Token; Prüfungen 907 (Lexer) und 908 (`source.Loader`); Laufzeit `_WideCharToStr`, `_WriteWideChar`, `_ReadWideChar`, `UTF8Length`/`Next`/`Index`/`Copy`, `for … in` über `UTF8Next`. **Entscheidung bei der Umsetzung:** ungültige UTF-8-Folgen nach der Unicode-Empfehlung (maximal subpart, wie der Encoding-Standard der Browser) je Abschnitt als ein `#$FFFD`, nicht je Byte wie Go – nur so verhalten sich `Read` (sieht nur ein Byte voraus) und `UTF8Next` gleich; ein Byte, das nie gültig ist (`C0`, `FF`, …), bleibt ein eigenes Zeichen. Geänderte Golden-Files: `typen.out` (`Word 65535+1 = 0`, `SizeOf(w)` = 2), `deklarationen.sym` (Größen von `Word` und Teilbereich `1000..1100`), `lexer/zeichen_zu_gross.pas` (`#300` ist jetzt erlaubt, Test nutzt `#70000`). Tests: `testdata/etappe14/` (vier Programme, zehn Fehlertests), Lexer- und Source-Tests, `breit.sym`, Frame-Ablage. Nebenbei: `TestServeTimeout` mit mehr Abstand (unter Last lief auch die kleine Anfrage ins 20-ms-Limit).
 
-### Etappe 15: Unit `Dos` erweitern und Ortszeit
+### Etappe 15: Unit `Dos` erweitern und Ortszeit ✅
 
 **Ziel:** Die Unit `Dos` bekommt die Routinen für Dateiattribute, Dateizeit,
 Verzeichnissuche, Pfade und Umgebungsvariablen, die Lehrprogramme typisch
@@ -1254,6 +1255,7 @@ später nachrüstbar, ohne Variante A zu brechen (`TZ` hätte Vorrang).
 Ergebnisse liefern; `GetDate`/`GetTime` mit gesetztem Versatz Ortszeit
 liefern (geprüft mit fester Uhr) und `pascal run` den Versatz des Systems
 übergibt; alle bisherigen Tests sind grün.
+- *Erledigt (Nov 27, 2026).* `rtl/dos.pas` mit allen Routinen, Typen, Konstanten und `DosError`; Ortszeit über `WASMPASCAL_UTC_OFFSET`. System-Unit: WASI-Importe `environ_sizes_get`, `environ_get`, `fd_readdir`, `path_filestat_get`; im Interface `_EnvCount`, `_EnvStr`, `_FullPath`, `_FileName`, `_FileStat`, `_FileStatF`, `_DirOpen`, `_DirNext`, `_DirClose`; Umgebung unter `gojs` hinter `argv`. `runner.Options.Env` (mit `ExampleRun_env`) und eine Uhr für Tests im Paket; `pascal run` gibt die Umgebung des Rechners plus Versatz weiter; Loader: Option `env`, `fd_readdir`, `path_filestat_get`, `mtim`, Host-Vertrag um `readdirSync` und `mtimeMs` erweitert; `node-run.js` mit `--env`, `--setenv`, `--emptyenv`; Harness mit `name.env`. Herkunft geklärt: `DosVersion`, `EnvCount`, `EnvStr`, `FExpand`, `FSearch`, `FSplit`, `GetEnv` sind laut README zu TP 5.0 dort neu (Erweiterungstabelle). Nebenbei behoben: `GetTime` lieferte bei Bruchteilen wie 0,25 s wegen der `f64`-Genauigkeit der Nanosekunden manchmal einen Hundertstel zu wenig (gefunden durch die Tests mit fester Uhr). Tests: `testdata/etappe15/` (sieben Programme, WASI und `gojs`, auch mit Frame-Ablage), `runner/zeit_test.go` (zehn Fälle mit fester Uhr, Dateizeit), `TestProgramEnv`.
 
 ## Arbeitsregeln für Claude Code
 

@@ -88,6 +88,8 @@ Je Ziel getrennt sind Konsole, Eingabe, Uhr, Argumente und Anhaltepunkte (`SysWr
 `web/loader.js` sie bereit (Option `files`, synchroner Host nach der Node-API `fs`). `gojs` läuft mit
 `web/wasm_exec.js` (Go 1.27.4) und `web/loader.js`; `TestProgramsGoJS` führt alle Testprogramme mit Node aus
 (`web/node-run.js --dir`, übersprungen ohne `node`).
+Umgebung: WASI `environ_get`, unter gojs hinter `argv` (von `wasm_exec.js`); `runner.Options.Env`, Loader-Option `env`,
+Harness `name.env`. Die Unit Dos nimmt die Ortszeit aus `WASMPASCAL_UTC_OFFSET` (Minuten, beim Start gelesen).
 
 Browser: `cmd/pascaljs` (nur `GOOS=js GOARCH=wasm`) legt `pascalCompile` an; `web/index.html` ist die Demo
 (Bau und Start in `web/README.md`). `TestWebCompiler` verlangt byte-gleiche Module wie der native Compiler.

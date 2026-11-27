@@ -57,3 +57,26 @@ func ExampleRuntimeError() {
 	fmt.Println(err)
 	// Output: Runtime error 200 at zahlen.pas(42) in Auswerten
 }
+
+// Die Umgebung des Programms; die Unit Dos liest sie mit GetEnv und nimmt
+// die Ortszeit aus WASMPASCAL_UTC_OFFSET.
+func ExampleRun_env() {
+	src := fstest.MapFS{"gruss.pas": {Data: []byte(`program Gruss;
+uses Dos;
+begin
+  WriteLn('Hallo, ', GetEnv('NAME'), ' (', EnvCount, ' Variablen)')
+end.
+`)}}
+	res, err := compiler.Compile(context.Background(), "gruss.pas", compiler.Options{FS: src})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	if _, err := runner.Run(context.Background(), res.Wasm, runner.Options{
+		Stdout: os.Stdout,
+		Env:    []string{"NAME=Ada", "WASMPASCAL_UTC_OFFSET=60"},
+	}); err != nil {
+		fmt.Println(err)
+	}
+	// Output: Hallo, Ada (2 Variablen)
+}

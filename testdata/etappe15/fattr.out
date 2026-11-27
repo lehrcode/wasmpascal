@@ -1,0 +1,8 @@
+datei.txt: 0 DosError 0
+.versteckt: 2 DosError 0
+ordner: 16 DosError 0
+.geheim: 18 DosError 0
+ordner/../datei.txt: 0 DosError 0
+fehlt.txt: 0 DosError 2
+fehlt/x.txt: 0 DosError 3
+1 2 4 8 16 32 63

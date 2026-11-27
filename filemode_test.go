@@ -92,7 +92,7 @@ end.
 			t.Fatal(err)
 		}
 		h := harness{node: node}
-		got, _, err := h.runNode(t.Context(), res.Wasm, []string{"fest"}, nil, root)
+		got, _, err := h.runNode(t.Context(), res.Wasm, []string{"fest"}, nil, root, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

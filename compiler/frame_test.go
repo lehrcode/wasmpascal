@@ -24,7 +24,7 @@ import (
 // Variable auslagern lässt (Voraussetzung für Etappe 8).
 func TestForceFrame(t *testing.T) {
 	var files []string
-	for _, dir := range []string{"etappe4", "etappe5", "etappe6", "etappe7", "etappe8", "etappe11", "etappe14"} {
+	for _, dir := range []string{"etappe4", "etappe5", "etappe6", "etappe7", "etappe8", "etappe11", "etappe14", "etappe15"} {
 		_ = filepath.WalkDir(filepath.Join("..", "testdata", dir), func(p string, d fs.DirEntry, err error) error {
 			if err == nil && strings.HasSuffix(p, ".pas") {
 				if _, err := os.Stat(strings.TrimSuffix(p, ".pas") + ".out"); err == nil {
@@ -57,6 +57,9 @@ func TestForceFrame(t *testing.T) {
 			}
 			if in, err := os.ReadFile(strings.TrimSuffix(file, ".pas") + ".in"); err == nil {
 				opts.Stdin = bytes.NewReader(in)
+			}
+			if e, err := os.ReadFile(strings.TrimSuffix(file, ".pas") + ".env"); err == nil {
+				opts.Env = strings.Fields(string(e))
 			}
 			code, err := runner.Run(context.Background(), res.Wasm, opts)
 			var rte *runner.RuntimeError

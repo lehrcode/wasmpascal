@@ -52,7 +52,7 @@ var runtimeErrorLine = regexp.MustCompile(`(?m)^Runtime error (\d+)[^\n]*\n\z`)
 // runNode führt ein gojs-Modul mit web/node-run.js aus und liefert die
 // Ausgabe im Format von result. Ist root nicht leer, ist es die Wurzel für
 // Dateizugriffe; das Modul selbst liegt außerhalb davon.
-func (h harness) runNode(ctx context.Context, wasm []byte, args []string, stdin io.Reader, root string) (string, string, error) {
+func (h harness) runNode(ctx context.Context, wasm []byte, args []string, stdin io.Reader, root string, env []string) (string, string, error) {
 	bin, err := os.MkdirTemp("", "wasmpascal-gojs-")
 	if err != nil {
 		return "", "", err
@@ -69,6 +69,10 @@ func (h harness) runNode(ctx context.Context, wasm []byte, args []string, stdin 
 	nodeArgs := []string{script}
 	if root != "" {
 		nodeArgs = append(nodeArgs, "--dir", root)
+	}
+	nodeArgs = append(nodeArgs, "--emptyenv") // wie unter WASI: nur die Variablen aus name.env
+	for _, kv := range env {
+		nodeArgs = append(nodeArgs, "--setenv", kv)
 	}
 	nodeArgs = append(nodeArgs, file)
 	var out bytes.Buffer
@@ -135,7 +139,7 @@ end.
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := h.runNode(t.Context(), res.Wasm, []string{"ohne"}, strings.NewReader("eins\nzwei äöü\ndrei"), "")
+	got, _, err := h.runNode(t.Context(), res.Wasm, []string{"ohne"}, strings.NewReader("eins\nzwei äöü\ndrei"), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

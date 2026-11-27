@@ -8,6 +8,7 @@
 //     write(fd, bytes) { … },            // Ausgabe (UTF-8), fd 1 oder 2
 //     readLine() { return Promise },     // nächstes Stück Eingabe, "" oder null = Ende
 //     files,                             // Dateisystem (optional, siehe unten)
+//     env,                               // Umgebung { NAME: "WERT" } (optional)
 //     signal,                            // AbortSignal zum Abbrechen (optional)
 //   });
 //   // result = { exitCode, error }  (error: WasmPascal.RuntimeError oder null)
@@ -25,7 +26,8 @@
 //   readSync(fd, buf, offset, length, position) → Anzahl
 //   writeSync(fd, buf, offset, length, position) → Anzahl
 //   closeSync(fd)
-//   fstatSync(fd), statSync(path) → { size, isDirectory() }
+//   fstatSync(fd), statSync(path) → { size, isDirectory(), mtimeMs }
+//   readdirSync(path) → Namen (ohne "." und "..")
 //   ftruncateSync(fd, length)
 //   unlinkSync(path), renameSync(from, to)
 //   mkdirSync(path), rmdirSync(path)
@@ -273,6 +275,15 @@
 			return list;
 		};
 
+		// filestat (64 Byte): filetype bei 16, size bei 32, mtim (ns) bei 48
+		const putStat = (ptr, st) => {
+			bytes(ptr, 64).fill(0);
+			const v = view();
+			v.setUint8(ptr + 16, st.isDirectory() ? 3 : 4);
+			v.setBigUint64(ptr + 32, BigInt(st.size), true);
+			v.setBigUint64(ptr + 48, BigInt(Math.max(0, Math.round((st.mtimeMs || 0) * 1e6))), true);
+		};
+
 		return {
 			fd_read(fd, iovs, iovsLen, nread) {
 				return guard(() => {
@@ -355,11 +366,7 @@
 					if (!h) {
 						return EBADF;
 					}
-					const st = h.dir ? host.statSync(h.path) : host.fstatSync(h.hostFd);
-					bytes(ptr, 64).fill(0);
-					const v = view();
-					v.setUint8(ptr + 16, st.isDirectory() ? 3 : 4); // filetype
-					v.setBigUint64(ptr + 32, BigInt(st.size), true);
+					putStat(ptr, h.dir ? host.statSync(h.path) : host.fstatSync(h.hostFd));
 					return ESUCCESS;
 				});
 			},
@@ -398,6 +405,48 @@
 					const fd = nextFd++;
 					handles.set(fd, h);
 					view().setUint32(fdPtr, fd, true);
+					return ESUCCESS;
+				});
+			},
+
+			path_filestat_get(dirFd, flags, ptr, len, statPtr) {
+				return guard(() => {
+					putStat(statPtr, host.statSync(resolve(dirFd, ptr, len)));
+					return ESUCCESS;
+				});
+			},
+
+			// Einträge ab cookie (Index); je Eintrag 24 Byte Kopf (d_next,
+			// d_ino, d_namlen, d_type) und der Name. Ein Eintrag, der nicht
+			// mehr ganz passt, wird abgeschnitten, wie WASI es vorsieht.
+			fd_readdir(fd, buf, bufLen, cookie, bufused) {
+				return guard(() => {
+					const h = handles.get(fd);
+					if (!h || !h.dir) {
+						return ENOTDIR;
+					}
+					const names = host.readdirSync(h.path);
+					let used = 0;
+					for (let i = Number(cookie); i < names.length && used < bufLen; i++) {
+						const name = encoder.encode(names[i]);
+						const full = h.path === "." ? names[i] : h.path + "/" + names[i];
+						let type = 0;
+						try {
+							type = host.statSync(full).isDirectory() ? 3 : 4;
+						} catch (err) {
+							type = 0;
+						}
+						const ent = new Uint8Array(24 + name.length);
+						const dv = new DataView(ent.buffer);
+						dv.setBigUint64(0, BigInt(i + 1), true);
+						dv.setUint32(16, name.length, true);
+						dv.setUint8(20, type);
+						ent.set(name, 24);
+						const n = Math.min(ent.length, bufLen - used);
+						bytes(buf + used, n).set(ent.subarray(0, n));
+						used += n;
+					}
+					view().setUint32(bufused, used, true);
 					return ESUCCESS;
 				});
 			},
@@ -447,7 +496,10 @@
 		hookWrite();
 		const go = new Go();
 		go.argv = (opts.args && opts.args.length > 0) ? opts.args.map(String) : ["program"];
-		go.env = {};
+		// Umgebung: genau opts.env; ohne opts.env nur der UTC-Versatz für die
+		// Ortszeit der Unit Dos (wie Go unter GOOS=js: einmal beim Start).
+		go.env = opts.env ? Object.assign({}, opts.env)
+			: { WASMPASCAL_UTC_OFFSET: String(-new Date().getTimezoneOffset()) };
 		let memory = null;
 		go.importObject.wasi_snapshot_preview1 = wasiFiles(() => memory, opts.files);
 		const { module, instance } = await instantiate(source, go.importObject);

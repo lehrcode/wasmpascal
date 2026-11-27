@@ -13,6 +13,9 @@ Pascal-Testprogramme für den Test-Harness (`harness_test.go` im Wurzelverzeichn
   `fehler/semikolon.pas(3,9): Error 85: ";" expected`. Pfade sind relativ zu `testdata/`.
 - `name.in` (optional): Eingabe auf stdin.
 - `name.args` (optional): weitere Kommandozeilenargumente (`ParamStr(1)` …).
+- `name.env` (optional): Umgebung des Programms, je Zeile `NAME=WERT`
+  (ohne Datei ist sie leer; unter `gojs` nach Namen sortiert, daher in der
+  Datei am besten schon sortiert).
 - Jeder Testfall bekommt ein eigenes leeres Verzeichnis als Wurzel `/` für
   Dateizugriffe.
 

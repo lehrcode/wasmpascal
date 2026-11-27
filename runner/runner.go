@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
@@ -27,6 +28,14 @@ type Options struct {
 	// Dirs bildet Gastpfade auf Hostverzeichnisse ab, z. B. {"/": "."}.
 	// Ohne Eintrag hat das Programm keinen Dateizugriff.
 	Dirs map[string]string
+	// Env ist die Umgebung des Programms als "NAME=WERT" (Unit Dos: GetEnv,
+	// EnvCount, EnvStr); nil bedeutet leere Umgebung. Die Ortszeit der Unit
+	// Dos kommt aus WASMPASCAL_UTC_OFFSET (Minuten östlich von UTC); fehlt
+	// die Variable, gilt UTC.
+	Env []string
+
+	// walltime ersetzt die Uhr (nur für Tests im Paket).
+	walltime sys.Walltime
 }
 
 // RuntimeError ist der Fehlertyp für Pascal-Laufzeitfehler; er lässt sich mit
@@ -87,10 +96,18 @@ func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err erro
 	cfg := wazero.NewModuleConfig().
 		WithArgs(args...).
 		WithFSConfig(fsCfg).
-		WithSysWalltime().
 		WithSysNanotime().
 		WithSysNanosleep().
 		WithRandSource(rand.Reader)
+	if opts.walltime != nil {
+		cfg = cfg.WithWalltime(opts.walltime, sys.ClockResolution(1))
+	} else {
+		cfg = cfg.WithSysWalltime()
+	}
+	for _, kv := range opts.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		cfg = cfg.WithEnv(k, v)
+	}
 	if opts.Stdin != nil {
 		cfg = cfg.WithStdin(opts.Stdin)
 	}

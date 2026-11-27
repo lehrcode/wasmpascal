@@ -11,6 +11,33 @@ ausdrücklich genannt. Einzelheiten zu jeder Änderung stehen in
 
 ## [Unreleased]
 
+Etappe 15: Unit `Dos` erweitert, Ortszeit.
+
+### Hinzugefügt
+
+- Unit `Dos`: `GetFAttr`, `GetFTime`, `FindFirst`, `FindNext`, `PackTime`,
+  `UnpackTime` (aus TP 4.0) sowie `FExpand`, `FSplit`, `FSearch`, `GetEnv`,
+  `EnvCount`, `EnvStr` und `DosVersion` (aus TP 5.0); Typen `SearchRec`,
+  `DateTime`, `PathStr`, `DirStr`, `NameStr`, `ExtStr`, die
+  Attributkonstanten und `DosError`. Nur die Attribute `Directory` und
+  `Hidden` (Name mit Punkt am Anfang) haben eine Wirkung.
+- Umgebungsvariablen für Programme: `runner.Options.Env`, Option `env` in
+  `web/loader.js`, `node-run.js --env`/`--setenv`; `pascal run` gibt die
+  Umgebung des Rechners weiter.
+- Datei-Host des Loaders: `readdirSync` und `mtimeMs` (für `FindFirst` und
+  Dateizeiten unter `gojs`).
+
+### Geändert
+
+- `GetDate`, `GetTime` und Dateizeiten liefern Ortszeit statt UTC, wenn
+  `WASMPASCAL_UTC_OFFSET` gesetzt ist (`pascal run` und der Browser setzen
+  sie). Der Versatz gilt für den ganzen Lauf.
+
+### Behoben
+
+- `GetTime` lieferte bei manchen Bruchteilen einer Sekunde (z. B. 0,25 s)
+  einen Hundertstel zu wenig.
+
 ## [0.2.0] - 2026-11-26
 
 Etappe 14: Unicode-Zeichen als Wert, 16-Bit-Ganzzahlen wie in TP und

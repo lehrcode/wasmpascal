@@ -1,11 +1,14 @@
 // Führt ein mit `pascal build -target gojs` übersetztes Programm in Node.js aus:
 //
-//   node web/node-run.js [--dir verz] prog.wasm [Argumente …]
+//   node web/node-run.js [--dir verz] [--env] [--setenv NAME=WERT …] prog.wasm [Argumente …]
 //
 // Eingaben kommen von stdin, Ausgaben gehen nach stdout/stderr. Der
 // Exit-Code ist der des Programms (bei einem Laufzeitfehler die Fehlernummer).
 // Mit --dir bekommt das Programm das Verzeichnis verz als Wurzel für
 // Dateizugriffe; ohne --dir scheitert jeder Dateizugriff mit E/A-Fehler 5.
+// --env gibt die Umgebung dieses Prozesses weiter (dazu den UTC-Versatz in
+// WASMPASCAL_UTC_OFFSET), --setenv einzelne Variablen, --emptyenv eine leere
+// Umgebung (für Tests); ohne alles bekommt das Programm nur den UTC-Versatz.
 "use strict";
 
 const fs = require("fs");
@@ -77,6 +80,7 @@ function dirHost(root) {
 		closeSync: (fd) => fs.closeSync(fd),
 		fstatSync: (fd) => fs.fstatSync(fd),
 		statSync: (p) => fs.statSync(abs(p)),
+		readdirSync: (p) => fs.readdirSync(abs(p)),
 		ftruncateSync: (fd, len) => fs.ftruncateSync(fd, len),
 		unlinkSync: (p) => fs.unlinkSync(abs(p)),
 		renameSync: (from, to) => fs.renameSync(abs(from), abs(to)),
@@ -98,17 +102,39 @@ for (const stream of [process.stdout, process.stderr]) {
 async function main() {
 	const argv = process.argv.slice(2);
 	let files;
-	if (argv[0] === "--dir") {
-		if (argv.length < 2) {
-			process.stderr.write("node-run.js: --dir braucht ein Verzeichnis\n");
+	let env;
+	while (argv.length > 0 && argv[0].startsWith("--")) {
+		const opt = argv.shift();
+		if (opt === "--emptyenv") {
+			env = env || {};
+			continue;
+		}
+		if (opt === "--env") {
+			env = Object.assign(env || {}, process.env);
+			if (env.WASMPASCAL_UTC_OFFSET === undefined) {
+				env.WASMPASCAL_UTC_OFFSET = String(-new Date().getTimezoneOffset());
+			}
+			continue;
+		}
+		if (argv.length === 0) {
+			process.stderr.write(`node-run.js: ${opt} braucht einen Wert\n`);
 			return 2;
 		}
-		files = dirHost(path.resolve(argv[1]));
-		argv.splice(0, 2);
+		const value = argv.shift();
+		if (opt === "--dir") {
+			files = dirHost(path.resolve(value));
+		} else if (opt === "--setenv") {
+			const eq = value.indexOf("=");
+			env = env || {};
+			env[eq < 0 ? value : value.slice(0, eq)] = eq < 0 ? "" : value.slice(eq + 1);
+		} else {
+			process.stderr.write(`node-run.js: unbekannte Option ${opt}\n`);
+			return 2;
+		}
 	}
 	const [file, ...args] = argv;
 	if (!file) {
-		process.stderr.write("Aufruf: node node-run.js [--dir verz] prog.wasm [Argumente …]\n");
+		process.stderr.write("Aufruf: node node-run.js [--dir verz] [--env] [--setenv NAME=WERT …] prog.wasm [Argumente …]\n");
 		return 2;
 	}
 	const name = path.basename(file, path.extname(file));
@@ -119,6 +145,7 @@ async function main() {
 		},
 		readLine: stdinLines(),
 		files,
+		env,
 	});
 	return result.exitCode;
 }

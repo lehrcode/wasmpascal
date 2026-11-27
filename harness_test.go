@@ -140,8 +140,9 @@ func (h harness) result(ctx context.Context, file, dir string) (got, kind string
 	if a, err := fs.ReadFile(h.fsys, strings.TrimSuffix(file, ".pas")+".args"); err == nil {
 		args = append(args, strings.Fields(string(a))...)
 	}
+	env := readEnv(h.fsys, strings.TrimSuffix(file, ".pas")+".env")
 	if h.node != "" {
-		return h.runNode(ctx, res.Wasm, args, stdin, dir)
+		return h.runNode(ctx, res.Wasm, args, stdin, dir, env)
 	}
 	var out bytes.Buffer
 	code, err := runner.Run(ctx, res.Wasm, runner.Options{
@@ -150,6 +151,7 @@ func (h harness) result(ctx context.Context, file, dir string) (got, kind string
 		Stdout: &out,
 		Stderr: &out,
 		Dirs:   dirs(dir),
+		Env:    env,
 	})
 	if err != nil {
 		var rte *runner.RuntimeError
@@ -173,6 +175,21 @@ func endLine(b *bytes.Buffer) {
 	if b.Len() > 0 && !bytes.HasSuffix(b.Bytes(), []byte("\n")) {
 		b.WriteByte('\n')
 	}
+}
+
+// readEnv liest name.env: je Zeile NAME=WERT, Leerzeilen zählen nicht.
+func readEnv(fsys fs.FS, name string) []string {
+	data, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		return nil
+	}
+	var env []string
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if line = strings.TrimRight(line, "\r"); line != "" {
+			env = append(env, line)
+		}
+	}
+	return env
 }
 
 func dirs(dir string) map[string]string {

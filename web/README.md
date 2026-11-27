@@ -11,7 +11,7 @@ Browser-Demo und Laufzeitumgebung für Programme mit dem Ziel `gojs`.
 | `loader.js` | `WasmPascal.run(wasm, {args, write, readLine, signal})` für Browser und Node.js; übersetzt Traps in `Runtime error NNN at datei.pas(zeile) in Prozedur` |
 | `terminal.js` | xterm.js-Terminal mit Zeileneditor für `index.html` und `run.html` |
 | `node-compile.js` | `node web/node-compile.js compiler.wasm [-o verz] datei.pas …` übersetzt mit dem Browser-Compiler |
-| `node-run.js` | `node web/node-run.js [--dir verz] prog.wasm [Argumente …]`, stdin/stdout wie unter WASI; mit `--dir` Dateizugriff unterhalb von `verz` |
+| `node-run.js` | `node web/node-run.js [--dir verz] [--env] [--setenv NAME=WERT …] prog.wasm [Argumente …]`, stdin/stdout wie unter WASI; mit `--dir` Dateizugriff unterhalb von `verz`, mit `--env` die Umgebung dieses Prozesses, mit `--setenv` einzelne Variablen |
 
 ## Demo starten
 
@@ -58,11 +58,20 @@ Unter `gojs` greift das Programm über WASI-Aufrufe (`path_open`, `fd_read`,
 `WasmPascal.run` um: einen **synchronen** Host mit einer Teilmenge der
 Node-API `fs` (`openSync`, `readSync`, `writeSync`, `closeSync`, `fstatSync`,
 `statSync`, `ftruncateSync`, `unlinkSync`, `renameSync`, `mkdirSync`,
-`rmdirSync`). Der genaue Vertrag steht im Kopf von `loader.js`. Pfade kommen
+`rmdirSync`, `readdirSync`; `statSync`/`fstatSync` liefern auch `mtimeMs`). Der genaue Vertrag steht im Kopf von `loader.js`. Pfade kommen
 normalisiert und relativ zur Wurzel an, Fehler meldet der Host als Exception
 mit Node-Code (`err.code`). `node-run.js --dir` zeigt einen solchen Host über
 Nodes `fs`; die Demo-Seiten haben keinen und melden bei Dateizugriffen
 E/A-Fehler 5.
+
+## Umgebung
+
+`WasmPascal.run` gibt mit der Option `env` (Objekt Name → Wert) genau diese
+Variablen an das Programm (Unit Dos: `GetEnv`, `EnvCount`, `EnvStr`). Ohne
+`env` setzt der Loader nur `WASMPASCAL_UTC_OFFSET` aus
+`getTimezoneOffset()`, damit `GetDate`/`GetTime` Ortszeit liefern.
+`wasm_exec.js` sortiert die Variablen nach Namen und begrenzt Argumente plus
+Umgebung auf etwa 8 KB.
 
 ## Schnittstelle zum Programm
 

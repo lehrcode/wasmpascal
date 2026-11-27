@@ -41,6 +41,18 @@ function UTF8Next(const S: string; var Index: Integer): WideChar;
 function UTF8Index(const S: string; CharIndex: Integer): Integer;
 function UTF8Copy(const S: string; Index, Count: Integer): string;
 
+{ Fuer die Unit Dos (Etappe 15). Arten: 0 sonstiges, 1 Datei, 2 Verzeichnis;
+  Ergebnisse sind DOS-Fehlernummern (0, 2, 3, 6). MTime in Nanosekunden UTC. }
+function _EnvCount: Integer;
+function _EnvStr(I: LongInt): string;
+function _FullPath(const Name: string): string;
+function _FileName(var F): string;
+function _FileStat(const Name: string; var Kind, Size: LongInt; var MTime: Real): Integer;
+function _FileStatF(var F; var Kind, Size: LongInt; var MTime: Real): Integer;
+function _DirOpen(const Dir: string; var Handle: LongInt): Integer;
+function _DirNext(Handle: LongInt; var Cookie: LongInt; var Name: string; var Kind: LongInt): Boolean;
+procedure _DirClose(Handle: LongInt);
+
 implementation
 
 type
@@ -111,6 +123,8 @@ var
   IoCount: LongInt;
   ArgCount, ArgPtrs, ArgBuf: LongInt;
   ArgStride: LongInt;    { Abstand der argv-Eintraege: 4 (WASI) bzw. 8 (gojs) }
+  EnvN, EnvPtrs: LongInt;
+  EnvStride: LongInt;    { wie ArgStride; 0 = Umgebung noch nicht gelesen }
   LastYield: Real;       { Zeitpunkt des letzten Anhaltens in ms }
   HeapPtr: LongInt;      { erste Adresse oberhalb aller vergebenen Bloecke }
   HeapEnd: LongInt;      { Ende des vorhandenen Speichers }
@@ -881,6 +895,87 @@ begin
   Size := Stat[8]   { size liegt bei Offset 32 }
 end;
 
+{ u64 aus zwei LongInt als Real }
+function U64(Lo, Hi: LongInt): Real;
+var
+  L: Real;
+begin
+  L := Lo;
+  if L < 0 then
+    L := L + 4294967296.0;
+  U64 := Hi * 4294967296.0 + L
+end;
+
+type
+  TStat = array[0..15] of LongInt;   { filestat, 64 Byte }
+
+{ filestat (64 Byte) auswerten: Art aus filetype (Offset 16), Groesse
+  (Offset 32, ueber 2 GB als MaxLongInt), Aenderungszeit mtim (Offset 48) }
+procedure StatInfo(var St: TStat; var Kind, Size: LongInt; var MTime: Real);
+begin
+  case St[4] and 255 of
+    3: Kind := 2;
+    4: Kind := 1;
+  else
+    Kind := 0
+  end;
+  if (St[9] <> 0) or (St[8] < 0) then
+    Size := MaxLongInt
+  else
+    Size := St[8];
+  MTime := U64(St[12], St[13])
+end;
+
+function SysStatFd(Fd: LongInt; var Kind, Size: LongInt; var MTime: Real): LongInt;
+var
+  St: TStat;
+begin
+  SysStatFd := _FdFilestatGet(Fd, LongInt(@St));
+  StatInfo(St, Kind, Size, MTime)
+end;
+
+function SysStat(var P: string; var Kind, Size: LongInt; var MTime: Real): LongInt;
+var
+  St: TStat;
+begin
+  { Flag 1: symbolischen Verweisen folgen }
+  SysStat := _PathFilestatGet(RootFd, 1, LongInt(@P[1]), Length(P), LongInt(@St));
+  StatInfo(St, Kind, Size, MTime)
+end;
+
+{ liest den Verzeichniseintrag ab Cookie; Next ist das Cookie des folgenden.
+  Ergebnis 0 mit Eintrag, -1 am Ende, sonst errno. TP-ANNAHME: Cookies
+  passen in 31 Bit (wazero und web/loader.js zaehlen sie hoch). }
+function SysReadDir(Fd, Cookie: LongInt; var Next: LongInt; var Name: string; var Kind: LongInt): LongInt;
+var
+  Buf: array[0..79] of LongInt;   { 320 Byte: Kopf 24 + Name bis 255 }
+  Used, N, I: LongInt;
+begin
+  SysReadDir := _FdReaddir(Fd, LongInt(@Buf), SizeOf(Buf), Cookie, LongInt(@Used));
+  if Result <> 0 then
+    Exit;
+  if Used < 24 then
+  begin
+    SysReadDir := -1;
+    Exit
+  end;
+  Next := Buf[0];
+  N := Buf[4];
+  if N > Used - 24 then
+    N := Used - 24;
+  if N > 255 then
+    N := 255;
+  for I := 1 to N do
+    Name[I] := PChar(Ptr(0, LongInt(@Buf) + 23 + I))^;
+  Name[0] := Chr(N);
+  case Buf[5] and 255 of
+    3: Kind := 2;
+    4: Kind := 1;
+  else
+    Kind := 0
+  end
+end;
+
 function SysSetSize(Fd, Size: LongInt): LongInt;
 begin
   SysSetSize := _FdFilestatSetSize(Fd, Size)
@@ -949,6 +1044,19 @@ begin
       Lo := Lo + 4294967296.0;
     _Clock := T[1] * 4294967296.0 + Lo
   end
+end;
+
+procedure SysEnv;
+var
+  Sizes: array[0..1] of LongInt;
+begin
+  EnvStride := 4;
+  if _EnvironSizesGet(LongInt(@Sizes[0]), LongInt(@Sizes[1])) <> 0 then
+    Exit;
+  EnvN := Sizes[0];
+  EnvPtrs := LongInt(_GetMem(EnvN * 4 + 4));
+  if _EnvironGet(EnvPtrs, LongInt(_GetMem(Sizes[1] + 1))) <> 0 then
+    EnvN := 0
 end;
 
 procedure SysArgs;
@@ -1178,6 +1286,17 @@ begin
   ArgPtrs := _GoArgv
 end;
 
+{ wasm_exec.js legt die Umgebung hinter argv ab: nach dem Null-Zeiger von
+  argv je 8 Byte ein Zeiger auf "NAME=WERT", am Ende wieder ein Null-Zeiger. }
+procedure SysEnv;
+begin
+  EnvStride := 8;
+  EnvPtrs := _GoArgv + (_GoArgc + 1) * 8;
+  EnvN := 0;
+  while PLongInt(Ptr(0, EnvPtrs + EnvN * 8))^ <> 0 do
+    Inc(EnvN)
+end;
+
 procedure ScheduleTimeout(Ms: LongInt);
 begin
   GoSet(8, Ms);
@@ -1333,12 +1452,14 @@ end;
   TP-ANNAHME: Unter DOS bleibt ".." in der Wurzel stehen; wir melden einen
   Fehler (ChDir 3, sonst 5), damit nichts ausserhalb der Wurzel erreichbar
   scheint. }
-function NormPath(const Name: string; var P: string): Boolean;
+{ wie NormPath; mit Clamp bleibt ".." in der Wurzel stehen (FExpand, wie
+  DOS), statt zu scheitern }
+function NormPathEx(const Name: string; Clamp: Boolean; var P: string): Boolean;
 var
   S, Teil: string;
   I, J, K: Integer;
 begin
-  NormPath := True;
+  NormPathEx := True;
   S := Name;
   for I := 1 to Length(S) do
     if S[I] = '\' then
@@ -1356,9 +1477,9 @@ begin
     Teil := Copy(S, I, J - I);
     if Teil = '..' then
     begin
-      if P = '' then
+      if (P = '') and not Clamp then
       begin
-        NormPath := False;
+        NormPathEx := False;
         Exit
       end;
       K := Length(P);
@@ -1377,6 +1498,11 @@ begin
     end;
     I := J + 1
   end
+end;
+
+function NormPath(const Name: string; var P: string): Boolean;
+begin
+  NormPath := NormPathEx(Name, False, P)
 end;
 
 { Pfad fuer den Host: wie NormPath, die Wurzel selbst als "." }
@@ -2553,15 +2679,11 @@ begin
     _ParamCount := 0
 end;
 
-function _ParamStr(I: LongInt): string;
+{ nullterminierte Zeichenkette ab Adresse P (hoechstens 255 Bytes) }
+function CStr(P: LongInt): string;
 var
-  P, N: LongInt;
+  N: LongInt;
 begin
-  LoadArgs;
-  Result := '';
-  if (I < 0) or (I >= ArgCount) then
-    Exit;
-  P := PLongInt(Ptr(0, ArgPtrs + I * ArgStride))^;
   N := 0;
   while (N < 255) and (PChar(Ptr(0, P + N))^ <> #0) do
   begin
@@ -2569,6 +2691,133 @@ begin
     Inc(N)
   end;
   Result[0] := Chr(N)
+end;
+
+function _ParamStr(I: LongInt): string;
+begin
+  LoadArgs;
+  Result := '';
+  if (I < 0) or (I >= ArgCount) then
+    Exit;
+  Result := CStr(PLongInt(Ptr(0, ArgPtrs + I * ArgStride))^)
+end;
+
+{ ------------------------------------------------------------ Umgebung }
+
+procedure LoadEnv;
+begin
+  if EnvStride = 0 then
+    SysEnv
+end;
+
+function _EnvCount: Integer;
+begin
+  LoadEnv;
+  _EnvCount := EnvN
+end;
+
+{ I-te Variable als "NAME=WERT" (ab 1), ausserhalb '' }
+function _EnvStr(I: LongInt): string;
+begin
+  LoadEnv;
+  Result := '';
+  if (I < 1) or (I > EnvN) then
+    Exit;
+  Result := CStr(PLongInt(Ptr(0, EnvPtrs + (I - 1) * EnvStride))^)
+end;
+
+{ ------------------------------------------------- Dateiinfos fuer Dos }
+
+function _FullPath(const Name: string): string;
+var
+  P: string;
+begin
+  if NormPathEx(Name, True, P) then;
+  _FullPath := '/' + P
+end;
+
+function _FileName(var F): string;
+begin
+  _FileName := TFileRec(F).Name
+end;
+
+{ DOS-Nummer fuer einen gescheiterten Zugriff auf P: 3, wenn das
+  Verzeichnis davor fehlt, sonst 2 }
+function MissingCode(var P: string): Integer;
+var
+  K, Kind, Size: LongInt;
+  M: Real;
+  D: string;
+begin
+  MissingCode := 2;
+  K := Length(P);
+  while (K > 0) and (P[K] <> '/') do
+    Dec(K);
+  if K = 0 then
+    Exit;
+  D := Copy(P, 1, K - 1);
+  if (SysStat(D, Kind, Size, M) <> 0) or (Kind <> 2) then
+    MissingCode := 3
+end;
+
+function _FileStat(const Name: string; var Kind, Size: LongInt; var MTime: Real): Integer;
+var
+  P: string;
+begin
+  Kind := 0;
+  Size := 0;
+  MTime := 0;
+  if not HostPath(Name, P) then
+  begin
+    _FileStat := 3;
+    Exit
+  end;
+  if SysStat(P, Kind, Size, MTime) = 0 then
+    _FileStat := 0
+  else
+    _FileStat := MissingCode(P)
+end;
+
+{ Datei muss geoeffnet sein, sonst 6 (ungueltiges Handle) }
+function _FileStatF(var F; var Kind, Size: LongInt; var MTime: Real): Integer;
+begin
+  Kind := 0;
+  Size := 0;
+  MTime := 0;
+  if (TFileRec(F).Mode < fmInput) or (TFileRec(F).Mode > fmInOut) then
+    _FileStatF := 6
+  else if SysStatFd(TFileRec(F).Handle, Kind, Size, MTime) <> 0 then
+    _FileStatF := 6
+  else
+    _FileStatF := 0
+end;
+
+function _DirOpen(const Dir: string; var Handle: LongInt): Integer;
+var
+  P: string;
+begin
+  _DirOpen := 3;
+  if not HostPath(Dir, P) then
+    Exit;
+  if SysOpen(P, 2, $4000, 0, Handle) = 0 then   { O_DIRECTORY, fd_readdir }
+    _DirOpen := 0
+end;
+
+function _DirNext(Handle: LongInt; var Cookie: LongInt; var Name: string; var Kind: LongInt): Boolean;
+var
+  Next: LongInt;
+begin
+  _DirNext := False;
+  if SysReadDir(Handle, Cookie, Next, Name, Kind) = 0 then
+  begin
+    Cookie := Next;
+    _DirNext := True
+  end
+end;
+
+procedure _DirClose(Handle: LongInt);
+begin
+  if SysClose(Handle) <> 0 then;
 end;
 
 { ---------------------------------------------------------- Programmende }
@@ -2603,6 +2852,8 @@ begin
   CurDir := '';
   ArgPtrs := 0;
   ArgStride := 0;
+  EnvStride := 0;
+  EnvN := 0;
   {$IFDEF GOJS}
   _GoSetSP(SP);
   HasInputFn := False;

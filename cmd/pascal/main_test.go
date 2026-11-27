@@ -6,8 +6,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCLI(t *testing.T) {
@@ -89,5 +91,22 @@ func TestCLIRunAndBuild(t *testing.T) {
 	wasm, err := os.ReadFile(filepath.Join(dir, "gruss.wasm"))
 	if err != nil || len(wasm) < 8 || string(wasm[:4]) != "\x00asm" {
 		t.Errorf("gruss.wasm: %v, %d Bytes", err, len(wasm))
+	}
+}
+
+func TestProgramEnv(t *testing.T) {
+	kolkata := time.Date(2026, 11, 27, 12, 0, 0, 0, time.FixedZone("IST", 330*60))
+	got := programEnv([]string{"A=1"}, kolkata)
+	if want := []string{"A=1", "WASMPASCAL_UTC_OFFSET=330"}; !slices.Equal(got, want) {
+		t.Errorf("programEnv = %q, want %q", got, want)
+	}
+	newYork := time.Date(2026, 1, 1, 0, 30, 0, 0, time.FixedZone("EST", -300*60))
+	if got := programEnv(nil, newYork); !slices.Equal(got, []string{"WASMPASCAL_UTC_OFFSET=-300"}) {
+		t.Errorf("programEnv = %q", got)
+	}
+	// schon gesetzt: bleibt, wie es ist
+	host := []string{"WASMPASCAL_UTC_OFFSET=0", "B=2"}
+	if got := programEnv(host, kolkata); !slices.Equal(got, host) {
+		t.Errorf("programEnv = %q", got)
 	}
 }

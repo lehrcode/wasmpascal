@@ -18,7 +18,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lehrcode/wasmpascal/compiler"
 	"github.com/lehrcode/wasmpascal/runner"
@@ -153,6 +155,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		Stdout: stdout,
 		Stderr: stderr,
 		Dirs:   map[string]string{"/": "."},
+		Env:    programEnv(os.Environ(), time.Now()),
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -161,6 +164,19 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 	}
 	return code
+}
+
+// programEnv ist die Umgebung für "pascal run": die des Hosts, wie bei einem
+// nativen Programm, dazu WASMPASCAL_UTC_OFFSET (Minuten östlich von UTC) für
+// die Ortszeit der Unit Dos, wenn die Variable nicht schon gesetzt ist.
+func programEnv(host []string, now time.Time) []string {
+	for _, kv := range host {
+		if strings.HasPrefix(kv, "WASMPASCAL_UTC_OFFSET=") {
+			return host
+		}
+	}
+	_, offset := now.Zone()
+	return append(append([]string{}, host...), "WASMPASCAL_UTC_OFFSET="+strconv.Itoa(offset/60))
 }
 
 // hostFS bildet Hostpfade auf ein fs.FS ab. Weil Units und Includes auch über
