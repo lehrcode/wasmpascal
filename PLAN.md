@@ -271,7 +271,7 @@ Das Programm kann an festgelegten Punkten anhalten und die Kontrolle an den Host
 
 ## Etappen mit Akzeptanzkriterien
 
-Vierzehn Etappen (0 bis 13). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
+Sechzehn Etappen (0 bis 15). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
 
 ### Etappe 0: Gerüst ✅
 
@@ -1086,6 +1086,174 @@ Fehlertests melden die erwarteten
 Nummern; alle bisherigen Tests (mit geprüften Diffs) sind unter WASI,
 `gojs` und mit dem Browser-Compiler grün.
 - *Erledigt (Nov 26, 2026).* `SmallInt` neu, `Word`, Teilbereiche und Aufzählungen mit 2 Byte (IR `MemI16`/`MemU16`, `Ext16`); `WideChar` als Basistyp hinter `Char`, Verträglichkeit über `charPair`/`isWide` statt über `host` (sonst würden `'a'..'z'`-Teilbereiche zu `WideChar`), Literale mit einem Zeichen über `wideLiteral` im Kontext (Zuweisung, Parameter, Vergleich, `case`, typisierte Konstante, Teilbereich, Array-Index); `#n` bis 65535 mit `CodePoint` im Token; Prüfungen 907 (Lexer) und 908 (`source.Loader`); Laufzeit `_WideCharToStr`, `_WriteWideChar`, `_ReadWideChar`, `UTF8Length`/`Next`/`Index`/`Copy`, `for … in` über `UTF8Next`. **Entscheidung bei der Umsetzung:** ungültige UTF-8-Folgen nach der Unicode-Empfehlung (maximal subpart, wie der Encoding-Standard der Browser) je Abschnitt als ein `#$FFFD`, nicht je Byte wie Go – nur so verhalten sich `Read` (sieht nur ein Byte voraus) und `UTF8Next` gleich; ein Byte, das nie gültig ist (`C0`, `FF`, …), bleibt ein eigenes Zeichen. Geänderte Golden-Files: `typen.out` (`Word 65535+1 = 0`, `SizeOf(w)` = 2), `deklarationen.sym` (Größen von `Word` und Teilbereich `1000..1100`), `lexer/zeichen_zu_gross.pas` (`#300` ist jetzt erlaubt, Test nutzt `#70000`). Tests: `testdata/etappe14/` (vier Programme, zehn Fehlertests), Lexer- und Source-Tests, `breit.sym`, Frame-Ablage. Nebenbei: `TestServeTimeout` mit mehr Abstand (unter Last lief auch die kleine Anfrage ins 20-ms-Limit).
+
+### Etappe 15: Unit `Dos` erweitern und Ortszeit
+
+**Ziel:** Die Unit `Dos` bekommt die Routinen für Dateiattribute, Dateizeit,
+Verzeichnissuche, Pfade und Umgebungsvariablen, die Lehrprogramme typisch
+benutzen. `GetDate`, `GetTime` und Dateizeiten liefern Ortszeit statt UTC.
+
+**Befund vor der Etappe (27. 11. 2026):** `GetDate`/`GetTime` stimmen unter
+WASI und `gojs` auf die Sekunde mit der Systemuhr überein, aber in **UTC**
+(Test unter Europe/Berlin: Programm 13:58, lokal 14:58 CET). WASI Preview 1
+kennt keine Zeitzone, und die Laufzeit bekommt auch sonst keine.
+
+**Entscheidungen** (1 und 4 nach Rückfrage; 2, 3 und 5 als Vorschlag
+angenommen, ohne Widerspruch):
+
+1. *Entschieden:* Ortszeit über einen festen UTC-Versatz beim Programmstart
+   (Variante A), siehe „Ortszeit“.
+2. `SearchRec.Name` und `PathStr`/`DirStr`/`NameStr`/`ExtStr` als `string`
+   mit 255 Bytes statt TP-Längen (12, 79, 67, 8, 4), damit lange Namen nicht
+   abgeschnitten werden.
+3. Zusätzlich zu den gewünschten Routinen `DosError`, `DateTime`,
+   `PackTime`, `UnpackTime` und die Attributkonstanten (ohne sie lassen sich
+   `GetFAttr`, `GetFTime` und `FindFirst` nicht sinnvoll benutzen).
+4. *Entschieden:* Nur `Directory` und `Hidden` haben eine Wirkung.
+   `ReadOnly`, `SysFile`, `Archive` und `VolumeID` werden nie gemeldet und
+   beim Suchen ignoriert (kein Probe-Öffnen; WASI kennt keine Rechtebits).
+5. `pascal run` gibt die Umgebung des Hosts an das Programm weiter (wie ein
+   natives Programm); `runner` und Loader geben ohne Angabe keine weiter.
+
+#### Neue Routinen und Typen in `rtl/dos.pas`
+
+| Routine | Festlegung |
+| --- | --- |
+| `procedure GetFAttr(var F; var Attr: Word)` | `F` zugewiesen (offen oder geschlossen). Nur zwei Bits haben eine Wirkung (Entscheidung 4): `Directory` aus dem Dateityp, `Hidden` für Namen mit `.` am Anfang (Unix-Konvention). `ReadOnly`, `SysFile`, `Archive` und `VolumeID` sind nie gesetzt; eine normale Datei hat also `Attr` = 0. Fehlt die Datei: `DosError` = 2 bzw. 3. |
+| `procedure GetFTime(var F; var Time: LongInt)` | `F` geöffnet; Änderungszeit (`mtim`) als gepackte DOS-Zeit in Ortszeit. Nicht geöffnet: `DosError` = 6 (`// TP-ANNAHME`). |
+| `procedure FindFirst(Path: PathStr; Attr: Word; var S: SearchRec)` | Muster mit `*` und `?` im letzten Teil von `Path`, Groß-/Kleinschreibung beim Vergleich egal (wie DOS; der Dateizugriff selbst bleibt beim Host). `*` und `*.*` passen auf alle Namen (auch ohne Punkt). Normale Dateien immer; Verzeichnisse nur mit `Directory`, versteckte nur mit `Hidden` in `Attr`; die übrigen Bits in `Attr` haben keine Wirkung. `.` und `..` werden nie geliefert. Kein Treffer: `DosError` = 18, Pfad fehlt: 3. |
+| `procedure FindNext(var S: SearchRec)` | nächster Treffer, am Ende `DosError` = 18. Reihenfolge wie vom Host (nicht sortiert). |
+| `function FExpand(Path: PathStr): PathStr` | vollständiger Pfad ab der Wurzel wie `GetDir`: `/a/b/datei.txt`, mit `/` als Trenner, `.` und `..` aufgelöst, ohne Laufwerk und ohne Großschreibung. |
+| `procedure FSplit(Path: PathStr; var Dir: DirStr; var Name: NameStr; var Ext: ExtStr)` | reine Zeichenkettenoperation: `Dir` mit abschließendem Trenner (`\` und `/` gelten beide), `Ext` mit Punkt (letzter Punkt im letzten Teil). |
+| `function FSearch(Path: PathStr; DirList: string): PathStr` | zuerst das aktuelle Verzeichnis, dann die Verzeichnisse aus `DirList` (getrennt durch `;`); liefert den ersten Pfad zu einer vorhandenen **Datei**, sonst `''`. |
+| `function GetEnv(EnvVar: string): string` | Wert der Variable; zuerst exakter Name, dann ohne Rücksicht auf Groß-/Kleinschreibung (`// TP-ANNAHME`: DOS speicherte Namen groß). Fehlt sie: `''`. |
+| `function EnvCount: Integer` | Anzahl der Variablen. |
+| `function EnvStr(Index: Integer): string` | `'NAME=WERT'` der `Index`-ten Variable (ab 1), außerhalb `''`. |
+| `function DosVersion: Word` | immer 5, also `Lo` = 5 (Hauptversion), `Hi` = 0. |
+
+Dazu (Entscheidung 3):
+
+- `var DosError: Integer` – Fehler der letzten Dos-Routine (0, 2, 3, 6, 18).
+- Konstanten `ReadOnly = $01`, `Hidden = $02`, `SysFile = $04`,
+  `VolumeID = $08`, `Directory = $10`, `Archive = $20`, `AnyFile = $3F`.
+- `type DateTime = record Year, Month, Day, Hour, Min, Sec: Word end`,
+  `procedure PackTime(var T: DateTime; var P: LongInt)`,
+  `procedure UnpackTime(P: LongInt; var T: DateTime)` – gepackt wie DOS
+  (Bits: Jahr−1980, Monat, Tag, Stunde, Minute, Sekunde/2).
+- `type SearchRec = record Fill: array[1..21] of Byte; Attr: Byte; Time:
+  LongInt; Size: LongInt; Name: string end` (Entscheidung 2: `Name` mit 255
+  Bytes; `Fill` enthält einen Zeiger auf den Suchzustand im Heap).
+  Größe über 2 GB wird auf `MaxLongInt` gekürzt.
+- `PathStr`, `DirStr`, `NameStr`, `ExtStr` = `string` (Entscheidung 2).
+- Herkunft: Beim Umsetzen gegen die TP-4.0-Referenz prüfen, welche
+  Routinen es erst ab TP 5.0 gibt (vermutlich `FExpand`, `FSplit`,
+  `GetEnv`, `DosVersion`); die gehören dann in die Tabelle der
+  Erweiterungen.
+
+**Suchzustand:** `FindFirst` legt den Zustand (Verzeichnis-Handle, Cookie
+von `fd_readdir`, Muster, Attribute, Lesepuffer) im Heap ab, `FindNext` liest
+ihn, beim Ende (`DosError` = 18) wird er freigegeben. Bricht ein Programm
+eine Suche vorher ab, bleibt er bis Programmende liegen (TP 4.0 hat kein
+`FindClose`; dokumentieren).
+
+#### Ortszeit (Entscheidung 1)
+
+**Wie Go es macht** (`$GOROOT/src/time`): Unter `GOOS=js` nimmt Go einmal
+beim Start `new Date().getTimezoneOffset()` und rechnet danach mit diesem
+festen Versatz (Zone „UTC+1“, `zoneinfo_js.go`). Unter `GOOS=wasip1` ist
+`time.Local` immer UTC („zoneinfo is managed by the runtime“,
+`zoneinfo_wasip1.go`). `-tags timetzdata` bettet die IANA-Datenbank
+(`zoneinfo.zip`, gut 400 KB) ins Programm ein, damit `time.LoadLocation`
+ohne Systemdateien funktioniert; den Namen der Zone muss das Programm selbst
+bekommen, z. B. aus `Intl.DateTimeFormat().resolvedOptions().timeZone` im
+Browser. Für WasmPascal hieße das: gut 400 KB zusätzlich in **jedem**
+übersetzten Programm (heute meist 30–60 KB) – zu viel. Übernehmen lässt
+sich die Idee, die Regeln der einen Zone vom Host zu bekommen (Variante B).
+
+**Variante A – fester Versatz (gewählt):**
+
+- Die Laufzeit liest beim Start die Umgebungsvariable
+  `WASMPASCAL_UTC_OFFSET` (Minuten östlich von UTC, z. B. `60` für CET,
+  `120` für CEST). Fehlt sie, gilt wie bisher UTC.
+- `GetDate`, `GetTime`, `GetFTime` und `SearchRec.Time` rechnen mit diesem
+  Versatz. Er gilt für die ganze Laufzeit: Ein Wechsel der Sommerzeit
+  während des Laufs und Dateizeiten aus der anderen Jahreshälfte sind um
+  eine Stunde verschoben (Abweichung, dokumentieren).
+- Wer setzt sie: `pascal run` aus `time.Now().Zone()`; `web/loader.js`
+  aus `new Date().getTimezoneOffset()`, wenn `env` sie nicht schon enthält;
+  `runner` als Bibliothek nur, wenn der Aufrufer sie in `Env` angibt.
+**Verworfen – Variante B (Zeitzonenregel):** Der Host hätte die Regel der
+lokalen Zone als POSIX-TZ-String (`CET-1CEST,M3.5.0,M10.5.0/3`) in `TZ`
+übergeben, die Laufzeit sie in Pascal ausgewertet; dann stimmten auch
+Sommerzeitwechsel und Dateizeiten aus der anderen Jahreshälfte. Nach
+Rückfrage zugunsten der einfacheren Variante A zurückgestellt; bei Bedarf
+später nachrüstbar, ohne Variante A zu brechen (`TZ` hätte Vorrang).
+
+#### Unterste Schicht, Runner, Loader
+
+- Neue WASI-Importe in `compiler/internal/abi`: `environ_sizes_get`,
+  `environ_get`, `fd_readdir`, `path_filestat_get`. In `rtl/system.pas`
+  gemeinsame `Sys…`-Routinen dafür; Umgebung unter `gojs` aus dem Speicher
+  hinter `argv` (dort legt `wasm_exec.js` sie ab, Ende mit einem
+  Null-Zeiger). Für die Dos-Unit bekommt die System-Unit Routinen mit `_`
+  im Interface (Pfad normalisieren wie `NormPath`, Umgebung lesen, Datei
+  stat/readdir), damit `dos.pas` nichts doppelt implementiert.
+- `runner.Options` bekommt `Env []string` (`"NAME=WERT"`; nil = leere
+  Umgebung) mit Doku-Kommentar und Beispiel. `pascal run` übergibt
+  `os.Environ()` plus `WASMPASCAL_UTC_OFFSET` (Entscheidung 5).
+- `web/loader.js`: Option `env` (Objekt Name → Wert) an `go.env`; die
+  WASI-Funktionen `fd_readdir` und `path_filestat_get` für den Datei-Host.
+  Der Host-Vertrag wächst um `readdirSync(path)` (Namen, ohne `.`/`..`) und
+  `mtimeMs` in `statSync`/`fstatSync` (Node liefert beides schon);
+  `node-run.js` reicht seine Umgebung mit `--env` weiter (sonst keine).
+- Tests mit fester Uhr: `runner` bekommt eine nicht exportierte
+  Testmöglichkeit für `WithWalltime`, damit Datum und Uhrzeit in Tests
+  feststehen.
+
+#### Tests
+
+- `testdata/etappe15/` (laufen wie üblich auch unter `gojs`):
+  `fsplit.pas` (Pfade mit `\` und `/`, ohne Endung, mehrere Punkte,
+  Punkt im Verzeichnis), `fexpand.pas` (nach `ChDir`, mit `..`),
+  `fsearch.pas` (Treffer im aktuellen Verzeichnis, in der Liste, Verzeichnis
+  statt Datei, kein Treffer), `findfirst.pas` (Muster `*.txt`, `?`,
+  `*.*`, Verzeichnisse nur mit `Directory`, versteckte Datei, kein Treffer
+  18, fehlender Pfad 3; Ausgabe ohne Abhängigkeit von der Reihenfolge, z. B.
+  gezählt oder sortiert im Programm), `fattr.pas` (`GetFAttr` für Datei,
+  Verzeichnis, fehlende Datei), `ftime.pas` (`GetFTime` + `UnpackTime` +
+  `PackTime` hin und zurück; Plausibilität statt fester Zeit),
+  `umgebung.pas` (mit `.env`-Datei neben `.args`/`.in`: `GetEnv`,
+  `EnvCount`, `EnvStr`, Groß-/Kleinschreibung), `dosversion.pas`.
+- Harness: optionale `name.env` (Zeilen `NAME=WERT`) für beide Ziele.
+- `runner`-Tests mit fester Uhr und `WASMPASCAL_UTC_OFFSET`: Datum,
+  Uhrzeit, Wochentag und Tageswechsel (23:30 UTC mit +60 → nächster Tag,
+  00:30 UTC mit −300 → Vortag), Schaltjahr (29. 2.), Jahreswechsel, ein
+  Versatz mit halben Stunden (+330), ohne Variable UTC; `GetFTime` einer
+  Datei mit bekannter Änderungszeit.
+- `pascal run` übergibt den Versatz des Systems (Test mit gesetztem `TZ`
+  des Go-Prozesses, z. B. `TZ=Asia/Kolkata` → 330).
+- `GetFAttr` und `FindFirst` melden für eine schreibgeschützte Datei kein
+  `ReadOnly` (Entscheidung 4).
+
+#### Doku
+
+- `docs/units.md`: Abschnitt Dos neu (alle Routinen, Typen, Konstanten,
+  `DosError`, Ortszeit).
+- `docs/abweichungen.md`: Ortszeit über den festen Versatz beim Start
+  (Sommerzeitwechsel während des Laufs und Dateizeiten aus der anderen
+  Jahreshälfte um eine Stunde verschoben),
+  Attribute (nur `Directory` und `Hidden` per Punkt), lange Namen in
+  `SearchRec`/`PathStr`, Pfade mit `/` in `FExpand`, keine `.`/`..` in
+  `FindFirst`, Reihenfolge vom Host, Suchzustand ohne `FindClose`;
+  Zeile „Dos: nur Datum und Uhrzeit, UTC“ (Etappe 7) als überholt.
+- `PLAN.md`: „Weggelassen“ (Dos) anpassen, ggf. Erweiterungstabelle;
+  `README.md` (Umfang), `web/README.md` (Host-Vertrag, `env`),
+  `CHANGELOG.md` (Unreleased).
+
+**Fertig, wenn:** alle genannten Routinen unter WASI und `gojs` dieselben
+Ergebnisse liefern; `GetDate`/`GetTime` mit gesetztem Versatz Ortszeit
+liefern (geprüft mit fester Uhr) und `pascal run` den Versatz des Systems
+übergibt; alle bisherigen Tests sind grün.
 
 ## Arbeitsregeln für Claude Code
 
