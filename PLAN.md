@@ -15,7 +15,7 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-5.0-Quelltext i
 - Die Datentypen sind auf WASM abgebildet (siehe Abschnitt Typabbildung). Es gibt keine 16-Bit-Überlaufsemantik.
 - Der Compiler bricht beim ersten Fehler ab, wie das Original. Es gibt keine Fehlerkorrektur im Parser.
 - Das ganze Programm wird auf einmal kompiliert. Units werden immer aus dem Quelltext übersetzt, ohne `.TPU`-Dateien.
-- Es gibt keine Optimierungen. Konstante Ausdrücke werden nur dort ausgewertet, wo die Sprache es verlangt. *Ausnahme ab Etappe 17:* Routinen, die das Programm nicht erreichen kann, kommen nicht ins Modul.
+- Es gibt keine Optimierungen. Konstante Ausdrücke werden nur dort ausgewertet, wo die Sprache es verlangt. *Ausnahme ab Etappe 18:* Routinen, die das Programm nicht erreichen kann, kommen nicht ins Modul.
 - Laufzeitfehler beenden das Programm mit `Runtime error NNN at datei.pas(zeile) in Prozedur`, also mit Quelltextposition statt Adresse (siehe Abschnitt Laufzeitfehler mit Zeilennummern).
 
 **Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` und `.OBJ`-Linking, `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount` und (seit Etappe 15) den Routinen für Attribute, Dateizeit, Suche, Pfade und Umgebung; die in TP 5.0 neuen `GetCBreak`, `SetCBreak`, `GetVerify`, `SetVerify` und `SwapVectors` fehlen ebenfalls. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen WhereX, WhereY, Window und KeyPressed (GotoXY nach Rückfrage nachgereicht, über ANSI); ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
@@ -271,7 +271,7 @@ Das Programm kann an festgelegten Punkten anhalten und die Kontrolle an den Host
 
 ## Etappen mit Akzeptanzkriterien
 
-Achtzehn Etappen (0 bis 17). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
+Zwanzig Etappen (0 bis 19). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
 
 ### Etappe 0: Gerüst ✅
 
@@ -1426,18 +1426,178 @@ Pascal 5.0; alle bisherigen Tests sind grün.
 
 - *Erledigt (Nov 27, 2026).* Prozedurale Typen in AST (`ast.ProcType`), Parser, `types.ProcType`, Typprüfung (`autoCall`, `operand`, `procRef`, `check.CallIndirect`, `Info.ProcRefs`), IR (`CallIndirect`, `FuncSig`, `Module.Table`/`Sigs`), Analyse und Codegenerator (Table- und Element-Abschnitt, `call_indirect`, Index im Frame); `RunError`, `ExitProc`, `ErrorAddr`, `_Halt`/`_ErrorExit`/`Terminate` in `rtl/system.pas`, Export `_exit` mit Auswertung in `runner` und `web/loader.js`; `VER50`, Schalter `A`. Abweichungen von den Hinweisen oben: (1) Der Tabellenindex steht schon beim Lowering fest (Reihenfolge der ersten Verwendung), deshalb braucht `encode` keinen Platzhalter; (2) `_ErrorExit` kehrt nie zurück, sondern endet wie `Halt` über `SuspendHalt`; nach einem Laufzeitfehler kodiert der Exit-Code `ExitCode * 2 + 1` (Meldung) bzw. `ExitCode * 2` (`ErrorAddr = nil`), so wirken auch `Halt` in einer Exit-Prozedur und Anhaltepunkte ohne eigenes Protokoll; (3) das Programmende ist `_Halt(0)` (TP-ANNAHME: ein im Hauptprogramm gesetzter `ExitCode` zählt nicht); (4) `RunError` setzt Bit 16 der Fehlernummer, damit `RunError(0)` kein echter Trap ist; (5) Aufrufe als Anweisung auch über Index und Zeiger (`A[1];`, `P^;`), Error 91 sonst erst in der Typprüfung; (6) Error 142 für den Aufruf einer Variable, die keine Prozedurvariable ist (bisher 143), `@` und `Addr` auf verschachtelte Routinen ergeben 143 (bisher 83); (7) `Addr(Routine)` wie `@Routine`. Tests: `testdata/etappe16/` (14 Programme, 8 Fehlerfälle, WASI, `gojs`, Frame-Ablage), Golden-Tests `38_prozedurtypen` und `prozedurtypen.sym`, `TestMarkSuspendableIndirect`.
 
-### Etappe 17: Ungenutzten Code entfernen
+### Etappe 17: `Int64`, `external` und Laufzeit ohne Intrinsics
+
+**Ziel:** Programme können Funktionen des Hosts als `external` aufrufen,
+und die Laufzeit erreicht WASI und `gojs` auf demselben Weg statt über die
+34 fest eingebauten Intrinsics aus `compiler/internal/abi`. Neue
+WASI-Aufrufe brauchen danach nur noch Pascal-Code. Für die
+64-Bit-Parameter von WASI kommt der Typ `Int64` hinzu; `Comp` wird wie in
+TP eine echte 64-Bit-Ganzzahl im Speicher.
+
+**Entscheidungen (nach Rückfrage):**
+
+- Neuer Typ `Int64` (aus Delphi 4). `Comp` wird im Speicher auf `i64`
+  umgestellt; die Laufzeit benutzt `Int64`, nicht `Comp`.
+- `external` wie in Borland Pascal 7/Delphi. Eigene externe Routinen in
+  Programmen und Units gibt es nur für das Ziel WASI; unter `gojs` sind sie
+  ein Fehler. Die Laufzeit selbst deklariert ihre WASI- **und** ihre
+  `gojs`-Aufrufe mit `external` (Modul `gojs` bleibt der System-Unit
+  vorbehalten).
+- Nur einfache Typen an der Grenze (wie später bei `exports`, Etappe 19).
+- `library` und `exports` folgen in Etappe 19, das Entfernen ungenutzten
+  Codes in Etappe 18.
+
+#### Der Typ `Int64`
+
+| Thema | Festlegung |
+| --- | --- |
+| Wertebereich, Darstellung | −2⁶³..2⁶³−1; WASM-Wert `i64`, im Speicher 8 Byte, Ausrichtung 8 |
+| Art | Ganzzahltyp und Ordinaltyp: Arithmetik (`+ - * div mod`, Vorzeichen), Bitoperationen (`and or xor not shl shr`), Vergleiche, `Inc`, `Dec`, `Succ`, `Pred`, `Odd`, `Abs`, `Sqr`, `Low`, `High`, `Ord` (Ergebnis `Int64`), `for`-Laufvariable. **Nicht** als Index- oder Basistyp von Arrays, Mengen und Teilbereichen (Error 29 „Ordinal type expected“) und nicht als `case`-Selektor (Error 39 „Ordinal expression expected“), wie bei Real-Typen. |
+| Ergebnistyp | Ist ein Operand `Int64`, wird in 64 Bit gerechnet und das Ergebnis ist `Int64`; sonst bleibt alles wie heute (32 Bit). `shl`/`shr` auf `Int64` schieben modulo 64. |
+| Zuweisung | Ganzzahl → `Int64` implizit (mit Vorzeichen erweitert); `Int64` → kleinere Ganzzahltypen implizit, abgeschnitten wie heute bei `LongInt` → `Byte` (keine Überlaufprüfung, wie `{$R-}`); `Int64` → Real-Typen implizit (ab 2⁵³ gerundet). Real → `Int64` nicht direkt: `Trunc` und `Round` liefern weiter `LongInt` (TP, Überlauf 207); für größere Werte geht der Weg über `Comp` (`C := X; I := C;`, gerundet). |
+| Konstanten | Dezimalkonstanten über `MaxLongInt` sind `Int64`-Konstanten (bisher Real-Konstanten), bis 9223372036854775807; darüber weiter Real. Hexkonstanten mit bis zu 8 Ziffern bleiben `LongInt` (`$FFFFFFFF` = −1), mit 9 bis 16 Ziffern sind sie `Int64`. Konstantenausdrücke falten in 64 Bit, wenn ein Operand `Int64` ist; Überlauf ist Error 76. |
+| Typumwandlungen | `Int64(x)` aus Ordinalwerten und Zeigern; `LongInt(i64)` usw. schneiden ab. |
+| Laufzeitfehler | Division durch 0 → 200; `Low(Int64) div -1` → 200 (WASM-Trap, wie bei `LongInt`). |
+| Ein-/Ausgabe | `Write`/`WriteLn` mit Breite, `Read`/`ReadLn`, `Str`, `Val` für `Int64` (in Pascal in `rtl/system.pas`); `file of Int64` speichert 8 Byte little-endian. |
+
+**`Comp`:** bleibt wie in TP ein **Real-Typ** (Ausdrücke rechnen in
+`f64`, `Write` gibt Exponentialschreibweise aus, `Comp / Comp` ist Real),
+wird aber als `i64` gespeichert: Laden mit `f64.convert_i64_s`, Speichern
+rundet zur nächsten Ganzzahl (bei Gleichstand zur geraden, wie die
+8087-Voreinstellung) und ergibt außerhalb des Bereichs sowie für NaN den
+Wert `$8000000000000000` („indefinite“ des 8087, `// TP-ANNAHME`).
+`SizeOf(Comp)` bleibt 8; Records und typisierte Dateien mit `Comp`-Feldern
+haben damit das Format von TP. `Comp` ↔ `Int64`: implizit in beide
+Richtungen über den Ganzzahlwert (ohne Umweg über `f64`, wenn kein Rechnen
+dazwischen liegt). Werte über 2⁵³ verlieren in Ausdrücken Stellen; in TP
+rechnete der 8087 mit 64 Bit Mantisse (Abweichung).
+
+#### `external`
+
+```pascal
+function HostRandom(Max: LongInt): LongInt; external 'host' name 'random';
+procedure HostLog(P: Pointer; Len: LongInt); external 'host';  { Importname = Pascal-Name }
+```
+
+| Thema | Festlegung |
+| --- | --- |
+| Syntax | `external 'modul' [name 'importname'];` hinter dem Kopf einer Routine auf oberster Ebene eines Programms oder einer Unit (im `interface` einer Unit erlaubt, dann ohne Rumpf im `implementation`-Teil). Ohne `name` ist der Importname der Pascal-Name in der deklarierten Schreibweise. `external` ohne Modulname (TP-Form für `.OBJ`) bleibt Error 902. |
+| Typen | Parameter und Ergebnis nur einfach: Ordinaltypen (außer `Int64`) und `Boolean` → `i32`; `Int64` und `Comp` → `i64`; `Single` → `f32`; `Real`, `Double`, `Extended` → `f64`; `Pointer`, typisierte Zeiger und `var`-Parameter → `i32` (Adresse). Strings, Records, Arrays, Mengen, Dateien und prozedurale Typen als Wertparameter oder Ergebnis sind ein Fehler (neue Nummer 909 „Type not allowed in external or exported routine“); als `var`- oder `const`-Parameter werden sie als Adresse übergeben. |
+| Verhalten | Synchron, nie ein Anhaltepunkt; kein Static Link; Laufzeitfehler im Host sind Traps und laufen wie andere Traps über `_exit`. Adressierbar mit `@` und Prozedurvariablen: Die importierte Funktion steht direkt in der Funktionstabelle (WASM erlaubt Importe dort, die Signatur stimmt mit der des prozeduralen Typs überein); keine Hüllfunktion. Die Analyse der Anhaltefähigkeit behandelt Importe in der Tabelle als nie anhaltend. |
+| Ein Import, mehrere Deklarationen | Derselbe Import (Modul + Name) darf mehrfach deklariert sein, wenn die WASM-Signatur gleich ist; sonst Error 910 „Conflicting external declaration“. Im Modul erscheint er einmal. |
+| Ziele | Unter `gojs` ist `external` außerhalb der System-Unit Error 902. Das Modul `gojs` ist außerhalb der System-Unit immer Error 910. `wasi_snapshot_preview1` dürfen Programme benutzen (umgehen damit die Laufzeit; Doku). |
+| Host (Go) | `runner.Options.Imports map[string]map[string]any`: Modul → Name → Go-Funktion mit passenden Parametern (`int32`/`uint32`, `int64`/`uint64`, `float32`, `float64`, optional `context.Context` und `runner.Memory` als erste Parameter). wazero bindet solche Funktionen direkt ein; der Speicherzugriff ginge dort nur über `api.Module`, deshalb gibt es eine eigene schmale Schnittstelle `runner.Memory` (Lesen und Schreiben von Bytes und Zahlen an einer Adresse), die der Runner an die Go-Funktion weitergibt. Keine wazero-Typen in der öffentlichen API. `wasi_snapshot_preview1` und `gojs` lassen sich dort nicht belegen. Fehlt ein Import, liefert `runner.Run` vor dem Start einen klaren Fehler (Modul, Name, Signatur). |
+| CLI | `pascal run` stellt keine eigenen Importe bereit; ein Programm mit eigenem `external` scheitert dort mit dieser Meldung. `pascal build` übersetzt es normal. |
+
+#### Laufzeit ohne Intrinsics
+
+- `rtl/system.pas` deklariert alle Aufrufe aus `abi.WASI` und `abi.GoJS`
+  selbst mit `external` (`wasi_snapshot_preview1` bzw. `gojs`), mit den
+  heutigen Pascal-Namen (`_FdWrite`, `_PathOpen`, `_GoWasmWrite`, …), die
+  `gojs`-Aufrufe unter `{$IFDEF GOJS}`. 64-Bit-Parameter (`fd_seek`,
+  `fd_filestat_set_size`, `path_open`, `clock_time_get`, `fd_readdir`)
+  werden `Int64`; die Aufrufer übergeben `Int64`-Werte statt erweiterter
+  `LongInt`.
+- `compiler/internal/abi` und die Intrinsic-Behandlung in `check` und `ir`
+  (`BWasiBase`, `wasiHost`, `ExtS64`/`ExtU64` für Argumente) entfallen.
+  Echte Intrinsics bleiben nur, wo es keinen Import gibt (`_MemGrow`,
+  `_MemSize`, `_HeapBase`, Anhaltepunkte usw.).
+- Die Reihenfolge der Importe darf sich ändern (Reihenfolge der ersten
+  Verwendung); die Module bleiben deterministisch und byte-gleich zum
+  Browser-Compiler. Ein Diff der erzeugten Module vor/nach der Umstellung
+  (nach Normalisieren der Importreihenfolge) dient als Prüfung, dass sich
+  sonst nichts ändert.
+
+#### Umsetzung (Hinweise)
+
+- IR und Codegenerator: `i64` als vollwertiger Werttyp (bisher nur für
+  WASI-Argumente): Locals, Frame-Slots, `MemI64`, Arithmetik, Vergleiche,
+  Umwandlungen `i32` ↔ `i64` ↔ `f64`, Konstanten; der Scheduler sichert
+  `i64`-Locals im Frame wie die übrigen.
+- `types`: `KInt64` als Ganzzahlart **innerhalb** von `KShortInt`..`KLongInt`
+  einordnen oder `IsInteger` anpassen; `Comp` bleibt Real-Art, bekommt aber
+  eine eigene Speicherdarstellung (`MemI64` + Umwandlung).
+- `check`: `host()` macht heute jede Ganzzahl zu `LongInt`; für `Int64` muss
+  es `Int64` bleiben, sonst rechnet `I64 + 1` in 32 Bit. Dasselbe gilt für
+  `intResult`.
+- `Comp` speichern: `f64.nearest` (Gleichstand zur geraden), dann eine
+  eigene Prüfung auf NaN und den Bereich, weil weder `i64.trunc_f64_s`
+  (Trap) noch die sättigende Variante „indefinite“ liefern; außerhalb wird
+  `$8000000000000000` gespeichert.
+- `check`: Regeln aus den Tabellen, Error 909/910, `external` im Parser
+  (heute Error 902 bei `external`).
+- Konstantenfaltung: 64-Bit-Überlaufprüfung für `Int64`, 32 Bit wie bisher
+  für die übrigen.
+- `runner`: `Options.Imports`, Prüfung fehlender Importe vor dem Start.
+
+#### Tests
+
+- `testdata/etappe17/int64.pas`: Arithmetik und Bitoperationen an den
+  Grenzen (`High(Int64)`, `Low(Int64)`, Überlauf bei `+` ohne Prüfung),
+  gemischte Ausdrücke mit `LongInt`, Zuweisung in beide Richtungen,
+  Konstanten (dezimal, `$` mit 9–16 Ziffern), `Inc`/`Dec`, `for`-Schleife,
+  `Write` mit Breite, `Str`/`Val`, `Read` (`.in`), `file of Int64`,
+  Division durch 0 (200).
+- `testdata/etappe17/comp.pas`: Rundung beim Speichern (0,5 → 0, 1,5 → 2,
+  −2,5 → −2), Ausgabe wie bisher, `SizeOf`, `Comp` in Record und Datei
+  (8 Byte Ganzzahl), Wert außerhalb (`$8000000000000000`).
+- `testdata/etappe17/extern.pas`: Programm mit eigenen Importen; der
+  Test-Harness stellt einen festen Satz Test-Importe (Modul `test`) über
+  `runner.Options.Imports` bereit, Go-seitig im Harness (eine Textdatei
+  kann keine Go-Funktionen beschreiben); Parameter aller erlaubten Typen,
+  `var`-Parameter, Ergebnis `Int64`/`Real`, Aufruf über Prozedurvariable.
+  Programme mit eigenen Importen laufen nur unter WASI: Eine Datei
+  `name.wasi` (leer) neben dem Programm lässt `TestProgramsGoJS` es
+  überspringen; `testdata/README.md` beschreibt das.
+- Fehlertests: String als Wertparameter (909), Record als Ergebnis (909),
+  widersprüchliche Deklaration (910), Modul `gojs` im Programm (910),
+  `external` unter `gojs` (902), `external` ohne Modul (902), `Int64` als
+  Array-Index und `case`-Selektor.
+- `runner`: fehlender Import → Fehler vor dem Start; `Imports` mit
+  reserviertem Modul → Fehler.
+- Alle bisherigen Tests (WASI, `gojs`, Frame-Ablage, `TestWebCompiler`)
+  bleiben grün; `pascal run` funktioniert nach der Umstellung unverändert.
+
+#### Doku
+
+- `PLAN.md`: Typabbildung (`Int64`; `Comp` als `i64` im Speicher),
+  Tabelle der Erweiterungen (`Int64` aus Delphi 4, `external` aus BP 7),
+  Weggelassen-Liste (`external` nur noch ohne Modulname).
+- `CLAUDE.md`: Typtabelle, Pipeline (keine WASI-Intrinsics mehr, Laufzeit
+  deklariert Importe selbst).
+- `docs/units.md`: `Int64`; Abschnitt „Externe Routinen“ mit Beispiel in
+  Pascal und Go.
+- `docs/abweichungen.md`: Zeilen für Etappe 17 (`Comp`-Rundung und
+  „indefinite“, Genauigkeit von `Comp` in Ausdrücken, Dezimalkonstanten
+  über `MaxLongInt` jetzt `Int64`, `Trunc`/`Round` bleiben `LongInt`,
+  `external`-Regeln); Zeile Etappe 6 „WASI-Aufrufe“ als überholt
+  kennzeichnen.
+- `README.md` (Umfang, Go-Beispiel mit `Imports`), `CHANGELOG.md`
+  (Unreleased; **inkompatibel:** Dezimalkonstanten über `MaxLongInt`,
+  Layout von `Comp`, `Comp` rundet beim Speichern: `C := 1.5` ergibt 2).
+
+**Fertig, wenn:** `Int64` und `Comp` verhalten sich wie festgelegt; ein
+Programm ruft eigene Host-Funktionen über `runner.Options.Imports` auf; die
+Laufzeit enthält keine Intrinsics mehr für WASI und `gojs`, und alle
+bisherigen Tests sind unter WASI, `gojs` und mit dem Browser-Compiler grün.
+
+### Etappe 18: Ungenutzten Code entfernen
 
 **Ziel:** Ein Modul enthält nur die Routinen, die das Programm erreichen
-kann. Heute landet die ganze Laufzeit in jedem Modul: „Hallo Welt“ hat
-32,6 KB (27,5 KB mit `-nolines`), mit `uses Dos, Crt` 41,8 KB; die
-System-Unit allein hat rund 200 Routinen. Das Verhalten der Programme
-ändert sich nicht.
+kann. Heute landet die ganze Laufzeit in jedem Modul: „Hallo Welt“ hatte
+vor Etappe 17 32,6 KB (27,5 KB mit `-nolines`), mit `uses Dos, Crt`
+41,8 KB; die System-Unit allein hat rund 200 Routinen. Die Größen ändern
+sich mit Etappe 17 und werden zu Beginn dieser Etappe neu gemessen. Das
+Verhalten der Programme ändert sich nicht.
 
 **Entscheidungen:**
 
-- Entfernt werden nur ganze Routinen (samt den WASI-Importen, die danach
-  niemand mehr ruft, und den Stringkonstanten ihrer Rümpfe). Globale
+- Entfernt werden nur ganze Routinen (samt den Stringkonstanten ihrer
+  Rümpfe) und unbenutzte `external`-Deklarationen: Seit Etappe 17 sind auch
+  die WASI- und `gojs`-Aufrufe der Laufzeit solche Deklarationen; ein
+  Import erscheint nur, wenn eine erreichbare Routine ihn aufruft oder er
+  in der Funktionstabelle steht. Globale
   Variablen bleiben: Sie liegen im BSS und kosten im Modul nichts.
   Typisierte Konstanten bleiben ebenfalls.
 - Die Typprüfung bleibt vollständig: Fehler in ungenutzten Routinen meldet
@@ -1460,6 +1620,8 @@ Wurzeln sind:
 - jede Routine der Funktionstabelle, also jede, deren Adresse genommen
   wird (`@P`, `Addr`, Zuweisung an eine Prozedurvariable, typisierte
   Konstanten); indirekte Aufrufe brauchen dann keine eigene Behandlung.
+- ab Etappe 19 jede exportierte Routine einer Bibliothek. Die Wurzeln
+  deshalb als erweiterbare Liste anlegen.
 
 Erreichbar ist, was von einer Wurzel aus über `ir.Call` aufgerufen wird.
 Verschachtelte Routinen werden nur über ihre umschließende Routine oder
@@ -1505,6 +1667,177 @@ Geschwister erreicht und fallen mit ihr weg.
 Größentest und alle bisherigen Tests grün sind und die Module weiterhin
 deterministisch und byte-gleich zum Browser-Compiler sind.
 
+### Etappe 19: Bibliotheken mit `library` und `exports`
+
+**Ziel:** Aus Pascal-Quelltext entsteht ein WASM-Modul, dessen Routinen ein
+Host (Go, `node:wasi`, wasmtime …) aufrufen kann. Baut auf `Int64` und den
+Typregeln für `external` (Etappe 17) und auf der Erreichbarkeit (Etappe 18)
+auf: Exportierte Routinen sind zusätzliche Wurzeln.
+
+**Entscheidungen (nach Rückfrage):**
+
+- Exporte gibt es nur in Bibliotheken (`library`), nicht in Programmen:
+  Ein Programm endet nach dem Hauptprogramm über `proc_exit`, danach ließe
+  sich nichts mehr aufrufen.
+- Nur das Ziel WASI. `library` mit `-target gojs` ist Error 902.
+- Nur einfache Typen an der Grenze, dieselben wie bei `external`
+  (Etappe 17, Error 909); keine strukturierten Funktionsergebnisse.
+
+#### Sprache
+
+```pascal
+library Mathe;
+
+type
+  PLongInt = ^LongInt;
+
+function Quadrat(X: LongInt): LongInt;
+begin
+  Quadrat := X * X
+end;
+
+function Summe(P: Pointer; N: LongInt): Int64;
+var
+  I: LongInt;
+begin
+  Result := 0;
+  for I := 0 to N - 1 do
+    Result := Result + PLongInt(LongInt(P) + 4 * I)^
+end;
+
+exports
+  Quadrat,
+  Quadrat name 'square',
+  Summe;
+
+begin
+  { Initialisierung, läuft einmal in _initialize }
+end.
+```
+
+| Thema | Festlegung |
+| --- | --- |
+| Kopf | `library Name;` statt `program Name;`. `library` und `exports` bleiben normale Bezeichner; der Parser erkennt sie nur am Anfang der Datei bzw. als Abschnitt im Hauptblock, wie Standarddirektiven. |
+| `exports` | Ein oder mehrere Abschnitte im Deklarationsteil der Bibliothek (nach den Routinen, die sie nennen), wie in BP 7/Delphi. Einträge `Routine [name 'exportname']`, durch Komma getrennt; dieselbe Routine darf unter mehreren Namen exportiert werden. Ohne `name` ist der Exportname der Pascal-Name in der deklarierten Schreibweise. Routinen aus Units dürfen exportiert werden (`Dos.GetEnv` geht nicht: Strings, Error 909). |
+| Erlaubt | Routinen auf oberster Ebene einer Bibliothek oder Unit, auch `external` (dann wird der Import weitergereicht). Verschachtelte Routinen → Error 143. |
+| Namen | Exportnamen sind eindeutig und dürfen nicht mit den internen Exporten kollidieren (`memory`, `_initialize`, `_exit`, `__rt_*`, alles mit `_` am Anfang); sonst neue Nummer 911 „Duplicate or reserved export name“. |
+| Typen | wie bei `external` (Etappe 17); `var`/`const`-Parameter mit strukturiertem Typ als Adresse im dokumentierten Layout (z. B. String: Längenbyte + Bytes). Speicher für den Host stellt die Bibliothek bei Bedarf selbst bereit (eigene exportierte Routinen mit `GetMem`/`FreeMem`). |
+| Hauptblock | `begin … end.` der Bibliothek läuft in `_initialize`, nach den Initialisierungsteilen der Units, genau einmal. |
+
+#### Modul (WASI Reactor)
+
+- Exporte: `memory`, `_initialize` statt `_start`, `_exit` und die
+  `__rt_*`-Globalen wie bisher, dazu je Exporteintrag eine Funktion.
+- `_initialize` führt Laufzeit- und Unit-Initialisierung und den Hauptblock
+  aus und kehrt zurück (kein `proc_exit`). Der Host ruft es einmal vor allen
+  anderen Exporten (WASI-Reactor-Konvention).
+- **Anhalten:** Erreicht eine exportierte Routine einen Anhaltepunkt
+  (`ReadLn`, `Delay`, lange Ausgabe), bekommt sie eine Hülle, die wie heute
+  `_start` die Fortsetzung in einer Schleife ausführt; für den Host bleibt
+  der Aufruf synchron. Dasselbe gilt für `_initialize`.
+- **Programmende:** In einer Bibliothek endet der Hauptblock nicht mit
+  `_Halt(0)` wie bei Programmen (Etappe 16); `_initialize` kehrt nach dem
+  Hauptblock zurück.
+- **Ausgabe:** `Output` ist gepuffert und wird bei Programmen erst am Ende
+  geschrieben (`_Done`). Die Hülle jedes Exports und `_initialize` leeren
+  `Output` vor der Rückkehr zum Host, sonst sähe der Host die Ausgabe nicht.
+- **Aufrufe zurück in Pascal:** Ruft eine Host-Funktion (`external`)
+  während eines Exports wieder einen Export auf, darf die Hülle den
+  Schatten-Stack nicht auf den Anfang zurücksetzen (wie `_start` es beim
+  Fortsetzen tut), sonst überschreibt sie die Frames des äußeren Aufrufs.
+  Die Hülle merkt sich den Schatten-Stack und den Zustand des Schedulers
+  beim Eintritt und setzt beim Fortsetzen darauf zurück; beim Verlassen
+  stellt sie beides wieder her. Ein innerer Export, der anhält, während der
+  äußere noch läuft, wird so von der eigenen Hülle fortgesetzt. Test dazu.
+- **Exit-Prozeduren:** Sie laufen nur nach `Halt` und nach Laufzeitfehlern,
+  nicht bei `Library.Close` (eine Reactor-Instanz wird nicht „entladen“).
+  In BP 7 liefen sie beim Entladen der DLL; Abweichung, in
+  `docs/abweichungen.md`.
+- **`Halt` und Laufzeitfehler** in einer exportierten Routine oder in
+  `_initialize`: Die Exit-Prozeduren laufen wie bei Programmen, die Meldung
+  „Runtime error …“ geht an stderr, dann endet die Instanz über
+  `proc_exit`. Danach ist sie unbrauchbar; der Host bekommt einen Fehler
+  (in Go: `*runner.RuntimeError` bzw. ein Fehler mit Exit-Code).
+  `// TP-ANNAHME`: In BP 7 beendete `Halt` in einer DLL den ganzen Prozess.
+
+#### Go-API
+
+```go
+lib, err := runner.Load(ctx, res.Wasm, runner.Options{Stdout: os.Stdout})
+if err != nil { … }            // auch Fehler aus _initialize
+defer lib.Close(ctx)
+
+r, err := lib.Call(ctx, "square", 7)   // []uint64 wie die WASM-Werte
+fmt.Println(int32(r[0]))               // 49
+```
+
+- `runner.Load(ctx, wasm, opts) (*Library, error)`: instanziiert, ruft
+  `_initialize`; `Options` wie bei `Run` (Stdin/Stdout/Stderr, Dirs, Env,
+  Imports aus Etappe 17). Ein Modul ohne `_initialize` (also ein Programm)
+  ist ein Fehler, ebenso `runner.Run` mit einer Bibliothek.
+- `(*Library).Call(ctx, name string, args ...uint64) ([]uint64, error)`:
+  Werte wie in wazero (`api.EncodeI32`, `EncodeF64` …) — beim Umsetzen
+  prüfen, ob kleine Hilfsfunktionen in `runner` (`runner.I32(x)`,
+  `runner.F64(x)`) ohne wazero-Typen in der API besser sind.
+- `(*Library).Memory() []byte` (Sicht auf den linearen Speicher, gültig bis
+  zum nächsten Aufruf), `Exports() []string`, `Close(ctx)`.
+- Nebenläufigkeit: Eine `Library` ist nicht für gleichzeitige Aufrufe
+  gedacht (eine Instanz, ein Speicher); dokumentieren, ein Mutex schützt
+  vor Datenrennen.
+
+#### CLI
+
+- `pascal build mathe.pas` erzeugt bei einer Bibliothek `mathe.wasm` wie
+  gewohnt; `-target gojs` → Error 902.
+- `pascal run` mit einer Bibliothek: Fehler „mathe.pas is a library; use
+  pascal build“. Kein eigener Befehl zum Aufrufen einzelner Exporte in
+  dieser Etappe.
+
+#### Tests
+
+- `testdata/etappe19/`: Bibliothek mit Exporten aller erlaubten Typen
+  (`LongInt`, `Int64`, `Real`, `Single`, `Boolean`, `Char`, `Pointer`,
+  `var`-Parameter), Umbenennung mit `name`, doppelter Export derselben
+  Routine, Export aus einer Unit, Initialisierung mit Ausgabe, Export, der
+  `Delay` benutzt, Export mit Laufzeitfehler (Exit-Prozedur läuft, danach
+  Fehler beim Host). Neuer Harness-Zweig: Bibliotheken werden über
+  `runner.Load` geladen und nach einer Aufrufliste (`*.calls`) aufgerufen,
+  Ergebnisse und Ausgaben gegen `*.out` verglichen. Format von `*.calls`:
+  je Zeile ein Aufruf `exportname arg …`, Argumente als Pascal-Literale
+  passend zur Signatur des Exports (Ganzzahlen dezimal oder `$hex`, Real
+  mit Punkt, `True`/`False`, `'c'` für `Char`); leere Zeilen und Zeilen mit
+  `#` am Anfang zählen nicht. Der Harness schreibt nach den Ausgaben des
+  Aufrufs eine Zeile `= ergebnis` (nach Ergebnistyp formatiert, bei
+  Prozeduren `=`) bzw. bei einem Fehler die Meldung, und bricht danach ab.
+  Ein Export mit `var`-Parameter bekommt im Test eine Adresse aus einem
+  eigenen Export der Bibliothek (`GetMem`).
+- Fehlertests: `exports` in einem Programm, verschachtelte Routine (143),
+  String-Parameter (909), Record-Ergebnis (909), doppelter und reservierter
+  Exportname (911), `library` mit `-target gojs` (902).
+- Ist `node` installiert: dieselbe Bibliothek mit `node:wasi` als Reactor
+  laden (`wasi.initialize(instance)`), einen Export aufrufen.
+- Erreichbarkeit (Etappe 18): eine nicht exportierte, ungenutzte Routine
+  fehlt im Modul, eine exportierte ist da.
+- `runner`: `Load` mit Programm → Fehler, `Run` mit Bibliothek → Fehler,
+  `Call` mit unbekanntem Namen und falscher Argumentzahl → Fehler.
+
+#### Doku
+
+- `PLAN.md`: Tabelle der Erweiterungen (`library`/`exports` aus BP 7/
+  Delphi), Etappe abhaken.
+- `README.md`: Abschnitt „Bibliotheken“ mit dem Pascal-Beispiel oben und
+  dem Go-Aufruf; Hinweis auf `node:wasi` als Reactor.
+- `docs/units.md` oder neues `docs/bibliotheken.md`: Aufrufkonvention,
+  Typen, Layout von Strings und Records, Initialisierung, Fehlerverhalten.
+- `docs/abweichungen.md`: Zeilen für Etappe 19 (nur WASI, Verhalten von
+  `Halt` und Laufzeitfehlern, Exportnamen).
+- `CLAUDE.md`, `CHANGELOG.md`.
+
+**Fertig, wenn:** eine Bibliothek lässt sich übersetzen, über
+`runner.Load` laden und ihre Exporte aus Go aufrufen (auch solche, die
+anhalten); Laufzeitfehler kommen als Fehler beim Host an; die Bibliothek
+läuft auch mit `node:wasi`; alle bisherigen Tests sind grün.
+
 ## Arbeitsregeln für Claude Code
 
 - **Eine Etappe nach der anderen.** Am Ende jeder Etappe: Tests grün, `go vet` sauber, `gofmt` angewendet, Commit mit aussagekräftiger Nachricht, kurzer Bericht (was geht, was fehlt, offene Fragen). Dann auf Freigabe warten.
@@ -1517,5 +1850,5 @@ deterministisch und byte-gleich zum Browser-Compiler sind.
 - **Keine Raterei bei TP-Verhalten:** Wenn das genaue Verhalten unklar ist (Ausgabeformat, Randfälle), eine plausible Annahme treffen, im Code mit `// TP-ANNAHME:` markieren und im Bericht nennen.
 - **Laufzeit in Pascal bevorzugen.** Neue Laufzeitfunktionen zuerst in `rtl/*.pas` schreiben; nur wenn das nicht geht, als Intrinsic in Go/WASM.
 - **Sprache im Code** (seit Nov 28, 2026): Bezeichner englisch, im Go-Code wie in `rtl/*.pas`; Kommentare und Doku bleiben deutsch. Ausgenommen sind die Pascal-Testprogramme in `testdata/` und die Beispiele unter `web/beispiele/`; öffentliche Namen der Units sind ohnehin die englischen TP-Namen.
-- **RTL ohne Dopplungen:** Was mehrere Units brauchen, steht einmal in `rtl/system.pas` im Interface (Name mit `_`, für Programme nicht gedacht). Kein `{$I}` für gemeinsamen Code: Es gibt keine Entfernung ungenutzten Codes, eingebundene Routinen stünden je Unit erneut im Modul.
+- **RTL ohne Dopplungen:** Was mehrere Units brauchen, steht einmal in `rtl/system.pas` im Interface (Name mit `_`, für Programme nicht gedacht). Kein `{$I}` für gemeinsamen Code: Eingebundener Code wird je Unit erneut übersetzt; werden mehrere Kopien benutzt, stehen sie alle im Modul.
 - **`PLAN.md` und `docs/abweichungen.md` pflegen:** erledigte Etappen abhaken, Entscheidungen kurz festhalten.
