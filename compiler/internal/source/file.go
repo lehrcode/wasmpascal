@@ -201,11 +201,11 @@ func IsNoncharacter(r rune) bool {
 func IsInvalidName(err error) bool { return errors.Is(err, errInvalidName) }
 
 // lookupFold findet p in fsys, wobei jede Pfadkomponente ohne Rücksicht auf
-// Groß-/Kleinschreibung verglichen wird.
+// Groß-/Kleinschreibung verglichen wird. Zurückgegeben wird der Pfad so, wie
+// er im FS steht: Der direkte Stat-Vergleich entfällt bewusst, weil
+// case-insensitive Dateisysteme (Windows) sonst den angefragten Namen liefern
+// und die Meldungen damit plattformabhängig wären.
 func lookupFold(fsys fs.FS, p string) (string, bool) {
-	if st, err := fs.Stat(fsys, p); err == nil && !st.IsDir() {
-		return p, true
-	}
 	cur := "."
 	parts := strings.Split(p, "/")
 	for i, part := range parts {
