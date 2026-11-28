@@ -59,6 +59,26 @@ func TestRunInvalidModule(t *testing.T) {
 	}
 }
 
+func TestRunEnv(t *testing.T) {
+	var stdout bytes.Buffer
+	code, err := runner.Run(context.Background(), wasmtest.Environ(), runner.Options{
+		Stdout: &stdout,
+		// "=C:" und "=ExitCode" sind die versteckten cmd.exe-Variablen
+		// (Raymond Chen, devblogs.microsoft.com/oldnewthing/20100506-00/):
+		// WASI kann Namen mit "=" nicht darstellen, sie werden fallengelassen.
+		Env: []string{"A=1", "=C:=C:\\versteckt", "B=2=3", "=ExitCode=0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("Exit-Code = %d, want 0", code)
+	}
+	if want := "A=1\x00B=2=3\x00"; stdout.String() != want {
+		t.Errorf("Umgebung = %q, want %q", stdout.String(), want)
+	}
+}
+
 func TestRuntimeErrorMessage(t *testing.T) {
 	tests := []struct {
 		e    runner.RuntimeError

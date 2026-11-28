@@ -30,9 +30,11 @@ type Options struct {
 	// Ohne Eintrag hat das Programm keinen Dateizugriff.
 	Dirs map[string]string
 	// Env ist die Umgebung des Programms als "NAME=WERT" (Unit Dos: GetEnv,
-	// EnvCount, EnvStr); nil bedeutet leere Umgebung. Die Ortszeit der Unit
-	// Dos kommt aus WASMPASCAL_UTC_OFFSET (Minuten östlich von UTC); fehlt
-	// die Variable, gilt UTC.
+	// EnvCount, EnvStr); nil bedeutet leere Umgebung. Einträge ohne Namen
+	// (leer vor dem ersten "=", z. B. die versteckten cmd.exe-Variablen
+	// "=C:") werden übersprungen, weil WASI solche Namen nicht darstellen
+	// kann. Die Ortszeit der Unit Dos kommt aus WASMPASCAL_UTC_OFFSET
+	// (Minuten östlich von UTC); fehlt die Variable, gilt UTC.
 	Env []string
 
 	// walltime ersetzt die Uhr (nur für Tests im Paket).
@@ -109,6 +111,13 @@ func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err erro
 	}
 	for _, kv := range opts.Env {
 		k, v, _ := strings.Cut(kv, "=")
+		if k == "" {
+			// Leerer Name, z. B. die versteckten cmd.exe-Variablen "=C:"
+			// (devblogs.microsoft.com/oldnewthing/20100506-00/?p=14133/):
+			// WASI stellt die als "NAME=WERT" dar und kann Namen mit "="
+			// nicht von Werten unterscheiden; wazero lehnt sie ab.
+			continue
+		}
 		cfg = cfg.WithEnv(k, v)
 	}
 	if opts.Stdin != nil {

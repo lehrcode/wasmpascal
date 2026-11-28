@@ -36,6 +36,44 @@ func Return() []byte {
 	return module([]byte{0x0b}, nil)
 }
 
+// Environ liefert ein Modul, das die Umgebung per environ_sizes_get/environ_get
+// liest und den environ-Puffer ("NAME=WERT\0" hintereinander) per fd_write auf
+// stdout schreibt, dann proc_exit(0).
+func Environ() []byte {
+	// Speicher: Sizes bei 0, iovec bei 8, nwritten bei 16, Zeiger bei 32,
+	// environ-Puffer ab 1024.
+	body := cat(
+		[]byte{0x41, 0x00, 0x41, 0x04, 0x10, 0x02, 0x1a},               // environ_sizes_get(0, 4)
+		[]byte{0x41, 0x20, 0x41}, sleb(1024), []byte{0x10, 0x03, 0x1a}, // environ_get(32, 1024)
+		[]byte{0x41, 0x08, 0x41}, sleb(1024), []byte{0x36, 0x02, 0x00}, // [8] = 1024 (iov.buf)
+		[]byte{0x41, 0x0c, 0x41, 0x04, 0x28, 0x02, 0x00, 0x36, 0x02, 0x00},       // [12] = [4] (iov.len)
+		[]byte{0x41, 0x01, 0x41, 0x08, 0x41, 0x01, 0x41, 0x10, 0x10, 0x00, 0x1a}, // fd_write(1, 8, 1, 16)
+		[]byte{0x41, 0x00, 0x10, 0x01, 0x0b},                                     // proc_exit(0); end
+	)
+	m := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	m = section(m, 1, vec( // Typen
+		[]byte{0x60, 0x04, 0x7f, 0x7f, 0x7f, 0x7f, 0x01, 0x7f}, // 0: fd_write
+		[]byte{0x60, 0x01, 0x7f, 0x00},                         // 1: proc_exit
+		[]byte{0x60, 0x00, 0x00},                               // 2: _start
+		[]byte{0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f},             // 3: environ_sizes_get/environ_get
+	))
+	m = section(m, 2, vec( // Importe
+		cat(name("wasi_snapshot_preview1"), name("fd_write"), []byte{0x00, 0x00}),
+		cat(name("wasi_snapshot_preview1"), name("proc_exit"), []byte{0x00, 0x01}),
+		cat(name("wasi_snapshot_preview1"), name("environ_sizes_get"), []byte{0x00, 0x03}),
+		cat(name("wasi_snapshot_preview1"), name("environ_get"), []byte{0x00, 0x03}),
+	))
+	m = section(m, 3, vec([]byte{0x02}))       // eine definierte Funktion: _start (Index 4)
+	m = section(m, 5, vec([]byte{0x00, 0x01})) // Speicher: 1 Seite
+	m = section(m, 7, vec(                     // Exporte
+		cat(name("memory"), []byte{0x02, 0x00}),
+		cat(name("_start"), []byte{0x00, 0x04}),
+	))
+	fn := cat([]byte{0x00}, body) // keine Locals
+	m = section(m, 10, vec(cat(uleb(uint64(len(fn))), fn)))
+	return m
+}
+
 func module(body, data []byte) []byte {
 	m := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 	m = section(m, 1, vec( // Typen

@@ -11,6 +11,15 @@ ausdrücklich genannt. Einzelheiten zu jeder Änderung stehen in
 
 ## [Unreleased]
 
+### Behoben
+
+- `pascal run` (und `runner.Run` allgemein) brach unter `cmd.exe` mit
+  `runner: environ invalid: empty key` ab, bevor das Programm lief: Die von
+  cmd.exe vererbten versteckten Variablen (`=C:` usw.) ergaben beim Aufteilen
+  am ersten `=` einen leeren Namen, den wazero ablehnt. `runner.Options.Env`
+  überspringt namense-lose Einträge jetzt; WASI kann solche Namen nicht
+  darstellen (siehe [docs/abweichungen.md](docs/abweichungen.md)).
+
 ## [0.3.0] - 2026-11-27
 
 Etappen 15 und 16: Sprachumfang von Turbo Pascal 5.0 mit prozeduralen Typen
