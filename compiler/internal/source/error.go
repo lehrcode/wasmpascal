@@ -121,6 +121,8 @@ const (
 	ErrProgramTooLarge   = 906
 	ErrInvalidStringChar = 907
 	ErrBidiChar          = 908
+	ErrExternalType      = 909
+	ErrExternalConflict  = 910
 )
 
 var messages = map[int]string{
@@ -209,6 +211,8 @@ var messages = map[int]string{
 	ErrProgramTooLarge:     "Program too large",
 	ErrInvalidStringChar:   "Invalid character in string literal",
 	ErrBidiChar:            "Bidirectional control character",
+	ErrExternalType:        "Type not allowed in external or exported routine",
+	ErrExternalConflict:    "Conflicting external declaration",
 	ErrUnexpectedEOF:       "Unexpected end of file",
 	ErrInvalidFileName:     "Invalid file name",
 	ErrFileNotFound:        "File not found",

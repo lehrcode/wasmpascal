@@ -217,7 +217,7 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 		return nil, diagnostic(err)
 	}
 	info, err := check.Check(file, check.Config{System: system, Units: units, Embedded: embedded,
-		MaxStaticData: lim.MaxStaticData, Ctx: ctx})
+		MaxStaticData: lim.MaxStaticData, Ctx: ctx, GoJS: opts.Target == TargetGoJS})
 	if err != nil {
 		return nil, diagnostic(err)
 	}

@@ -1,6 +1,8 @@
 package ir
 
 import (
+	"math"
+
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/check"
 	"github.com/lehrcode/wasmpascal/compiler/internal/lexer"
@@ -30,26 +32,92 @@ func memOf(t types.Type) MemType {
 
 // value übersetzt e und passt das Ergebnis an den Zieltyp want an.
 func (s *fnState) value(e ast.Expr, want types.Type) Expr {
+	if types.IsInt64(want) && types.Is(s.typeOf(e), types.Comp) && s.l.info.Types[e].Mode == check.Variable {
+		// Comp-Variable → Int64 ohne Umweg über f64 (exakt, Etappe 17)
+		return Load{Addr: s.designator(e), Mem: MemI64}
+	}
 	return s.coerce(s.expr(e), s.typeOf(e), want)
 }
 
+// CompBits ist der Speicherwert von Comp zu x: zur nächsten Ganzzahl
+// gerundet (bei Gleichstand zur geraden, wie der 8087), außerhalb des
+// Bereichs und für NaN $8000000000000000 („indefinite“, TP-ANNAHME).
+func CompBits(x float64) int64 {
+	if !(x < 0x1p63 && x >= -0x1p63) {
+		return math.MinInt64
+	}
+	return int64(math.RoundToEven(x))
+}
+
 // coerce wandelt einen Wert vom Typ from in den Typ to: Ganzzahl nach Real,
-// Kürzung auf 8 Bit bei 1-Byte-Typen (PLAN.md, Festlegungen).
+// Kürzung auf 8 bzw. 16 Bit, Int64 ↔ 32 Bit (PLAN.md, Festlegungen).
 func (s *fnState) coerce(x Expr, from, to types.Type) Expr {
+	wide := x.VT() == I64
 	if types.IsReal(to) {
-		if !types.IsReal(from) {
-			if c, ok := x.(IntConst); ok {
+		switch {
+		case types.IsReal(from):
+			return x
+		case wide:
+			if c, ok := x.(Int64Const); ok {
 				return FloatConst{V: float64(c.V)}
 			}
-			return Un{Op: IntToF, X: x}
+			return Un{Op: LToF, X: x}
 		}
-		return x
+		if c, ok := x.(IntConst); ok {
+			return FloatConst{V: float64(c.V)}
+		}
+		return Un{Op: IntToF, X: x}
+	}
+	if types.IsInt64(to) {
+		switch {
+		case wide:
+			return x
+		case types.IsReal(from): // Comp → Int64
+			if c, ok := x.(FloatConst); ok {
+				return Int64Const{V: CompBits(c.V)}
+			}
+			return Un{Op: FToL, X: x}
+		}
+		return widen(x)
+	}
+	if wide && x.VT() == I64 {
+		x = wrap(x)
+		if !types.IsOrdinal(to) {
+			return x
+		}
+		return narrow(x, to)
 	}
 	if from == to {
 		return x
 	}
 	return narrow(x, to)
 }
+
+// widen erweitert einen i32-Wert mit Vorzeichen auf i64.
+func widen(x Expr) Expr {
+	if x.VT() == I64 {
+		return x
+	}
+	if c, ok := x.(IntConst); ok {
+		return Int64Const{V: int64(c.V)}
+	}
+	return Un{Op: ExtS64, X: x}
+}
+
+// wrap schneidet einen i64-Wert auf die unteren 32 Bit ab.
+func wrap(x Expr) Expr {
+	if x.VT() != I64 {
+		return x
+	}
+	if c, ok := x.(Int64Const); ok {
+		return IntConst{V: int32(c.V)}
+	}
+	return Un{Op: WrapL, X: x}
+}
+
+// i32 liefert einen Ganzzahlwert als i32 (Int64 abgeschnitten), für
+// Laufzeitroutinen und Operationen, die 32 Bit erwarten.
+func (s *fnState) i32(e ast.Expr) Expr { return wrap(s.expr(e)) }
 
 // narrow kürzt einen Ordinalwert auf die Speicherbreite von t.
 func narrow(x Expr, t types.Type) Expr {
@@ -85,6 +153,9 @@ func narrow(x Expr, t types.Type) Expr {
 func constant(tv check.TypeAndValue) Expr {
 	switch tv.Val.Kind {
 	case types.VInt:
+		if types.IsInt64(tv.Type) {
+			return Int64Const{V: tv.Val.Int}
+		}
 		return IntConst{V: int32(tv.Val.Int)}
 	case types.VReal:
 		return FloatConst{V: tv.Val.Real}
@@ -153,10 +224,15 @@ func (s *fnState) typecast(e *ast.CallExpr, tv check.TypeAndValue) Expr {
 	}
 	x := s.expr(e.Args[0])
 	switch {
+	case types.IsInt64(tv.Type):
+		if _, ptr := from.(*types.Pointer); ptr {
+			return Un{Op: ExtU64, X: x} // Adressen sind vorzeichenlos
+		}
+		return widen(x)
 	case types.IsOrdinal(tv.Type):
-		return narrow(x, tv.Type)
+		return narrow(wrap(x), tv.Type)
 	}
-	return x // Zeiger ↔ Zeiger, Zeiger ↔ LongInt
+	return wrap(x) // Zeiger ↔ Zeiger, Zeiger ↔ LongInt, Int64 → Zeiger
 }
 
 func (s *fnState) unary(e *ast.UnaryExpr) Expr {
@@ -167,11 +243,17 @@ func (s *fnState) unary(e *ast.UnaryExpr) Expr {
 		if types.Is(t, types.Boolean) {
 			return Un{Op: EqzI, X: x}
 		}
+		if x.VT() == I64 {
+			return Bin{Op: XorL, X: x, Y: Int64Const{V: -1}}
+		}
 		return Bin{Op: XorI, X: x, Y: IntConst{V: -1}}
 	case lexer.Minus:
 		x := s.expr(e.X)
 		if types.IsReal(t) {
 			return Un{Op: NegF, X: x}
+		}
+		if x.VT() == I64 {
+			return Bin{Op: SubL, X: Int64Const{V: 0}, Y: x}
 		}
 		return Bin{Op: SubI, X: IntConst{V: 0}, Y: x}
 	case lexer.Plus:
@@ -255,6 +337,17 @@ func (s *fnState) binary(e *ast.BinaryExpr) Expr {
 	case types.IsOrdinal(xt) && types.IsOrdinal(yt) && e.Op != lexer.Slash,
 		!types.IsNumeric(xt) && !types.IsNumeric(yt): // Zeiger
 		x, y := s.expr(e.X), s.expr(e.Y)
+		if x.VT() == I64 || y.VT() == I64 {
+			// Int64: beide Operanden in 64 Bit (auch die Schiebeweite)
+			x, y = widen(x), widen(y)
+			if e.Op == lexer.Div || e.Op == lexer.Mod {
+				if c, ok := y.(Int64Const); !ok || c.V == 0 {
+					y = s.keep(y)
+					s.check(Un{Op: EqzL, X: y}, ErrDivByZero)
+				}
+			}
+			return Bin{Op: Long(intOps[e.Op]), X: x, Y: y}
+		}
 		if e.Op == lexer.Div || e.Op == lexer.Mod {
 			if c, ok := y.(IntConst); !ok || c.V == 0 {
 				y = s.keep(y)
@@ -368,7 +461,7 @@ func (s *fnState) place(e ast.Expr) Expr {
 		t := s.typeOf(e.X)
 		for _, ie := range e.Indices {
 			if _, ok := t.(*types.String); ok {
-				base = Bin{Op: AddI, X: base, Y: s.expr(ie)}
+				base = Bin{Op: AddI, X: base, Y: s.i32(ie)}
 				t = types.Char
 				continue
 			}
@@ -377,7 +470,7 @@ func (s *fnState) place(e ast.Expr) Expr {
 			if tv := s.l.info.Types[ie]; tv.Mode == check.Constant {
 				base = add(base, (tv.Val.Int-arr.Lo)*size)
 			} else {
-				i := Bin{Op: SubI, X: s.expr(ie), Y: IntConst{V: int32(arr.Lo)}}
+				i := Bin{Op: SubI, X: s.i32(ie), Y: IntConst{V: int32(arr.Lo)}}
 				base = Bin{Op: AddI, X: base, Y: Bin{Op: MulI, X: i, Y: IntConst{V: int32(size)}}}
 			}
 			t = arr.Elem
@@ -547,6 +640,10 @@ func (s *fnState) emitIndirect(call *check.Call, args []ast.Expr, dst *Var) {
 // emitCall erzeugt den Aufruf; dst nimmt das Ergebnis auf (bei Aggregaten
 // über die versteckte Ergebnisadresse) oder ist nil.
 func (s *fnState) emitCall(p *types.Proc, args []ast.Expr, dst *Var) {
+	if h := s.l.externs[p]; h != nil {
+		s.emitHostCall(p, h, args, dst)
+		return
+	}
 	f := s.l.funcs[p]
 	var in []Expr
 	if f.Parent != nil {

@@ -11,8 +11,28 @@ ausdrücklich genannt. Einzelheiten zu jeder Änderung stehen in
 
 ## [Unreleased]
 
+Etappe 17: `Int64`, `external` und eine Laufzeit ohne fest eingebaute
+WASI-Aufrufe.
+
+### Hinzugefügt
+
+- Typ `Int64` (aus Delphi 4): 64-Bit-Arithmetik, sobald ein Operand `Int64`
+  ist; `Write`, `Read`, `Str`, `Val`, `file of Int64`, `for`-Schleifen.
+  Hexkonstanten mit 9 bis 16 Ziffern sind `Int64`.
+- `external 'modul' [name 'importname']` für Host-Funktionen (Ziel WASI),
+  in Go über `runner.Options.Imports` und `runner.Memory`; fehlende
+  Importe meldet `runner.Run` vor dem Start. Neue Fehler 909 (Typ an der
+  Grenze nicht erlaubt) und 910 (widersprüchlicher Import).
+
 ### Geändert
 
+- **Inkompatibel:** Dezimalkonstanten über `MaxLongInt` sind `Int64` statt
+  Real (`3000000000` ist eine Ganzzahl; als `LongInt` zugewiesen Error 76).
+- **Inkompatibel:** `Comp` wird wie in TP als 64-Bit-Ganzzahl gespeichert
+  und beim Speichern gerundet (`C := 1.5` ergibt 2, `C := 2.5` ergibt 2);
+  Records und Dateien mit `Comp` haben das Layout von TP.
+- Die Laufzeit deklariert ihre WASI- und `gojs`-Aufrufe selbst mit
+  `external`; die fest eingebauten Intrinsics dafür sind entfernt.
 - Interne Bezeichner der Laufzeit (`rtl/*.pas`) und der Go-Tests sind
   englisch; neue Arbeitsregel: Bezeichner englisch, Kommentare und Doku
   deutsch. Gemeinsame Hilfsroutinen stehen einmal in der System-Unit

@@ -4,6 +4,7 @@
 package codegen
 
 import (
+	"math"
 	"path"
 
 	"github.com/lehrcode/wasmpascal/compiler/internal/analysis"
@@ -66,27 +67,40 @@ func Generate(m *ir.Module, opts Options) []byte {
 	g := &generator{m: m, mod: mod, opts: opts, funcIndex: map[*ir.Func]uint32{}, hostIndex: map[*ir.Host]uint32{},
 		spill: map[*ir.Var]int64{}, frameSize: map[*ir.Func]int64{}, stateSlot: map[*ir.Func]int64{}}
 
-	// Importe in Reihenfolge der ersten Verwendung
+	// Importe in Reihenfolge der ersten Verwendung: Aufrufe, dann Einträge
+	// der Funktionstabelle (external-Routinen, Etappe 17)
+	addImport := func(h *ir.Host) {
+		if _, seen := g.hostIndex[h]; !seen {
+			g.hostIndex[h] = uint32(len(mod.Imports))
+			mod.Imports = append(mod.Imports, wasm.Import{
+				Module: h.Module, Name: h.Name,
+				Type: mod.TypeIndex(wasm.FuncType{Params: valTypes(h.Params), Results: valTypes(h.Result)}),
+			})
+		}
+	}
 	for _, f := range m.Funcs {
 		for _, b := range f.Blocks {
 			for _, in := range b.Instrs {
 				if hc, ok := in.(ir.HostCall); ok {
-					if _, seen := g.hostIndex[hc.Fn]; !seen {
-						g.hostIndex[hc.Fn] = uint32(len(mod.Imports))
-						mod.Imports = append(mod.Imports, wasm.Import{
-							Module: hc.Fn.Module, Name: hc.Fn.Name,
-							Type: mod.TypeIndex(wasm.FuncType{Params: valTypes(hc.Fn.Params), Results: valTypes(hc.Fn.Result)}),
-						})
-					}
+					addImport(hc.Fn)
 				}
 			}
+		}
+	}
+	for _, f := range m.Table {
+		if f.Host != nil {
+			addImport(f.Host)
 		}
 	}
 	for i, f := range m.Funcs {
 		g.funcIndex[f] = uint32(len(mod.Imports) + i)
 	}
 	for _, f := range m.Table {
-		mod.Table = append(mod.Table, g.funcIndex[f])
+		if f.Host != nil {
+			mod.Table = append(mod.Table, g.hostIndex[f.Host])
+		} else {
+			mod.Table = append(mod.Table, g.funcIndex[f])
+		}
 	}
 	mod.NeedTable = len(m.Sigs) > 0
 
@@ -158,6 +172,8 @@ func valType(t ir.ValType) wasm.ValType {
 		return wasm.F64
 	case ir.I64:
 		return wasm.I64
+	case ir.F32:
+		return wasm.F32
 	}
 	return wasm.I32
 }
@@ -187,7 +203,9 @@ func (g *generator) layout(f *ir.Func) {
 				v.Storage = ir.Frame
 			case v.Temp:
 				v.Storage = ir.Local
-			case !v.Scalar || v.Addressed || g.opts.ForceFrame:
+			case !v.Scalar || v.Addressed || g.opts.ForceFrame || v.Mem == ir.MemComp:
+				// Comp-Variablen liegen im Speicher, damit Int64 ↔ Comp
+				// exakt bleibt (Etappe 17)
 				v.Storage = ir.Frame
 			default:
 				v.Storage = ir.Local
@@ -225,6 +243,9 @@ type funcGen struct {
 	frameSize int64
 	st        uint32 // Zustandsvariable der Dispatch-Schleife
 	loopDepth uint32 // Tiefe des Schleifenkopfs im aktuellen Segment
+	// compTmp ist ein f64-Hilfslocal für compBits (bei Bedarf angelegt).
+	compTmp    uint32
+	hasCompTmp bool
 }
 
 func (g *generator) function(f *ir.Func) *wasm.Func {
@@ -379,6 +400,11 @@ func (fg *funcGen) loadOp(m ir.MemType, off int64) {
 		c.Op(wasm.OpF64PromoteF32)
 	case ir.MemF64:
 		c.Mem(wasm.OpF64Load, 3, uint32(off))
+	case ir.MemI64:
+		c.Mem(wasm.OpI64Load, 3, uint32(off))
+	case ir.MemComp:
+		c.Mem(wasm.OpI64Load, 3, uint32(off))
+		c.Op(wasm.OpF64ConvertI64S)
 	}
 }
 
@@ -396,7 +422,37 @@ func (fg *funcGen) storeOp(m ir.MemType, off int64) {
 		c.Mem(wasm.OpF32Store, 2, uint32(off))
 	case ir.MemF64:
 		c.Mem(wasm.OpF64Store, 3, uint32(off))
+	case ir.MemI64:
+		c.Mem(wasm.OpI64Store, 3, uint32(off))
+	case ir.MemComp:
+		fg.compBits()
+		c.Mem(wasm.OpI64Store, 3, uint32(off))
 	}
+}
+
+// compBits wandelt den f64-Wert oben auf dem Stack in die i64-Darstellung
+// von Comp: zur nächsten Ganzzahl (Gleichstand zur geraden, f64.nearest),
+// außerhalb von -2^63..2^63 und für NaN $8000000000000000 („indefinite“).
+// i64.trunc_f64_s allein würde dort einen Trap auslösen.
+func (fg *funcGen) compBits() {
+	c := &fg.code
+	if !fg.hasCompTmp {
+		fg.compTmp = uint32(len(fg.fn.Params)) + uint32(len(fg.locals))
+		fg.locals = append(fg.locals, wasm.F64)
+		fg.hasCompTmp = true
+	}
+	c.Index(wasm.OpLocalTee, fg.compTmp)
+	c.F64Const(0x1p63)
+	c.Op(wasm.OpF64Lt)
+	c.Index(wasm.OpLocalGet, fg.compTmp)
+	c.F64Const(-0x1p63)
+	c.Op(wasm.OpF64Ge, wasm.OpI32And)
+	c.Block(wasm.OpIf, byte(wasm.I64))
+	c.Index(wasm.OpLocalGet, fg.compTmp)
+	c.Op(wasm.OpF64Nearest, wasm.OpI64TruncF64S)
+	c.Op(wasm.OpElse)
+	c.I64Const(math.MinInt64)
+	c.Op(wasm.OpEnd)
 }
 
 // frameBase legt die Frame-Adresse der Funktion target auf den Stack: die
@@ -464,6 +520,11 @@ var binOps = map[ir.Op]byte{
 	ir.AddF: wasm.OpF64Add, ir.SubF: wasm.OpF64Sub, ir.MulF: wasm.OpF64Mul, ir.DivF: wasm.OpF64Div,
 	ir.EqF: wasm.OpF64Eq, ir.NeF: wasm.OpF64Ne, ir.LtF: wasm.OpF64Lt, ir.LeF: wasm.OpF64Le,
 	ir.GtF: wasm.OpF64Gt, ir.GeF: wasm.OpF64Ge,
+	ir.AddL: wasm.OpI64Add, ir.SubL: wasm.OpI64Sub, ir.MulL: wasm.OpI64Mul, ir.DivL: wasm.OpI64DivS,
+	ir.RemL: wasm.OpI64RemS, ir.AndL: wasm.OpI64And, ir.OrL: wasm.OpI64Or, ir.XorL: wasm.OpI64Xor,
+	ir.ShlL: wasm.OpI64Shl, ir.ShrL: wasm.OpI64ShrU,
+	ir.EqL: wasm.OpI64Eq, ir.NeL: wasm.OpI64Ne, ir.LtL: wasm.OpI64LtS, ir.LeL: wasm.OpI64LeS,
+	ir.GtL: wasm.OpI64GtS, ir.GeL: wasm.OpI64GeS,
 }
 
 var unOps = map[ir.Op][]byte{
@@ -479,6 +540,10 @@ var unOps = map[ir.Op][]byte{
 	ir.RoundF32: {wasm.OpF32DemoteF64, wasm.OpF64PromoteF32},
 	ir.ExtS64:   {wasm.OpI64ExtendI32S},
 	ir.ExtU64:   {wasm.OpI64ExtendI32U},
+	ir.EqzL:     {wasm.OpI64Eqz},
+	ir.WrapL:    {wasm.OpI32WrapI64},
+	ir.LToF:     {wasm.OpF64ConvertI64S},
+	ir.ToF32:    {wasm.OpF32DemoteF64},
 }
 
 func (fg *funcGen) expr(e ir.Expr) {
@@ -486,6 +551,8 @@ func (fg *funcGen) expr(e ir.Expr) {
 	switch e := e.(type) {
 	case ir.IntConst:
 		c.I32Const(e.V)
+	case ir.Int64Const:
+		c.I64Const(e.V)
 	case ir.FloatConst:
 		c.F64Const(e.V)
 	case ir.Get:
@@ -507,6 +574,10 @@ func (fg *funcGen) expr(e ir.Expr) {
 		c.Op(binOps[e.Op])
 	case ir.Un:
 		fg.expr(e.X)
+		if e.Op == ir.FToL {
+			fg.compBits()
+			return
+		}
 		c.Op(unOps[e.Op]...)
 	case ir.FrameBase:
 		fg.frameBase(e.F)
@@ -542,8 +613,12 @@ func (fg *funcGen) set(v *ir.Var, push func()) {
 	c := &fg.code
 	if v.Storage == ir.Local && (v.Owner == nil || v.Owner == fg.fn) {
 		push()
-		if v.Mem == ir.MemF32 {
+		switch v.Mem {
+		case ir.MemF32:
 			c.Op(unOps[ir.RoundF32]...)
+		case ir.MemComp: // wie beim Speichern runden
+			fg.compBits()
+			c.Op(wasm.OpF64ConvertI64S)
 		}
 		c.Index(wasm.OpLocalSet, fg.local[v])
 		return
@@ -615,7 +690,18 @@ func (fg *funcGen) instr(in ir.Instr) {
 			fg.setPos(in.Pos)
 		}
 	case ir.HostCall:
-		fg.call(in.Args, in.Dst, func() { c.Index(wasm.OpCall, fg.g.hostIndex[in.Fn]) }, len(in.Fn.Result) > 0)
+		fg.call(in.Args, in.Dst, func() {
+			c.Index(wasm.OpCall, fg.g.hostIndex[in.Fn])
+			// Single (f32) und Comp (i64) kommen als f64 in Pascal an
+			if len(in.Fn.Result) == 1 {
+				switch {
+				case in.Fn.Result[0] == ir.F32:
+					c.Op(wasm.OpF64PromoteF32)
+				case in.Fn.Result[0] == ir.I64 && in.Dst != nil && in.Dst.VT == ir.F64:
+					c.Op(wasm.OpF64ConvertI64S)
+				}
+			}
+		}, len(in.Fn.Result) > 0)
 	default:
 		panic("codegen: unbekannte Anweisung")
 	}

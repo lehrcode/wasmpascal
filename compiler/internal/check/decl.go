@@ -230,6 +230,9 @@ func (c *checker) typeExpr(e ast.TypeExpr) types.Type {
 		if !types.IsOrdinal(lo.Type) || !types.IsOrdinal(hi.Type) {
 			c.fail(e.Pos(), source.ErrInvalidSubrangeBase, "")
 		}
+		if types.IsInt64(lo.Type) || types.IsInt64(hi.Type) {
+			c.fail(e.Pos(), source.ErrOrdinalTypeExpected, "") // kein Teilbereich von Int64
+		}
 		base := host(lo.Type)
 		if charPair(lo.Type, hi.Type) {
 			base = types.WideChar
@@ -264,7 +267,7 @@ func (c *checker) typeExpr(e ast.TypeExpr) types.Type {
 		return r
 	case *ast.SetType:
 		elem := c.typeExpr(e.Elem)
-		if !types.IsOrdinal(elem) {
+		if !types.IsOrdinal(elem) || types.IsInt64(elem) {
 			c.fail(e.Elem.Pos(), source.ErrOrdinalTypeExpected, "")
 		}
 		if lo, hi := types.Bounds(elem); lo < 0 || hi > 255 {
@@ -304,7 +307,7 @@ func (c *checker) typeExpr(e ast.TypeExpr) types.Type {
 
 func (c *checker) arrayType(e *ast.ArrayType, dim int) types.Type {
 	idx := c.typeExpr(e.Index[dim])
-	if !types.IsOrdinal(idx) {
+	if !types.IsOrdinal(idx) || types.IsInt64(idx) {
 		c.fail(e.Index[dim].Pos(), source.ErrOrdinalTypeExpected, "")
 	}
 	var elem types.Type
@@ -501,12 +504,104 @@ func (c *checker) procDecl(d *ast.ProcDecl, intf bool) {
 		}
 	}
 	c.info.Procs[d] = p
+	if d.External != nil {
+		c.external(d, p)
+		return
+	}
 	if intf || d.Forward {
 		p.Forward = true
 		return
 	}
 	p.Defined = true
 	c.procBody(p, d)
+}
+
+// external prüft eine external-Routine (Etappe 17): oberste Ebene, nur
+// einfache Typen an der Grenze (909), ein Import mit gleicher Signatur
+// (910), Modul gojs nur in der System-Unit (910), unter gojs nur in der
+// System-Unit (902).
+func (c *checker) external(d *ast.ProcDecl, p *types.Proc) {
+	e := d.External
+	if c.proc != nil {
+		c.fail(d.Name.Pos(), source.ErrNotSupported, "external in nested routine")
+	}
+	name := e.Name
+	if name == "" {
+		name = d.Name.Text
+	}
+	var sig []byte
+	for i, prm := range p.Sig.Params {
+		k, ok := boundaryKind(prm.Type, prm.Mode)
+		if !ok {
+			c.fail(paramPos(d, i), source.ErrExternalType, "")
+		}
+		sig = append(sig, k)
+	}
+	sig = append(sig, ':')
+	if p.IsFunc {
+		k, ok := boundaryKind(p.Sig.Result, types.ByValue)
+		if !ok || p.Sig.Result == nil {
+			c.fail(d.Result.Pos(), source.ErrExternalType, "")
+		}
+		sig = append(sig, k)
+	}
+	if e.Module == "gojs" && !c.inSystem {
+		c.fail(e.Pos(), source.ErrExternalConflict, "module gojs is reserved")
+	}
+	key := e.Module + "\x00" + name
+	if old, ok := c.imports[key]; ok && old != string(sig) {
+		c.fail(e.Pos(), source.ErrExternalConflict, "%s.%s", e.Module, name)
+	}
+	c.imports[key] = string(sig)
+	if c.goJS && !c.inSystem {
+		c.fail(e.Pos(), source.ErrNotSupported, "external with target gojs")
+	}
+	p.External = &types.External{Module: e.Module, Name: name}
+	p.Defined = true
+}
+
+// boundaryKind liefert die WASM-Darstellung eines Parameters bzw.
+// Ergebnisses an der Grenze zum Host: i (i32), I (i64), f (f32), F (f64).
+// var-Parameter, untypisierte Parameter und const-Parameter mit
+// strukturiertem Typ kommen als Adresse (i). Strukturierte Werte und
+// prozedurale Typen sind nicht erlaubt.
+func boundaryKind(t types.Type, mode types.ParamMode) (byte, bool) {
+	if mode == types.ByVar || t == nil {
+		return 'i', true
+	}
+	switch t.(type) {
+	case *types.Pointer:
+		return 'i', true
+	case *types.String, *types.Record, *types.Array, *types.Set:
+		return 'i', mode == types.ByConst
+	case *types.ProcType, *types.File:
+		return 0, false
+	}
+	switch {
+	case types.IsInt64(t), types.Is(t, types.Comp):
+		return 'I', true
+	case types.Is(t, types.Single):
+		return 'f', true
+	case types.IsReal(t):
+		return 'F', true
+	case types.IsOrdinal(t):
+		return 'i', true
+	}
+	return 0, false
+}
+
+// paramPos liefert die Stelle des i-ten Parameters einer Deklaration.
+func paramPos(d *ast.ProcDecl, i int) source.Pos {
+	for _, g := range d.Params {
+		if i < len(g.Names) {
+			if g.Type != nil {
+				return g.Type.Pos()
+			}
+			return g.Names[i].Pos()
+		}
+		i -= len(g.Names)
+	}
+	return d.Name.Pos()
 }
 
 func (c *checker) procBody(p *types.Proc, d *ast.ProcDecl) {

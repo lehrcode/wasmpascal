@@ -36,6 +36,15 @@ type Options struct {
 	// kann. Die Ortszeit der Unit Dos kommt aus WASMPASCAL_UTC_OFFSET
 	// (Minuten östlich von UTC); fehlt die Variable, gilt UTC.
 	Env []string
+	// Imports stellt die external-Routinen des Programms bereit (Etappe 17):
+	// Modul → Name → Go-Funktion. Erlaubt sind Parameter und Ergebnis vom Typ
+	// int32, uint32, int64, uint64, float32 und float64 (höchstens ein
+	// Ergebnis), davor optional context.Context und Memory. Pascal-Typen an
+	// der Grenze: Ordinaltypen, Zeiger und var-Parameter als 32 Bit, Int64
+	// und Comp als 64 Bit, Single als float32, Real als float64. Die Module
+	// wasi_snapshot_preview1 und gojs sind reserviert. Fehlt ein Import des
+	// Programms, liefert Run vor dem Start einen Fehler.
+	Imports map[string]map[string]any
 
 	// walltime ersetzt die Uhr (nur für Tests im Paket).
 	walltime sys.Walltime
@@ -130,9 +139,16 @@ func Run(ctx context.Context, wasm []byte, opts Options) (exitCode int, err erro
 		cfg = cfg.WithStderr(opts.Stderr)
 	}
 
+	compiled, err := rt.CompileModule(ctx, wasm)
+	if err != nil {
+		return 0, fmt.Errorf("runner: %w", err)
+	}
+	if err := instantiateImports(ctx, rt, compiled, opts.Imports); err != nil {
+		return 0, err
+	}
 	// _start selbst aufrufen: Nach einem Trap bleibt das Modul so lesbar
 	// (Laufzeitfehler-Globalen).
-	mod, err := rt.InstantiateWithConfig(ctx, wasm, cfg.WithStartFunctions())
+	mod, err := rt.InstantiateModule(ctx, compiled, cfg.WithStartFunctions())
 	if err != nil {
 		return 0, fmt.Errorf("runner: %w", err)
 	}

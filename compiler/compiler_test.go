@@ -144,3 +144,25 @@ func TestIncludeLimitAcrossUnits(t *testing.T) {
 		t.Errorf("\n got: %s\nwant: %s", d.Error(), want)
 	}
 }
+
+// external (Etappe 17): unter gojs nur in der System-Unit; derselbe Import
+// aus mehreren Deklarationen steht einmal im Modul.
+func TestExternal(t *testing.T) {
+	const src = `program P;
+function A(X: LongInt): LongInt; external 'host' name 'f';
+function B(Y: LongInt): LongInt; external 'host' name 'f';
+begin
+  WriteLn(A(1) + B(2))
+end.
+`
+	fsys := fstest.MapFS{"p.pas": {Data: []byte(src)}}
+	res, err := Compile(context.Background(), "p.pas", Options{FS: fsys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := bytes.Count(res.Wasm, []byte("\x04host\x01f")); n != 1 {
+		t.Errorf("Import host.f %d-mal im Modul", n)
+	}
+	_, err = Compile(context.Background(), "p.pas", Options{FS: fsys, Target: TargetGoJS})
+	wantDiag(t, err, 902)
+}

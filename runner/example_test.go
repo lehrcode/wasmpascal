@@ -80,3 +80,37 @@ end.
 	}
 	// Output: Hallo, Ada (2 Variablen)
 }
+
+// Ein Programm ruft Go-Funktionen als external-Routinen auf: Werte direkt,
+// Strings über die Adresse und Memory.
+func ExampleRun_imports() {
+	src := fstest.MapFS{"gruss.pas": {Data: []byte(`program Gruss;
+function Quadrat(X: Int64): Int64; external 'host' name 'square';
+procedure Log(const S: string); external 'host' name 'log';
+begin
+  WriteLn(Quadrat(3000000000));
+  Log('Hallo vom Programm')
+end.
+`)}}
+	res, err := compiler.Compile(context.Background(), "gruss.pas", compiler.Options{FS: src})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	_, err = runner.Run(context.Background(), res.Wasm, runner.Options{
+		Stdout: os.Stdout,
+		Imports: map[string]map[string]any{"host": {
+			"square": func(x int64) int64 { return x * x },
+			"log": func(m runner.Memory, addr uint32) {
+				s, _ := m.ReadShortString(addr)
+				fmt.Println("log:", s)
+			},
+		}},
+	})
+	if err != nil {
+		fmt.Println(err)
+	}
+	// Output:
+	// 9000000000000000000
+	// log: Hallo vom Programm
+}

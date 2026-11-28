@@ -38,6 +38,9 @@ func TestProgramsGoJS(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(strings.TrimSuffix(c, ".pas"), func(t *testing.T) {
+			if exists(h.fsys, strings.TrimSuffix(c, ".pas")+".wasi") {
+				t.Skip("nur WASI (name.wasi)")
+			}
 			t.Parallel()
 			if err := h.check(t.Context(), c, t.TempDir()); err != nil {
 				t.Error(err)

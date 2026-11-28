@@ -133,7 +133,7 @@ func (c *checker) typecast(e *ast.CallExpr, t types.Type) TypeAndValue {
 		return TypeAndValue{Mode: Value, Type: t}
 	case tPtr && xPtr,
 		tPtr && types.IsInteger(x.Type) && x.Type.Size() == 4,
-		xPtr && types.IsInteger(t) && t.Size() == 4:
+		xPtr && types.IsInteger(t) && (t.Size() == 4 || types.IsInt64(t)):
 		return TypeAndValue{Mode: Value, Type: t}
 	case x.Mode == Variable && x.Type.Size() == t.Size():
 		return TypeAndValue{Mode: Variable, Type: t, ReadOnly: x.ReadOnly}
@@ -155,6 +155,8 @@ func truncate(t types.Type, v int64) int64 {
 		return int64(int16(v))
 	case t.Size() == 2:
 		return int64(uint16(v))
+	case t.Size() == 8:
+		return v
 	}
 	return int64(int32(v))
 }
@@ -216,7 +218,7 @@ func (c *checker) stmt(s ast.Stmt) {
 		}
 	case *ast.CaseStmt:
 		x := c.expr(s.X)
-		if !types.IsOrdinal(x.Type) {
+		if !types.IsOrdinal(x.Type) || types.IsInt64(x.Type) {
 			c.fail(s.X.Pos(), source.ErrOrdinalExprExpected, "")
 		}
 		for _, arm := range s.Arms {

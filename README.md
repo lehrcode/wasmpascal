@@ -38,7 +38,9 @@ end.
 - **Sprache:** Turbo Pascal 5.0 mit Units, `goto`, Mengen, Zeigern,
   typisierten Konstanten und prozeduralen Typen (`type TFunc = function(X:
   Real): Real`, Funktionsparameter, Tabellen von Routinen); Exit-Prozeduren
-  über `ExitProc`, auch nach Laufzeitfehlern, und `RunError`. Dazu
+  über `ExitProc`, auch nach Laufzeitfehlern, und `RunError`. `Comp` ist wie
+  in TP eine 64-Bit-Ganzzahl im Speicher. Dazu `Int64`, Host-Funktionen
+  über `external 'modul'` (aus Go mit `runner.Options.Imports`),
   `Result`, `Break`/`Continue`, `Low`/`High`,
   `const`-Parameter, `for … in`, Funktionen mit Record- oder
   Array-Ergebnis, `SmallInt` und `WideChar`. `Integer` hat 32 Bit, `Word`
@@ -136,6 +138,19 @@ case err != nil:
 default:
 	fmt.Println("Exit-Code:", code)
 }
+```
+
+Programme können Funktionen des Hosts aufrufen (`external`, nur WASI); in Go
+stellt `runner.Options.Imports` sie bereit:
+
+```go
+// function Quadrat(X: Int64): Int64; external 'host' name 'square';
+code, err := runner.Run(ctx, res.Wasm, runner.Options{
+	Stdout: os.Stdout,
+	Imports: map[string]map[string]any{"host": {
+		"square": func(x int64) int64 { return x * x },
+	}},
+})
 ```
 
 Das Modul aus `compiler.Compile` (Standardziel WASI Preview 1) läuft auch

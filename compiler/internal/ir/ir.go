@@ -24,7 +24,8 @@ type ValType int
 const (
 	I32 ValType = iota
 	F64
-	I64 // nur für Argumente von WASI-Aufrufen
+	I64 // Int64 (und Comp im Speicher)
+	F32 // nur an der Grenze zu external-Routinen (Single)
 )
 
 // MemType ist die Darstellung eines skalaren Werts im Speicher.
@@ -39,6 +40,8 @@ const (
 	MemI32
 	MemF32
 	MemF64
+	MemI64  // Int64
+	MemComp // Comp: Wert f64, im Speicher i64 (gerundet, außerhalb $8000000000000000)
 )
 
 // Size liefert die Größe in Byte.
@@ -48,7 +51,7 @@ func (m MemType) Size() int64 {
 		return 1
 	case MemI16, MemU16:
 		return 2
-	case MemF64:
+	case MemF64, MemI64, MemComp:
 		return 8
 	}
 	return 4
@@ -114,6 +117,9 @@ type Expr interface {
 // IntConst ist eine i32-Konstante.
 type IntConst struct{ V int32 }
 
+// Int64Const ist eine i64-Konstante.
+type Int64Const struct{ V int64 }
+
 // FloatConst ist eine f64-Konstante.
 type FloatConst struct{ V float64 }
 
@@ -174,13 +180,48 @@ const (
 	RoundF32 // auf Single-Genauigkeit runden (f64 → f32 → f64)
 	ExtS64   // i32 → i64 mit Vorzeichen
 	ExtU64   // i32 → i64 ohne Vorzeichen
+	// 64 Bit (Int64): wie die I-Varianten, Vergleiche liefern i32
+	AddL
+	SubL
+	MulL
+	DivL
+	RemL
+	AndL
+	OrL
+	XorL
+	ShlL
+	ShrL
+	EqL
+	NeL
+	LtL
+	LeL
+	GtL
+	GeL
+	EqzL  // i64 = 0 (i32)
+	WrapL // i64 → i32 (untere 32 Bit)
+	LToF  // i64 → f64
+	FToL  // f64 → i64 wie beim Speichern von Comp (gerundet, außerhalb $8000000000000000)
+	ToF32 // f64 → f32 (Single an external-Routinen)
 )
+
+// Long liefert zur 32-Bit-Ganzzahloperation op die 64-Bit-Variante.
+func Long(op Op) Op {
+	if op >= AddI && op <= GeI {
+		return op - AddI + AddL
+	}
+	if op == EqzI {
+		return EqzL
+	}
+	return op
+}
 
 var opNames = [...]string{
 	"add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr",
 	"eq", "ne", "lt", "le", "gt", "ge",
 	"fadd", "fsub", "fmul", "fdiv", "feq", "fne", "flt", "fle", "fgt", "fge",
 	"eqz", "fneg", "fabs", "fsqrt", "ftrunc", "itof", "ftoi", "ext8", "ext16", "f32", "ext64s", "ext64u",
+	"ladd", "lsub", "lmul", "ldiv", "lrem", "land", "lor", "lxor", "lshl", "lshr",
+	"leq", "lne", "llt", "lle", "lgt", "lge", "leqz", "wrap", "ltof", "ftol", "tof32",
 }
 
 func (o Op) String() string { return opNames[o] }
@@ -253,18 +294,25 @@ func (MemSize) String() string     { return "memsize" }
 func (s SetCmp) String() string    { return fmt.Sprintf("setcmp%d(%s, %s)", s.Op, s.A, s.B) }
 
 func (IntConst) VT() ValType   { return I32 }
+func (Int64Const) VT() ValType { return I64 }
 func (FloatConst) VT() ValType { return F64 }
 func (g Get) VT() ValType      { return g.Var.VT }
 func (Addr) VT() ValType       { return I32 }
 func (l Load) VT() ValType {
-	if l.Mem == MemF32 || l.Mem == MemF64 {
+	switch l.Mem {
+	case MemF32, MemF64, MemComp:
 		return F64
+	case MemI64:
+		return I64
 	}
 	return I32
 }
 func (b Bin) VT() ValType {
-	if b.Op >= AddF && b.Op <= DivF {
+	switch {
+	case b.Op >= AddF && b.Op <= DivF:
 		return F64
+	case b.Op >= AddL && b.Op <= ShrL:
+		return I64
 	}
 	return I32
 }
@@ -272,13 +320,18 @@ func (u Un) VT() ValType {
 	switch u.Op {
 	case NegF, AbsF, SqrtF, TruncF, IntToF, RoundF32:
 		return F64
-	case ExtS64, ExtU64:
+	case ExtS64, ExtU64, FToL:
 		return I64
+	case LToF:
+		return F64
+	case ToF32:
+		return F32
 	}
 	return I32
 }
 
 func (c IntConst) String() string   { return fmt.Sprint(c.V) }
+func (c Int64Const) String() string { return fmt.Sprint(c.V) + "L" }
 func (c FloatConst) String() string { return fmt.Sprint(c.V) }
 func (g Get) String() string        { return g.Var.Name }
 func (a Addr) String() string       { return "&" + a.Var.Name }
@@ -506,6 +559,10 @@ type Func struct {
 	// RTL: Routine der System-Unit; sie lässt die vorgemerkte Quelltextstelle
 	// unverändert, damit Fehler darin die Anweisung des Aufrufers nennen.
 	RTL bool
+	// Host: Die Funktion ist der Import selbst (external-Routine in der
+	// Funktionstabelle, Etappe 17); sie hat keinen Rumpf und steht nur in
+	// Module.Table.
+	Host *Host
 	// HasGoto: Der Kontrollfluss kann irreduzibel sein; die Funktion wird als
 	// Dispatch-Schleife übersetzt.
 	HasGoto bool
@@ -582,7 +639,6 @@ type Module struct {
 	// WASM-Speicher ist ohnehin 0.
 	BSSBase, BSSSize int64
 	StackSize        int64
-	Hosts            []*Host // benutzte Importe in Reihenfolge der ersten Verwendung
 	// SuspendAction führt die Aktion eines Anhaltepunkts aus (rtl:
 	// _SuspendAction); nil ohne System-Unit. ResumeAction (gojs, rtl:
 	// _GoResumeAction) läuft vor dem Fortsetzen und liefert dessen Ergebnis.
@@ -592,7 +648,8 @@ type Module struct {
 	// Export _exit. nil ohne System-Unit.
 	ErrorExit *Func
 	// Table ist die Funktionstabelle für prozedurale Typen: Table[i] hat den
-	// Index i+1, Index 0 ist nil.
+	// Index i+1, Index 0 ist nil. Ein Eintrag mit Host ist der Import selbst
+	// (external-Routine) und steht nicht in Funcs.
 	Table []*Func
 	// Sigs sind die Signaturen indirekter Aufrufe, nach SigKey.
 	Sigs map[string]*FuncSig

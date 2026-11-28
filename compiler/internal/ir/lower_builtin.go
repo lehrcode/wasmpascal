@@ -4,7 +4,6 @@ import (
 	"math"
 	"strings"
 
-	"github.com/lehrcode/wasmpascal/compiler/internal/abi"
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/check"
 	"github.com/lehrcode/wasmpascal/compiler/internal/types"
@@ -25,27 +24,6 @@ func pointee(t types.Type) int64 {
 func (s *fnState) sysVar(name string) Expr {
 	v := s.l.info.SystemIntf.Syms[strings.ToLower(name)].(*types.Var)
 	return Addr{Var: s.l.vars[v]}
-}
-
-// wasiHost liefert den Import zu abi.WASI[i].
-func (l *lowerer) wasiHost(i int) *Host {
-	if h, ok := l.hosts[i]; ok {
-		return h
-	}
-	w := abi.Intrinsics[i]
-	h := &Host{Module: w.Module, Name: w.Import}
-	for _, p := range w.Params {
-		if p == abi.I32 {
-			h.Params = append(h.Params, I32)
-		} else {
-			h.Params = append(h.Params, I64)
-		}
-	}
-	if w.Result {
-		h.Result = []ValType{I32}
-	}
-	l.hosts[i] = h
-	return h
 }
 
 // ioCheck prüft nach einer E/A-Routine unter {$I+} das Ergebnis und bricht
@@ -105,33 +83,10 @@ func (s *fnState) valueAddr(e ast.Expr, t types.Type) Expr {
 
 // builtin übersetzt eine Standardroutine und liefert gegebenenfalls ihr Ergebnis.
 func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
-	arg := func(i int) Expr { return s.expr(args[i]) }
-	if b.ID >= check.BWasiBase {
-		i := int(b.ID - check.BWasiBase)
-		w := abi.Intrinsics[i]
-		var in []Expr
-		for j, a := range args {
-			x := s.expr(a)
-			switch w.Params[j] {
-			case abi.I64S:
-				x = Un{Op: ExtS64, X: x}
-			case abi.I64U:
-				x = Un{Op: ExtU64, X: x}
-			}
-			in = append(in, x)
-		}
-		if !w.Result {
-			s.emit(HostCall{Fn: s.l.wasiHost(i), Args: in})
-			if w.Import == "proc_exit" {
-				s.terminate(Unreachable{})
-			}
-			return nil
-		}
-		r := s.temp(types.LongInt)
-		s.emit(HostCall{Fn: s.l.wasiHost(i), Args: in, Dst: r})
-		return Get{Var: r}
-	}
-
+	// arg liefert ein Argument; Int64 kommt auf 32 Bit abgeschnitten an
+	// (Laufzeitroutinen und Speicheroperationen nehmen LongInt).
+	arg := func(i int) Expr { return s.i32(args[i]) }
+	wide := func(i int) bool { return types.IsInt64(s.typeOf(args[i])) }
 	switch b.ID {
 	// ------------------------------------------------------------ E/A
 	case check.BWrite, check.BWriteLn:
@@ -256,10 +211,11 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 			width = IntConst{V: -1}
 		}
 		var str Expr
-		if types.IsReal(s.typeOf(x)) {
+		switch {
+		case types.IsReal(s.typeOf(x)):
 			str = s.rtlString("_RealStr", s.value(x, types.Real), width, prec)
-		} else {
-			str = s.rtlString("_IntStr", s.expr(x), width)
+		default:
+			str = s.rtlString("_IntStr", widen(s.expr(x)), width)
 		}
 		s.assignString(args[1], str)
 		return nil
@@ -268,14 +224,16 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 		code.Temp, code.Addressed = false, true
 		t := s.typeOf(args[1])
 		var r Expr
-		if types.IsReal(t) {
-			r = s.rtlValue("_ValReal", types.Real, s.strAddr(args[0]), Addr{Var: code})
-		} else {
-			r = s.rtlValue("_ValInt", types.LongInt, s.strAddr(args[0]), Addr{Var: code})
-		}
 		from := types.Type(types.LongInt)
-		if types.IsReal(t) {
+		switch {
+		case types.IsReal(t):
+			r = s.rtlValue("_ValReal", types.Real, s.strAddr(args[0]), Addr{Var: code})
 			from = types.Real
+		case types.IsInt64(t):
+			r = s.rtlValue("_ValInt64", types.Int64, s.strAddr(args[0]), Addr{Var: code})
+			from = types.Int64
+		default:
+			r = s.rtlValue("_ValInt", types.LongInt, s.strAddr(args[0]), Addr{Var: code})
 		}
 		s.storeTo(args[1], s.coerce(r, from, t))
 		s.storeTo(args[2], s.coerce(Get{Var: code}, types.Integer, s.typeOf(args[2])))
@@ -292,6 +250,13 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 			n = arg(1)
 		}
 		t := s.typeOf(args[0])
+		if types.IsInt64(t) {
+			op = Long(op)
+			n = Int64Const{V: 1}
+			if len(args) == 2 {
+				n = widen(s.expr(args[1]))
+			}
+		}
 		if v, ok := s.directVar(args[0]); ok && v.Scalar {
 			s.emit(Set{Var: v, Val: narrow(Bin{Op: op, X: Get{Var: v}, Y: n}, t)})
 			return nil
@@ -434,13 +399,16 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 
 	// ------------------------------------------------------------ Ordinal
 	case check.BOrd:
-		return arg(0)
+		return s.expr(args[0])
 	case check.BChr:
 		return Bin{Op: AndI, X: arg(0), Y: IntConst{V: 255}}
 	case check.BSucc, check.BPred:
 		op := AddI
 		if b.ID == check.BPred {
 			op = SubI
+		}
+		if wide(0) {
+			return Bin{Op: Long(op), X: s.expr(args[0]), Y: Int64Const{V: 1}}
 		}
 		return Bin{Op: op, X: arg(0), Y: IntConst{V: 1}}
 	case check.BOdd:
@@ -450,28 +418,43 @@ func (s *fnState) builtin(at ast.Node, b *types.Builtin, args []ast.Expr) Expr {
 	case check.BLo:
 		return Bin{Op: AndI, X: arg(0), Y: IntConst{V: 255}}
 	case check.BSwap:
+		// TP-ANNAHME: Swap tauscht nur die beiden unteren Bytes, wie bei
+		// 16 Bit; bei Int64 wird in 32 Bit gerechnet und wieder erweitert.
 		g := s.keep(arg(0))
-		return Bin{Op: OrI,
+		var r Expr = Bin{Op: OrI,
 			X: Bin{Op: AndI, X: g, Y: IntConst{V: ^0xFFFF}},
 			Y: Bin{Op: OrI,
 				X: Bin{Op: ShlI, X: Bin{Op: AndI, X: g, Y: IntConst{V: 255}}, Y: IntConst{V: 8}},
 				Y: Bin{Op: AndI, X: Bin{Op: ShrI, X: g, Y: IntConst{V: 8}}, Y: IntConst{V: 255}}}}
+		if wide(0) {
+			r = widen(r)
+		}
+		return r
 
 	// ------------------------------------------------------------ Arithmetik
 	case check.BSqr:
-		x := s.keep(arg(0))
+		if wide(0) {
+			x := s.keep(s.expr(args[0]))
+			return Bin{Op: MulL, X: x, Y: x}
+		}
+		x := s.keep(s.expr(args[0]))
 		if types.IsReal(s.typeOf(args[0])) {
 			return Bin{Op: MulF, X: x, Y: x}
 		}
 		return Bin{Op: MulI, X: x, Y: x}
 	case check.BAbs:
 		if types.IsReal(s.typeOf(args[0])) {
-			return Un{Op: AbsF, X: arg(0)}
+			return Un{Op: AbsF, X: s.expr(args[0])}
 		}
-		x := s.temp(types.LongInt)
-		s.emit(Set{Var: x, Val: arg(0)})
-		s.ifElse(Bin{Op: LtI, X: Get{Var: x}, Y: IntConst{V: 0}},
-			func() { s.emit(Set{Var: x, Val: Bin{Op: SubI, X: IntConst{V: 0}, Y: Get{Var: x}}}) },
+		lt, sub, t := LtI, SubI, types.Type(types.LongInt)
+		var zero Expr = IntConst{V: 0}
+		if wide(0) {
+			lt, sub, t, zero = LtL, SubL, types.Int64, Int64Const{V: 0}
+		}
+		x := s.temp(t)
+		s.emit(Set{Var: x, Val: s.expr(args[0])})
+		s.ifElse(Bin{Op: lt, X: Get{Var: x}, Y: zero},
+			func() { s.emit(Set{Var: x, Val: Bin{Op: sub, X: zero, Y: Get{Var: x}}}) },
 			func() {})
 		return Get{Var: x}
 	case check.BSqrt:
@@ -560,7 +543,7 @@ func (s *fnState) write(args []ast.Expr, ln bool) {
 		case types.Is(t, types.Boolean):
 			s.callRtl("_WriteBool", nil, f, s.expr(x), width)
 		default:
-			s.callRtl("_WriteInt", nil, f, s.expr(x), width)
+			s.callRtl("_WriteInt", nil, f, widen(s.expr(x)), width)
 		}
 	}
 	if ln {
@@ -591,6 +574,8 @@ func (s *fnState) read(args []ast.Expr, ln bool) {
 			s.storeTo(a, s.rtlValue("_ReadChar", types.Char, f))
 		case types.Is(t, types.WideChar):
 			s.storeTo(a, s.coerce(s.rtlValue("_ReadWideChar", types.LongInt, f), types.LongInt, t))
+		case types.IsInt64(t):
+			s.storeTo(a, s.rtlValue("_ReadInt64", types.Int64, f))
 		default:
 			s.storeTo(a, s.coerce(s.rtlValue("_ReadInt", types.LongInt, f), types.LongInt, t))
 		}

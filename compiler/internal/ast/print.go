@@ -318,6 +318,12 @@ func declSx(d Decl) sx {
 			kids = append(kids, l("result", typeSx(d.Result)))
 		}
 		switch {
+		case d.External != nil:
+			ext := []sx{a(fmt.Sprintf("%q", d.External.Module))}
+			if d.External.Name != "" {
+				ext = append(ext, a(fmt.Sprintf("%q", d.External.Name)))
+			}
+			kids = append(kids, la("external", ext))
 		case d.Forward:
 			kids = append(kids, a("forward"))
 		case d.Block != nil:

@@ -3,8 +3,8 @@ package check
 import (
 	"strings"
 
-	"github.com/lehrcode/wasmpascal/compiler/internal/abi"
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
+	"github.com/lehrcode/wasmpascal/compiler/internal/lexer"
 	"github.com/lehrcode/wasmpascal/compiler/internal/source"
 	"github.com/lehrcode/wasmpascal/compiler/internal/types"
 )
@@ -197,9 +197,10 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 			if b.ID == BAbs && x.Mode == Constant {
 				v := x.Val.Int
 				if v < 0 {
-					v = -v
+					res.Mode, res.Val = Constant, c.foldInt(args[0], res.Type, lexer.Minus, 0, v)
+				} else {
+					res.Mode, res.Val = Constant, x.Val
 				}
-				res.Mode, res.Val = Constant, c.checkInt(args[0], v)
 			}
 			return res
 		}
@@ -256,10 +257,14 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 	case BOrd:
 		count(1, 1)
 		x := c.ordExpr(args[0])
-		if x.Mode == Constant {
-			return TypeAndValue{Mode: Constant, Type: types.LongInt, Val: x.Val}
+		t := types.Type(types.LongInt)
+		if types.IsInt64(x.Type) {
+			t = types.Int64
 		}
-		return val(types.LongInt)
+		if x.Mode == Constant {
+			return TypeAndValue{Mode: Constant, Type: t, Val: x.Val}
+		}
+		return val(t)
 	case BOdd:
 		count(1, 1)
 		x := c.intExpr(args[0])
@@ -457,17 +462,6 @@ func (c *checker) builtin(id *ast.Ident, b *types.Builtin, args []ast.Expr, rpar
 		}
 		// Seg ist immer 0 (PLAN.md, Adressfunktionen).
 		return TypeAndValue{Mode: Constant, Type: types.Word, Val: types.IntVal(0)}
-	}
-	if b.ID >= BWasiBase {
-		w := abi.Intrinsics[b.ID-BWasiBase]
-		count(len(w.Params), len(w.Params))
-		for _, a := range args {
-			c.intExpr(a)
-		}
-		if w.Result {
-			return val(types.LongInt)
-		}
-		return none
 	}
 	panic("check: unbekannte Standardroutine " + b.Text())
 }

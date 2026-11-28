@@ -120,6 +120,14 @@ type Proc struct {
 	Result  *Var // implizites Result bei Funktionen
 	Forward bool // deklariert, Rumpf steht noch aus (forward oder Interface)
 	Defined bool // Rumpf vorhanden
+	// External ist bei external-Routinen gesetzt (Etappe 17): Import aus
+	// Modul unter Name.
+	External *External
+}
+
+// External ist der Import einer external-Routine.
+type External struct {
+	Module, Name string
 }
 
 // BuiltinID kennzeichnet eine Standardprozedur oder -funktion.

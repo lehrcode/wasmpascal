@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/lehrcode/wasmpascal/compiler"
+	"github.com/lehrcode/wasmpascal/internal/wasmtest"
 	"github.com/lehrcode/wasmpascal/runner"
 )
 
@@ -146,12 +147,13 @@ func (h harness) result(ctx context.Context, file, dir string) (got, kind string
 	}
 	var out bytes.Buffer
 	code, err := runner.Run(ctx, res.Wasm, runner.Options{
-		Args:   args,
-		Stdin:  stdin,
-		Stdout: &out,
-		Stderr: &out,
-		Dirs:   dirs(dir),
-		Env:    env,
+		Args:    args,
+		Stdin:   stdin,
+		Stdout:  &out,
+		Stderr:  &out,
+		Dirs:    dirs(dir),
+		Env:     env,
+		Imports: wasmtest.Imports(&out),
 	})
 	if err != nil {
 		var rte *runner.RuntimeError

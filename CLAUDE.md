@@ -37,9 +37,11 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
 | --- | --- | --- |
 | Byte, ShortInt, Char, Boolean | `i32` | 1 Byte; jede Zuweisung kürzt auf 8 Bit |
 | Integer, LongInt | `i32` | 4 Byte, beide −2³¹..2³¹−1 (`MaxInt` = 2147483647) |
+| Int64 | `i64` | 8 Byte, −2⁶³..2⁶³−1; rechnet in 64 Bit, sobald ein Operand Int64 ist |
 | SmallInt, Word, WideChar | `i32` | 2 Byte; jede Zuweisung kürzt auf 16 Bit (`SmallInt` mit Vorzeichen) |
 | Aufzählungen, Teilbereiche | `i32` | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen, 2 Byte in 0..65535 bzw. −32768..32767, sonst 4 Byte |
-| Real, Double, Extended, Comp | `f64` | 8 Byte |
+| Real, Double, Extended | `f64` | 8 Byte |
+| Comp | `f64` (Real-Typ) | 8 Byte als `i64`: Speichern rundet zur geraden, außerhalb `$8000000000000000`; Comp-Variablen liegen immer im Speicher |
 | Single | `f32` | 4 Byte |
 | Zeiger, `nil` | `i32` | 4 Byte |
 | Prozedurale Typen | `i32` | 4 Byte: Index in die Funktionstabelle, 0 = `nil`; Aufruf mit `call_indirect` |
@@ -81,14 +83,18 @@ Parser-Golden-Tests: `compiler/internal/parser/testdata/*.pas` → `*.ast`, neu 
 Symbol-Golden-Tests der Typprüfung: `compiler/internal/check/testdata/*.pas` → `*.sym`, neu schreiben mit
 `go test ./compiler/internal/check -update`.
 
-## Pipeline (Stand Etappe 16)
+## Pipeline (Stand Etappe 17)
 
 `source` → `lexer` → `parser` (AST) → `check` (Typprüfung, `check.Info`) → `ir.Lower` (CFG) → `analysis` (anhaltefähige Funktionen) →
 `codegen.Generate` (Ablage, Frames, Static Links; strukturierter Kontrollfluss oder Dispatch-Schleife für
 anhaltefähige Funktionen und `goto`, siehe `codegen/dispatch.go`) → `wasm` (Encoder). Die System-Unit
 `rtl/system.pas` (eingebettet über `rtl.FS`) wird immer mitgeprüft und mitübersetzt; sie enthält die gesamte
-Laufzeit in Pascal; `crt.pas` und `dos.pas` liegen daneben und werden per `uses` gefunden (nach Programmverzeichnis und `-I`). Routinen mit `_` am Anfang ruft der Compiler direkt auf; WASI erreicht die Laufzeit über
-Intrinsics aus `compiler/internal/abi`. Laufzeitroutinen (`Func.RTL`) pflegen die Fehlerstelle nicht.
+Laufzeit in Pascal; `crt.pas` und `dos.pas` liegen daneben und werden per `uses` gefunden (nach Programmverzeichnis und `-I`). Routinen mit `_` am Anfang ruft der Compiler direkt auf; WASI und `gojs` erreicht die Laufzeit über
+eigene `external`-Deklarationen am Anfang des Implementation-Teils (Etappe 17; Modul `gojs` nur dort). Echte Intrinsics
+bleiben nur `_MemGrow`, `_MemSize`, `_HeapBase`, `_RunError`, `_Suspend` und `_GoSetSP`/`_GoArgc`/`_GoArgv`.
+`external`: Aufrufe als `ir.HostCall`, Importe in Reihenfolge der ersten Verwendung; in der Funktionstabelle steht
+der Import selbst, mit Single/Comp an der Grenze eine Hüllfunktion. Host-Funktionen in Go: `runner.Options.Imports`
+(Adapter per Reflection, Speicher über `runner.Memory`). Laufzeitroutinen (`Func.RTL`) pflegen die Fehlerstelle nicht.
 Laufzeitfehler: exportierte Globale `__rt_*` plus Custom Section `wasmpascal.lines`, ausgewertet in
 `runner/rterror.go` bzw. `web/loader.js`; danach Export `_exit` (WASI mit eigener Treiberschleife wie `_start`,
 gojs über `resume` mit Global `globalRoot`).
@@ -100,7 +106,8 @@ Je Ziel getrennt sind Konsole, Eingabe, Uhr, Argumente und Anhaltepunkte (`SysWr
 `web/wasm_exec.js` (Go 1.27.4) und `web/loader.js`; `TestProgramsGoJS` führt alle Testprogramme mit Node aus
 (`web/node-run.js --dir`, übersprungen ohne `node`).
 Umgebung: WASI `environ_get`, unter gojs hinter `argv` (von `wasm_exec.js`); `runner.Options.Env`, Loader-Option `env`,
-Harness `name.env`. Die Unit Dos nimmt die Ortszeit aus `WASMPASCAL_UTC_OFFSET` (Minuten, beim Start gelesen).
+Harness `name.env`; `name.wasi` (leer) lässt `TestProgramsGoJS` ein Programm auslassen (eigene `external`-Routinen,
+deren Test-Importe `internal/wasmtest.Imports` liefert). Die Unit Dos nimmt die Ortszeit aus `WASMPASCAL_UTC_OFFSET` (Minuten, beim Start gelesen).
 
 Browser: `cmd/pascaljs` (nur `GOOS=js GOARCH=wasm`) legt `pascalCompile` an; `web/index.html` ist die Demo
 (Bau und Start in `web/README.md`). `TestWebCompiler` verlangt byte-gleiche Module wie der native Compiler.

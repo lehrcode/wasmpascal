@@ -18,7 +18,7 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-5.0-Quelltext i
 - Es gibt keine Optimierungen. Konstante Ausdrücke werden nur dort ausgewertet, wo die Sprache es verlangt. *Ausnahme ab Etappe 18:* Routinen, die das Programm nicht erreichen kann, kommen nicht ins Modul.
 - Laufzeitfehler beenden das Programm mit `Runtime error NNN at datei.pas(zeile) in Prozedur`, also mit Quelltextposition statt Adresse (siehe Abschnitt Laufzeitfehler mit Zeilennummern).
 
-**Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` und `.OBJ`-Linking, `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount` und (seit Etappe 15) den Routinen für Attribute, Dateizeit, Suche, Pfade und Umgebung; die in TP 5.0 neuen `GetCBreak`, `SetCBreak`, `GetVerify`, `SetVerify` und `SwapVectors` fehlen ebenfalls. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen WhereX, WhereY, Window und KeyPressed (GotoXY nach Rückfrage nachgereicht, über ANSI); ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
+**Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` ohne Modulname und `.OBJ`-Linking (`external 'modul'` gibt es seit Etappe 17), `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount` und (seit Etappe 15) den Routinen für Attribute, Dateizeit, Suche, Pfade und Umgebung; die in TP 5.0 neuen `GetCBreak`, `SetCBreak`, `GetVerify`, `SetVerify` und `SwapVectors` fehlen ebenfalls. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen WhereX, WhereY, Window und KeyPressed (GotoXY nach Rückfrage nachgereicht, über ANSI); ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
 
 **Direktiven:** Unterstützt werden `{$I datei}`, `{$I-}`/`{$I+}` mit `IOResult` sowie `{$DEFINE}`, `{$UNDEF}`, `{$IFDEF}`, `{$IFNDEF}`, `{$IFOPT}`, `{$ELSE}` und `{$ENDIF}` (`{$UNDEF}` und `{$IFOPT}` seit Etappe 1, weil TP 4.0 sie kennt). Von {$M} wird nur die Stackgröße ausgewertet (siehe Größengrenzen). Alle anderen werden ignoriert, auch `{$A-}` (TP 5.0; Records und Arrays sind immer natürlich ausgerichtet), aber für `{$IFOPT}` mitgeführt. Boolesche Ausdrücke werden immer mit Kurzschlussauswertung berechnet (entspricht `{$B-}`).
 
@@ -50,6 +50,8 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-5.0-Quelltext i
 | Strukturierte Funktionsergebnisse | Delphi 1.0 | Funktionen dürfen alle Typen außer Dateien zurückgeben, also auch Records, Arrays und Mengen. Der Ergebnistyp ist ein Typbezeichner. Felder und Elemente des Ergebnisses setzt man über `Result`; `F.x` im Rumpf ist ein rekursiver Aufruf. |
 | `WideChar` | Delphi 2.0 | Ein Unicode-Zeichen bis U+FFFF, 2 Byte; Ordinal- und Zeichentyp ohne Arithmetik; als String eingesetzt UTF-8 (Etappe 14). |
 | `SmallInt` | Delphi | 16 Bit mit Vorzeichen, 2 Byte; jede Zuweisung kürzt auf 16 Bit (Etappe 14). |
+| `Int64` | Delphi 4 | 64 Bit mit Vorzeichen, 8 Byte; 64-Bit-Arithmetik, sobald ein Operand `Int64` ist (Etappe 17). |
+| `external 'modul' [name 'x']` | BP 7, Delphi | Import einer Host-Funktion, nur einfache Typen an der Grenze, nur Ziel WASI (Etappe 17). |
 | `for … in` | Delphi 2005 | Über Arrays (alle Elemente in Indexreihenfolge), Strings (Bytes als `Char`, mit `WideChar`-Laufvariable die UTF-8-Zeichen – eigene Erweiterung, Etappe 14) und Mengen (enthaltene Elemente aufsteigend). Die Schleifenvariable ist im Rumpf schreibgeschützt. Keine Enumeratoren, da es keine Klassen gibt. |
 
 Bewusst nicht aufgenommen: offene Array-Parameter (`array of T`) und Standardwerte für Parameter.
@@ -161,7 +163,7 @@ compiler/           Öffentliche API: Compile, Check, Options, Result, Diagnosti
     analysis/       Aufrufgraph, Anhaltefähigkeit, adressierte Variablen
     codegen/        IR → WASM-Funktionen (strukturiert oder Zustandsmaschine)
     wasm/           Binär-Encoder (Module, Sections, LEB128, Instruktionen)
-    abi/            Ziele wasi und gojs
+    abi/            Ziele wasi und gojs (entfällt mit Etappe 17)
 rtl/                Laufzeit in Pascal: system.pas, crt.pas, dos.pas; rtl.go exportiert rtl.FS (go:embed)
 runner/             Öffentliche API: Run, Options; wazero-Host, Dateisystem
 web/                Browser-Demo: index.html, Loader, xterm.js-Anbindung, Node-Werkzeuge
@@ -183,7 +185,9 @@ Alle skalaren Typen werden auf WASM-Werttypen abgebildet. Aggregate liegen im li
 | Integer | `i32` | 4 Byte, Bereich wie LongInt (`MaxInt` = 2147483647) |
 | LongInt | `i32` | 4 Byte |
 | Aufzählungen, Teilbereiche | `i32` | 1 Byte, wenn alle Werte in 0..255 bzw. −128..127 passen, 2 Byte in 0..65535 bzw. −32768..32767, sonst 4 Byte (wie TP) |
-| Real, Double, Extended, Comp | `f64` | 8 Byte |
+| Real, Double, Extended | `f64` | 8 Byte |
+| Int64 | `i64` | 8 Byte (seit Etappe 17) |
+| Comp | `f64` in Ausdrücken | 8 Byte als `i64`, beim Speichern gerundet (seit Etappe 17; vorher `f64`) |
 | Single | `f32` | 4 Byte |
 | Zeiger, `nil` | `i32` | 4 Byte |
 | `string[n]` / `string` | Adresse (`i32`) | immer 256 Byte: Längenbyte + 255 Bytes UTF-8; beim Zuweisen auf `n` gekürzt |
@@ -1426,7 +1430,7 @@ Pascal 5.0; alle bisherigen Tests sind grün.
 
 - *Erledigt (Nov 27, 2026).* Prozedurale Typen in AST (`ast.ProcType`), Parser, `types.ProcType`, Typprüfung (`autoCall`, `operand`, `procRef`, `check.CallIndirect`, `Info.ProcRefs`), IR (`CallIndirect`, `FuncSig`, `Module.Table`/`Sigs`), Analyse und Codegenerator (Table- und Element-Abschnitt, `call_indirect`, Index im Frame); `RunError`, `ExitProc`, `ErrorAddr`, `_Halt`/`_ErrorExit`/`Terminate` in `rtl/system.pas`, Export `_exit` mit Auswertung in `runner` und `web/loader.js`; `VER50`, Schalter `A`. Abweichungen von den Hinweisen oben: (1) Der Tabellenindex steht schon beim Lowering fest (Reihenfolge der ersten Verwendung), deshalb braucht `encode` keinen Platzhalter; (2) `_ErrorExit` kehrt nie zurück, sondern endet wie `Halt` über `SuspendHalt`; nach einem Laufzeitfehler kodiert der Exit-Code `ExitCode * 2 + 1` (Meldung) bzw. `ExitCode * 2` (`ErrorAddr = nil`), so wirken auch `Halt` in einer Exit-Prozedur und Anhaltepunkte ohne eigenes Protokoll; (3) das Programmende ist `_Halt(0)` (TP-ANNAHME: ein im Hauptprogramm gesetzter `ExitCode` zählt nicht); (4) `RunError` setzt Bit 16 der Fehlernummer, damit `RunError(0)` kein echter Trap ist; (5) Aufrufe als Anweisung auch über Index und Zeiger (`A[1];`, `P^;`), Error 91 sonst erst in der Typprüfung; (6) Error 142 für den Aufruf einer Variable, die keine Prozedurvariable ist (bisher 143), `@` und `Addr` auf verschachtelte Routinen ergeben 143 (bisher 83); (7) `Addr(Routine)` wie `@Routine`. Tests: `testdata/etappe16/` (14 Programme, 8 Fehlerfälle, WASI, `gojs`, Frame-Ablage), Golden-Tests `38_prozedurtypen` und `prozedurtypen.sym`, `TestMarkSuspendableIndirect`.
 
-### Etappe 17: `Int64`, `external` und Laufzeit ohne Intrinsics
+### Etappe 17: `Int64`, `external` und Laufzeit ohne Intrinsics ✅
 
 **Ziel:** Programme können Funktionen des Hosts als `external` aufrufen,
 und die Laufzeit erreicht WASI und `gojs` auf demselben Weg statt über die
@@ -1581,6 +1585,8 @@ procedure HostLog(P: Pointer; Len: LongInt); external 'host';  { Importname = Pa
 Programm ruft eigene Host-Funktionen über `runner.Options.Imports` auf; die
 Laufzeit enthält keine Intrinsics mehr für WASI und `gojs`, und alle
 bisherigen Tests sind unter WASI, `gojs` und mit dem Browser-Compiler grün.
+
+- *Erledigt (Nov 28, 2026).* `types.Int64` (`KInt64`, `IsInteger` reicht bis dahin), `host`/`intResult`/`compatible`/`isAssignable` für `Int64`, Konstanten und 64-Bit-Faltung (`foldInt` mit `math/big`); IR mit `i64` als vollwertigem Werttyp (`Int64Const`, `MemI64`, L-Operationen, `widen`/`wrap`), `MemComp` mit Rundung im Codegenerator (`compBits`: `f64.nearest` plus Bereichsprüfung); RTL: ein `_IntStr`/`_WriteInt` für alle Ganzzahlen (Parameter `Int64`), `_ValInt64` als Kern von `_ValInt`, `_ReadInt64`, gemeinsames `ReadNumber`. `external` in Parser, Typprüfung (909, 910, 902) und IR (`ir.HostCall`, Import je Modul + Name einmal, `Func.Host` für Tabelleneinträge, Hüllfunktion bei Single/Comp); `runner.Options.Imports` mit eigener Schnittstelle `runner.Memory` (Adapter per Reflection über `WithGoModuleFunction`), Prüfung aller Importe vor dem Start. `rtl/system.pas` deklariert alle 20 WASI- und 14 `gojs`-Aufrufe selbst; `compiler/internal/abi` ist entfernt. Abweichungen von den Hinweisen: Der Modulvergleich vor/nach der Umstellung entfiel, weil die RTL in derselben Etappe auf `Int64` umgestellt wurde und die Module sich deshalb ohnehin ändern; abgesichert ist die Umstellung durch alle bisherigen Tests (WASI, `gojs`, Frame-Ablage, `TestWebCompiler`). `Low(Int64) div -1` ergibt wie bei `LongInt` 207, nicht 200 (offene Frage). Tests: `testdata/etappe17/` (`int64`, `comp`, `extern` mit `extern.wasi`, 8 Fehlerfälle), `TestExternal`, `TestRunImports`, `ExampleRun_imports`, neue Fälle in `TestExprTypes`.
 
 ### Etappe 18: Ungenutzten Code entfernen
 

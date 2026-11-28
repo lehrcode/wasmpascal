@@ -1,7 +1,6 @@
 package check
 
 import (
-	"github.com/lehrcode/wasmpascal/compiler/internal/abi"
 	"github.com/lehrcode/wasmpascal/compiler/internal/types"
 )
 
@@ -103,9 +102,6 @@ const (
 	BGoArgv
 	BRunErrorTP // RunError[(Code)] aus TP 5.0
 	bUnsupported
-
-	// BWasiBase + i ist abi.Intrinsics[i].
-	BWasiBase types.BuiltinID = 1000
 )
 
 var builtinProcs = []struct {
@@ -154,7 +150,7 @@ func newUniverse() *types.Scope {
 	u := types.NewScope(types.UniverseScope, nil, nil)
 	for _, t := range []*types.Basic{
 		types.Boolean, types.Char, types.WideChar, types.ShortInt, types.Byte, types.SmallInt, types.Integer, types.Word,
-		types.LongInt, types.Real, types.Single, types.Double, types.Extended, types.Comp,
+		types.LongInt, types.Int64, types.Real, types.Single, types.Double, types.Extended, types.Comp,
 	} {
 		u.Insert(types.NewTypeName(lower(t.String()), t.String(), noPos, t))
 	}
@@ -170,9 +166,6 @@ func newUniverse() *types.Scope {
 	// System-Unit (rtl/system.pas).
 	for _, b := range builtinProcs {
 		u.Insert(types.NewBuiltin(b.name, b.id, b.isFunc))
-	}
-	for i, w := range abi.Intrinsics {
-		u.Insert(types.NewBuiltin(w.Name, BWasiBase+types.BuiltinID(i), w.Result))
 	}
 	for _, name := range unsupported {
 		b := types.NewBuiltin(name, bUnsupported, false)

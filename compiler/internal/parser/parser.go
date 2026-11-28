@@ -371,10 +371,14 @@ func (p *parser) procDecl(intf bool) ast.Decl {
 		d.Result = p.paramType()
 	}
 	p.expect(lexer.Semicolon)
+	if p.isDirective("external") && p.peek().Kind == lexer.String {
+		d.External = p.external()
+		return d
+	}
 	if intf {
 		return d
 	}
-	p.unsupported() // external, interrupt, inline
+	p.unsupported() // external ohne Modul, interrupt, inline
 	if p.isDirective("forward") {
 		p.next()
 		p.expect(lexer.Semicolon)
@@ -384,6 +388,20 @@ func (p *parser) procDecl(intf bool) ast.Decl {
 	d.Block = p.block()
 	p.expect(lexer.Semicolon)
 	return d
+}
+
+// external liest external 'modul' [name 'importname'] ; (das aktuelle
+// Token ist external).
+func (p *parser) external() *ast.External {
+	e := &ast.External{Base: ast.At(p.tok.Pos)}
+	p.next()
+	e.Module = p.expect(lexer.String).Value
+	if p.isDirective("name") {
+		p.next()
+		e.Name = p.expect(lexer.String).Value
+	}
+	p.expect(lexer.Semicolon)
+	return e
 }
 
 func (p *parser) params() []*ast.ParamGroup {

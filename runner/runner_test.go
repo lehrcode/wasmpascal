@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
+	"github.com/lehrcode/wasmpascal/compiler"
 	"github.com/lehrcode/wasmpascal/internal/wasmtest"
 	"github.com/lehrcode/wasmpascal/runner"
 )
@@ -90,6 +93,44 @@ func TestRuntimeErrorMessage(t *testing.T) {
 	for _, tt := range tests {
 		if got := tt.e.Error(); got != tt.want {
 			t.Errorf("Error() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
+// external-Routinen: Imports stellt sie bereit; ein fehlender Import oder ein
+// reserviertes Modul ergibt einen Fehler vor dem Start (Etappe 17).
+func TestRunImports(t *testing.T) {
+	const src = `program P;
+function Twice(X: LongInt): LongInt; external 'host' name 'twice';
+begin
+  WriteLn(Twice(21))
+end.
+`
+	res, err := compiler.Compile(t.Context(), "p.pas", compiler.Options{FS: fstest.MapFS{"p.pas": {Data: []byte(src)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if _, err := runner.Run(t.Context(), res.Wasm, runner.Options{Stdout: &out,
+		Imports: map[string]map[string]any{"host": {"twice": func(x int32) int32 { return 2 * x }}}}); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "42\n" {
+		t.Errorf("Ausgabe %q", out.String())
+	}
+	for _, c := range []struct {
+		name    string
+		imports map[string]map[string]any
+		want    string
+	}{
+		{"fehlt", nil, "host.twice (i32) -> (i32) fehlt"},
+		{"signatur", map[string]map[string]any{"host": {"twice": func(x float64) float64 { return x }}}, "Programm erwartet"},
+		{"reserviert", map[string]map[string]any{"gojs": {"x": func() {}}}, "reserviert"},
+		{"kein func", map[string]map[string]any{"host": {"twice": 42}}, "keine Funktion"},
+	} {
+		_, err := runner.Run(t.Context(), res.Wasm, runner.Options{Imports: c.imports})
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, erwartet %q", c.name, err, c.want)
 		}
 	}
 }

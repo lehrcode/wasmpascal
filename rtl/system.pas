@@ -9,8 +9,6 @@
     _MemSize        Speichergroesse in Seiten zu 64 KB
     _MemGrow(n)     memory.grow, liefert -1 bei Fehlschlag
     _RunError(n)    Laufzeitfehler n an der Stelle des Aufrufers (auch RunError)
-    _FdWrite usw.   WASI-Aufrufe (compiler/internal/abi), Ergebnis: errno
-    _GoWasmWrite    Importe aus wasm_exec.js fuer das Ziel gojs (Go-Stack sp)
     _Suspend(g, a)  Anhaltepunkt des Schedulers
 
   Nur die "unterste Schicht" unterscheidet sich zwischen den Zielen; sie ist
@@ -69,6 +67,55 @@ function _DirNext(Handle: LongInt; var Cookie: LongInt; var Name: string; var Ki
 procedure _DirClose(Handle: LongInt);
 
 implementation
+
+{ ------------------------------------------------------------ Importe
+
+  Die Laufzeit erreicht den Host ueber external-Routinen (Etappe 17).
+  Ergebnisse der WASI-Aufrufe sind Fehlernummern (errno, 0 = Erfolg). Die
+  WASI-Aufrufe gelten unter beiden Zielen (unter gojs stellt web/loader.js
+  Dateien und Verzeichnisse bereit). }
+
+function _FdWrite(Fd, Iovs, IovsLen, NWritten: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'fd_write';
+function _FdRead(Fd, Iovs, IovsLen, NRead: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'fd_read';
+function _FdClose(Fd: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'fd_close';
+function _FdSeek(Fd: LongInt; Offset: Int64; Whence, NewOffset: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'fd_seek';
+function _FdFilestatGet(Fd, Buf: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'fd_filestat_get';
+function _FdFilestatSetSize(Fd: LongInt; Size: Int64): LongInt; external 'wasi_snapshot_preview1' name 'fd_filestat_set_size';
+function _PathOpen(Fd, DirFlags, Path, PathLen, OFlags: LongInt; RightsBase, RightsInheriting: Int64;
+  FdFlags, FdPtr: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'path_open';
+function _PathUnlinkFile(Fd, Path, PathLen: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'path_unlink_file';
+function _PathRename(Fd, OldPath, OldLen, NewFd, NewPath, NewLen: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'path_rename';
+function _PathCreateDirectory(Fd, Path, PathLen: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'path_create_directory';
+function _PathRemoveDirectory(Fd, Path, PathLen: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'path_remove_directory';
+function _PathFilestatGet(Fd, Flags, Path, PathLen, Buf: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'path_filestat_get';
+function _ArgsSizesGet(Count, BufSize: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'args_sizes_get';
+function _ArgsGet(Argv, ArgvBuf: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'args_get';
+function _EnvironSizesGet(Count, BufSize: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'environ_sizes_get';
+function _EnvironGet(Environ, EnvironBuf: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'environ_get';
+function _ClockTimeGet(Id: LongInt; Precision: Int64; Time: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'clock_time_get';
+function _PollOneoff(InPtr, OutPtr, NSubs, NEvents: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'poll_oneoff';
+function _FdReaddir(Fd, Buf, BufLen: LongInt; Cookie: Int64; BufUsed: LongInt): LongInt; external 'wasi_snapshot_preview1' name 'fd_readdir';
+procedure _ProcExit(Code: LongInt); external 'wasi_snapshot_preview1' name 'proc_exit';
+
+{$IFDEF GOJS}
+{ Importe aus wasm_exec.js (Modul gojs): Jede Funktion nimmt den
+  Go-Stackzeiger SP; Argumente und Ergebnisse liegen ab SP+8 in
+  8-Byte-Faechern. }
+procedure _GoWasmExit(SP: LongInt); external 'gojs' name 'runtime.wasmExit';
+procedure _GoWasmWrite(SP: LongInt); external 'gojs' name 'runtime.wasmWrite';
+procedure _GoResetMemory(SP: LongInt); external 'gojs' name 'runtime.resetMemoryDataView';
+procedure _GoNanotime(SP: LongInt); external 'gojs' name 'runtime.nanotime1';
+procedure _GoWalltime(SP: LongInt); external 'gojs' name 'runtime.walltime';
+procedure _GoScheduleTimeout(SP: LongInt); external 'gojs' name 'runtime.scheduleTimeoutEvent';
+procedure _GoClearTimeout(SP: LongInt); external 'gojs' name 'runtime.clearTimeoutEvent';
+procedure _GoFinalizeRef(SP: LongInt); external 'gojs' name 'syscall/js.finalizeRef';
+procedure _GoValueGet(SP: LongInt); external 'gojs' name 'syscall/js.valueGet';
+procedure _GoValueSet(SP: LongInt); external 'gojs' name 'syscall/js.valueSet';
+procedure _GoValueIndex(SP: LongInt); external 'gojs' name 'syscall/js.valueIndex';
+procedure _GoValueCall(SP: LongInt); external 'gojs' name 'syscall/js.valueCall';
+procedure _GoValuePrepareString(SP: LongInt); external 'gojs' name 'syscall/js.valuePrepareString';
+procedure _GoValueLoadString(SP: LongInt); external 'gojs' name 'syscall/js.valueLoadString';
+{$ENDIF}
 
 type
   PChar = ^Char;
@@ -479,7 +526,8 @@ end;
 
 { ------------------------------------------------------- Zahl in Text }
 
-function _IntStr(V, Width: LongInt): string;
+{ Ganzzahl als Text, fuer alle Ganzzahltypen (LongInt wird erweitert). }
+function _IntStr(V: Int64; Width: LongInt): string;
 var
   D: LongInt;
   Neg: Boolean;
@@ -490,7 +538,7 @@ begin
   Neg := V < 0;
   while V <> 0 do
   begin
-    D := V mod 10;
+    D := V mod 10;     { negativ bei negativem V; so passt auch Low(Int64) }
     if D < 0 then
       D := -D;
     Result := Chr(48 + D) + Result;
@@ -704,13 +752,17 @@ begin
   SkipSign := I
 end;
 
-function _ValInt(const S: string; var Code: Integer): LongInt;
+{ Val fuer Ganzzahlen: [Leerzeichen] [Vorzeichen] [$] Ziffern. Dezimal muss
+  der Wert in Int64 passen, hexadezimal duerfen bis 16 Ziffern das
+  Vorzeichenbit setzen ($FFFFFFFFFFFFFFFF = -1). Code ist bei einem
+  ungueltigen Zeichen dessen Position, bei Ueberlauf die Laenge von S. }
+function _ValInt64(const S: string; var Code: Integer): Int64;
 var
-  I, N, D, Base: LongInt;
-  R: Real;
+  I, N, D, Base, Digits: LongInt;
+  V: Int64;
   Neg: Boolean;
 begin
-  _ValInt := 0;
+  _ValInt64 := 0;
   Code := 0;
   N := Length(S);
   I := SkipSign(S, Neg);
@@ -725,7 +777,8 @@ begin
     Code := I;
     Exit
   end;
-  R := 0;
+  V := 0;   { dezimal negativ aufgebaut, damit Low(Int64) hineinpasst }
+  Digits := 0;
   while I <= N do
   begin
     D := Digit(S[I]);
@@ -734,27 +787,67 @@ begin
       Code := I;
       Exit
     end;
-    R := R * Base + D;
-    if R > 4294967295.0 then
+    if Base = 16 then
     begin
-      Code := I;
-      Exit
+      if (V <> 0) or (D <> 0) then
+        Inc(Digits);
+      if Digits > 16 then
+      begin
+        Code := N;
+        Exit
+      end;
+      V := (V shl 4) or D
+    end
+    else
+    begin
+      if V < (Low(Int64) + D) div 10 then
+      begin
+        Code := N;
+        Exit
+      end;
+      V := V * 10 - D
     end;
     Inc(I)
   end;
-  if Base = 16 then
+  if Base = 10 then
   begin
-    if R > 2147483647.0 then
-      R := R - 4294967296.0
+    if not Neg then
+    begin
+      if V = Low(Int64) then
+      begin
+        Code := N;
+        Exit
+      end;
+      V := -V
+    end
   end
-  else if (R > 2147483648.0) or (not Neg and (R > 2147483647.0)) then
+  else if Neg then
+    V := -V;
+  _ValInt64 := V
+end;
+
+{ Val fuer LongInt und kleinere Typen: dezimal im Bereich von LongInt,
+  hexadezimal bis 8 Ziffern ($FFFFFFFF = -1). }
+function _ValInt(const S: string; var Code: Integer): LongInt;
+var
+  V: Int64;
+  Neg: Boolean;
+begin
+  _ValInt := 0;
+  V := _ValInt64(S, Code);
+  if Code <> 0 then
+    Exit;
+  if S[SkipSign(S, Neg)] = '$' then
   begin
-    Code := N;
-    Exit
-  end;
-  if Neg then
-    R := -R;
-  _ValInt := Trunc(R)
+    if (V > 4294967295) or (V < -4294967295) then
+      Code := Length(S)
+    else
+      _ValInt := V     { untere 32 Bit }
+  end
+  else if (V < -2147483648) or (V > MaxLongInt) then
+    Code := Length(S)
+  else
+    _ValInt := V
 end;
 
 function Pow10(N: LongInt): Real;
@@ -1735,7 +1828,7 @@ begin
   PutChar(F, C)
 end;
 
-procedure _WriteInt(var F: TTextRec; V, Width: LongInt);
+procedure _WriteInt(var F: TTextRec; V: Int64; Width: LongInt);
 begin
   _WriteStr(F, _IntStr(V, Width), 0)
 end;
@@ -1847,42 +1940,57 @@ begin
   end
 end;
 
+{ Naechstes Wort fuer Read einer Zahl; False ohne Wort (Dateiende) oder
+  wenn F nicht zum Lesen offen ist. }
+function ReadNumber(var F: TTextRec; var T: string): Boolean;
+begin
+  ReadNumber := False;
+  if not CheckMode(F.Mode, fmInput) then
+    Exit;
+  ReadToken(F, T);
+  ReadNumber := T <> ''
+end;
+
 function _ReadInt(var F: TTextRec): LongInt;
 var
   T: string;
   Code: Integer;
-  V: LongInt;
 begin
   _ReadInt := 0;
-  if not CheckMode(F.Mode, fmInput) then
-    Exit;
-  ReadToken(F, T);
-  if T = '' then
-    Exit;
-  V := _ValInt(T, Code);
-  if Code <> 0 then
-    InOutRes := 106
-  else
-    _ReadInt := V
+  if ReadNumber(F, T) then
+  begin
+    _ReadInt := _ValInt(T, Code);
+    if Code <> 0 then
+      InOutRes := 106
+  end
+end;
+
+function _ReadInt64(var F: TTextRec): Int64;
+var
+  T: string;
+  Code: Integer;
+begin
+  _ReadInt64 := 0;
+  if ReadNumber(F, T) then
+  begin
+    _ReadInt64 := _ValInt64(T, Code);
+    if Code <> 0 then
+      InOutRes := 106
+  end
 end;
 
 function _ReadReal(var F: TTextRec): Real;
 var
   T: string;
   Code: Integer;
-  V: Real;
 begin
   _ReadReal := 0;
-  if not CheckMode(F.Mode, fmInput) then
-    Exit;
-  ReadToken(F, T);
-  if T = '' then
-    Exit;
-  V := _ValReal(T, Code);
-  if Code <> 0 then
-    InOutRes := 106
-  else
-    _ReadReal := V
+  if ReadNumber(F, T) then
+  begin
+    _ReadReal := _ValReal(T, Code);
+    if Code <> 0 then
+      InOutRes := 106
+  end
 end;
 
 procedure _ReadLn(var F: TTextRec);

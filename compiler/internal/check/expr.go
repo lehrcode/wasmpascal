@@ -2,7 +2,9 @@ package check
 
 import (
 	"math"
+	"math/big"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
@@ -22,10 +24,11 @@ func (untypedT) Align() int64   { return 1 }
 var untyped types.Type = untypedT{}
 
 // host liefert den Wirtstyp eines Ordinaltyps für Verträglichkeitsprüfungen:
-// alle Ganzzahltypen werden zu LongInt, Teilbereiche zu ihrem Basistyp.
+// alle Ganzzahltypen außer Int64 werden zu LongInt, Teilbereiche zu ihrem
+// Basistyp. Int64 bleibt Int64, damit in 64 Bit gerechnet wird.
 func host(t types.Type) types.Type {
 	t = types.Underlying(t)
-	if b, ok := t.(*types.Basic); ok && b.IsInteger() {
+	if b, ok := t.(*types.Basic); ok && b.IsInteger() && b.Kind != types.KInt64 {
 		return types.LongInt
 	}
 	return t
@@ -70,6 +73,9 @@ func (c *checker) wideLiteral(x TypeAndValue, e ast.Expr) TypeAndValue {
 // compatible meldet die Typverträglichkeit für Operatoren (TP: "compatible").
 func compatible(a, b types.Type) bool {
 	if a == b {
+		return true
+	}
+	if types.IsInteger(a) && types.IsInteger(b) {
 		return true
 	}
 	if types.IsOrdinal(a) && types.IsOrdinal(b) {
@@ -139,6 +145,11 @@ func (c *checker) isAssignable(dst types.Type, x TypeAndValue) bool {
 		return true
 	}
 	switch {
+	case types.IsInteger(dst) && types.IsInteger(src):
+		// auch Int64 ↔ kleinere Ganzzahlen (abgeschnitten wie {$R-})
+		return true
+	case types.IsInt64(dst) && types.Is(src, types.Comp):
+		return true // Comp → Int64 über den Ganzzahlwert (Etappe 17)
 	case types.IsOrdinal(dst) && types.IsOrdinal(src):
 		// Char → WideChar implizit, umgekehrt nur über Char(w)
 		return host(dst) == host(src) || (isWide(dst) && host(src) == types.Char)
@@ -339,6 +350,15 @@ func strConst(s string) TypeAndValue {
 
 func (c *checker) intLit(e *ast.IntLit) TypeAndValue {
 	if e.Text[0] == '$' {
+		digits := strings.TrimLeft(e.Text[1:], "0")
+		if len(digits) > 8 {
+			// 9 bis 16 Ziffern: Int64 (Etappe 17), $FFFFFFFFFFFFFFFF = -1
+			v, err := strconv.ParseUint(e.Text[1:], 16, 64)
+			if err != nil {
+				c.fail(e.Pos(), source.ErrIntConst, "")
+			}
+			return TypeAndValue{Mode: Constant, Type: types.Int64, Val: types.IntVal(int64(v))}
+		}
 		v, err := strconv.ParseUint(e.Text[1:], 16, 32)
 		if err != nil {
 			c.fail(e.Pos(), source.ErrIntConst, "")
@@ -347,10 +367,13 @@ func (c *checker) intLit(e *ast.IntLit) TypeAndValue {
 		return TypeAndValue{Mode: Constant, Type: types.Integer, Val: types.IntVal(int64(int32(uint32(v))))}
 	}
 	v, err := strconv.ParseInt(e.Text, 10, 64)
-	if err != nil || v > types.MaxLongInt {
-		// TP-ANNAHME: Dezimalkonstanten über MaxLongInt sind Real-Konstanten.
+	if err != nil {
+		// TP-ANNAHME: Dezimalkonstanten über High(Int64) sind Real-Konstanten.
 		f, _ := strconv.ParseFloat(e.Text, 64)
 		return TypeAndValue{Mode: Constant, Type: types.Real, Val: types.RealVal(f)}
+	}
+	if v > types.MaxLongInt {
+		return TypeAndValue{Mode: Constant, Type: types.Int64, Val: types.IntVal(v)}
 	}
 	return TypeAndValue{Mode: Constant, Type: types.Integer, Val: types.IntVal(v)}
 }
@@ -551,7 +574,7 @@ func (c *checker) unary(e *ast.UnaryExpr) TypeAndValue {
 			res.Mode, res.Val = Constant, x.Val
 			if e.Op == lexer.Minus {
 				if x.Val.Kind == types.VInt {
-					res.Val = c.checkInt(e, -x.Val.Int)
+					res.Val = c.foldInt(e, res.Type, lexer.Minus, 0, x.Val.Int)
 				} else {
 					res.Val = types.RealVal(-x.Val.Real)
 				}
@@ -561,9 +584,13 @@ func (c *checker) unary(e *ast.UnaryExpr) TypeAndValue {
 	return res
 }
 
-// intResult ist der Ergebnistyp ganzzahliger Arithmetik.
+// intResult ist der Ergebnistyp ganzzahliger Arithmetik: Int64, wenn ein
+// Operand Int64 ist, sonst wie bisher 32 Bit.
 func intResult(a, b types.Type) types.Type {
-	if types.Is(a, types.LongInt) || types.Is(b, types.LongInt) {
+	switch {
+	case types.IsInt64(a) || types.IsInt64(b):
+		return types.Int64
+	case types.Is(a, types.LongInt) || types.Is(b, types.LongInt):
 		return types.LongInt
 	}
 	return types.Integer
@@ -575,6 +602,33 @@ func (c *checker) checkInt(e ast.Node, v int64) *types.Value {
 		c.fail(e.Pos(), source.ErrConstOutOfRange, "")
 	}
 	return types.IntVal(v)
+}
+
+// foldInt faltet a op b für den Ergebnistyp t: bei Int64 in 64 Bit mit
+// Überlaufprüfung, sonst im LongInt-Bereich (Error 76).
+func (c *checker) foldInt(e ast.Node, t types.Type, op lexer.Kind, a, b int64) *types.Value {
+	if !types.IsInt64(t) {
+		switch op {
+		case lexer.Plus:
+			return c.checkInt(e, a+b)
+		case lexer.Minus:
+			return c.checkInt(e, a-b)
+		}
+		return c.checkInt(e, a*b)
+	}
+	x, y := big.NewInt(a), big.NewInt(b)
+	switch op {
+	case lexer.Plus:
+		x.Add(x, y)
+	case lexer.Minus:
+		x.Sub(x, y)
+	default:
+		x.Mul(x, y)
+	}
+	if !x.IsInt64() {
+		c.fail(e.Pos(), source.ErrConstOutOfRange, "")
+	}
+	return types.IntVal(x.Int64())
 }
 
 func (c *checker) binary(e *ast.BinaryExpr) TypeAndValue {
@@ -615,15 +669,7 @@ func (c *checker) binary(e *ast.BinaryExpr) TypeAndValue {
 		case types.IsInteger(x.Type) && types.IsInteger(y.Type):
 			res.Type = intResult(x.Type, y.Type)
 			if both {
-				a, b := x.Val.Int, y.Val.Int
-				switch e.Op {
-				case lexer.Plus:
-					res.Val = c.checkInt(at, a+b)
-				case lexer.Minus:
-					res.Val = c.checkInt(at, a-b)
-				default:
-					res.Val = c.checkInt(at, a*b)
-				}
+				res.Val = c.foldInt(at, res.Type, e.Op, x.Val.Int, y.Val.Int)
 			}
 		case types.IsNumeric(x.Type) && types.IsNumeric(y.Type):
 			res.Type = types.Real
@@ -664,15 +710,31 @@ func (c *checker) binary(e *ast.BinaryExpr) TypeAndValue {
 				if b == 0 {
 					c.fail(e.OpPos, source.ErrDivisionByZero, "")
 				}
-				if e.Op == lexer.Div {
+				switch {
+				case e.Op == lexer.Div && types.IsInt64(res.Type):
+					if a == math.MinInt64 && b == -1 {
+						c.fail(e.OpPos, source.ErrConstOutOfRange, "")
+					}
+					res.Val = types.IntVal(a / b)
+				case e.Op == lexer.Div:
 					res.Val = c.checkInt(at, a/b)
-				} else {
+				case b == -1:
+					res.Val = types.IntVal(0) // a mod -1, auch für Low(Int64)
+				default:
 					res.Val = types.IntVal(a % b)
 				}
 			case lexer.Shl:
-				res.Val = types.IntVal(int64(int32(uint32(a) << (uint64(b) & 31))))
+				if types.IsInt64(res.Type) {
+					res.Val = types.IntVal(int64(uint64(a) << (uint64(b) & 63)))
+				} else {
+					res.Val = types.IntVal(int64(int32(uint32(a) << (uint64(b) & 31))))
+				}
 			default:
-				res.Val = types.IntVal(int64(int32(uint32(a) >> (uint64(b) & 31))))
+				if types.IsInt64(res.Type) {
+					res.Val = types.IntVal(int64(uint64(a) >> (uint64(b) & 63)))
+				} else {
+					res.Val = types.IntVal(int64(int32(uint32(a) >> (uint64(b) & 31))))
+				}
 			}
 		}
 	case lexer.And, lexer.Or, lexer.Xor:

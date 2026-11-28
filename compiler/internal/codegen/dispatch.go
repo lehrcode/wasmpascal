@@ -186,9 +186,12 @@ func (fg *funcGen) unwind() {
 	c.Index(wasm.OpLocalGet, fg.st)
 	c.Mem(wasm.OpI32Store, 2, uint32(fg.g.stateSlot[fg.fn]))
 	if vt, ok := fg.fn.ResultVT(); ok {
-		if vt == ir.F64 {
+		switch vt {
+		case ir.F64:
 			c.F64Const(0)
-		} else {
+		case ir.I64:
+			c.I64Const(0)
+		default:
 			c.I32Const(0)
 		}
 	}

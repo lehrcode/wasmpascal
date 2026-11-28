@@ -44,7 +44,8 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 		sets:    map[[4]uint64]int64{},
 		files:   map[string]int{},
 		copyIns: map[*Func][]copyIn{},
-		hosts:   map[int]*Host{},
+		hosts:   map[string]*Host{},
+		externs: map[*types.Proc]*Host{},
 		table:   map[*types.Proc]int32{},
 	}
 	defer func() {
@@ -102,7 +103,7 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 	}
 	// Funktionstabelle in der Reihenfolge der ersten Verwendung
 	for _, p := range l.tableProcs {
-		l.m.Table = append(l.m.Table, l.funcs[p])
+		l.m.Table = append(l.m.Table, l.tableFunc(p))
 	}
 	// Erst jetzt steht das Datensegment fest: BSS-Adressen nachtragen.
 	l.m.BSSBase = types.AlignTo(DataBase+int64(len(l.m.Data)), 16)
@@ -123,8 +124,9 @@ type lowerer struct {
 	sets    map[[4]uint64]int64
 	files   map[string]int
 	copyIns map[*Func][]copyIn
-	hosts   map[int]*Host
-	rtlMode bool // es werden Routinen einer Laufzeit-Unit angelegt
+	hosts   map[string]*Host      // Importe nach Modul + "\x00" + Name
+	externs map[*types.Proc]*Host // external-Routinen
+	rtlMode bool                  // es werden Routinen einer Laufzeit-Unit angelegt
 	// table: Index der Routinen in der Funktionstabelle (ab 1);
 	// tableProcs in Reihenfolge der Indizes.
 	table      map[*types.Proc]int32
@@ -190,13 +192,18 @@ func scalar(t types.Type) (vt ValType, mem MemType, ok bool) {
 	}
 	switch {
 	case types.IsReal(t):
-		if types.Is(t, types.Single) {
+		switch {
+		case types.Is(t, types.Single):
 			return F64, MemF32, true
+		case types.Is(t, types.Comp):
+			return F64, MemComp, true
 		}
 		return F64, MemF64, true
 	case types.IsOrdinal(t):
 		lo, _ := types.Bounds(t)
 		switch t.Size() {
+		case 8:
+			return I64, MemI64, true
 		case 1:
 			if lo < 0 {
 				return I32, MemI8, true
@@ -376,6 +383,10 @@ func (l *lowerer) put(b []byte, t types.Type, v *types.Value) {
 		binary.LittleEndian.PutUint16(b, uint16(v.Int))
 	case MemI32:
 		binary.LittleEndian.PutUint32(b, uint32(v.Int))
+	case MemI64:
+		binary.LittleEndian.PutUint64(b, uint64(v.Int))
+	case MemComp:
+		binary.LittleEndian.PutUint64(b, uint64(CompBits(v.AsReal())))
 	case MemF32:
 		binary.LittleEndian.PutUint32(b, math.Float32bits(float32(v.AsReal())))
 	case MemF64:
@@ -413,6 +424,10 @@ func (l *lowerer) declare(s *types.Scope, parent *Func, prefix string) {
 		case *types.Proc:
 			if _, done := l.funcs[sym]; done {
 				continue // Interface-Kopf, bereits angelegt
+			}
+			if sym.External != nil {
+				l.externHost(sym)
+				continue
 			}
 			name := sym.Text()
 			if prefix != "" {
@@ -581,12 +596,15 @@ func (s *fnState) tempAddr() *Var {
 // ausgewertet wird.
 func (s *fnState) keep(e Expr) Expr {
 	switch e.(type) {
-	case IntConst, FloatConst, Get, HeapBase:
+	case IntConst, Int64Const, FloatConst, Get, HeapBase:
 		return e
 	}
 	t := types.Type(types.LongInt)
-	if e.VT() == F64 {
+	switch e.VT() {
+	case F64:
 		t = types.Real
+	case I64:
+		t = types.Int64
 	}
 	v := s.temp(t)
 	s.emit(Set{Var: v, Val: e})
@@ -760,6 +778,11 @@ func (s *fnState) assign(st *ast.AssignStmt) {
 		}
 	}
 	t := s.typeOf(st.Lhs)
+	if types.Is(t, types.Comp) && types.IsInt64(s.typeOf(st.Rhs)) {
+		// Int64 → Comp ohne Umweg über f64 (exakt, Etappe 17)
+		s.emit(Store{Addr: s.designator(st.Lhs), Mem: MemI64, Val: s.value(st.Rhs, types.Int64)})
+		return
+	}
 	if v, ok := s.directVar(st.Lhs); ok && v.Scalar {
 		s.emit(Set{Var: v, Val: s.value(st.Rhs, t)})
 		return
@@ -833,18 +856,22 @@ func (s *fnState) forStmt(st *ast.ForStmt) {
 	s.emit(Set{Var: end, Val: s.value(st.To, v.Type)})
 	s.emit(Set{Var: v, Val: Get{Var: from}})
 	body, incr, step, exit := s.fn.NewBlock(), s.fn.NewBlock(), s.fn.NewBlock(), s.fn.NewBlock()
-	cmp, inc := LeI, AddI
+	cmp, inc, eq := LeI, AddI, EqI
 	if st.Down {
 		cmp, inc = GeI, SubI
+	}
+	var one Expr = IntConst{V: 1}
+	if v.VT == I64 {
+		cmp, inc, eq, one = Long(cmp), Long(inc), EqL, Int64Const{V: 1}
 	}
 	s.branch(Bin{Op: cmp, X: Get{Var: from}, Y: Get{Var: end}}, body, exit)
 	s.cur = body
 	s.loop(exit, incr, func() { s.stmt(st.Body) })
 	s.jump(incr)
 	s.cur = incr
-	s.branch(Bin{Op: EqI, X: Get{Var: v}, Y: Get{Var: end}}, exit, step)
+	s.branch(Bin{Op: eq, X: Get{Var: v}, Y: Get{Var: end}}, exit, step)
 	s.cur = step
-	s.emit(Set{Var: v, Val: Bin{Op: inc, X: Get{Var: v}, Y: IntConst{V: 1}}})
+	s.emit(Set{Var: v, Val: Bin{Op: inc, X: Get{Var: v}, Y: one}})
 	s.jump(body)
 	s.cur = exit
 }
@@ -1020,4 +1047,112 @@ func (s *fnState) ifElse(c Expr, then, els func()) {
 	els()
 	s.jump(join)
 	s.cur = join
+}
+
+// ---------------------------------------------------------------------------
+// external-Routinen (Etappe 17)
+
+// boundaryVT ist die WASM-Darstellung eines Parameters oder Ergebnisses an
+// der Grenze zum Host (wie check.boundaryKind): Adressen und Ordinalwerte
+// i32, Int64 und Comp i64, Single f32, übrige Real-Typen f64.
+func boundaryVT(t types.Type, mode types.ParamMode) ValType {
+	vt, _, ok := scalar(t)
+	switch {
+	case mode == types.ByVar || t == nil || !ok:
+		return I32
+	case types.Is(t, types.Single):
+		return F32
+	case types.Is(t, types.Comp):
+		return I64
+	}
+	return vt
+}
+
+// externHost liefert den Import einer external-Routine; derselbe Import
+// (Modul und Name) ergibt dasselbe Objekt, die Typprüfung hat gleiche
+// Signaturen sichergestellt.
+func (l *lowerer) externHost(p *types.Proc) *Host {
+	if h, ok := l.externs[p]; ok {
+		return h
+	}
+	key := p.External.Module + "\x00" + p.External.Name
+	h, ok := l.hosts[key]
+	if !ok {
+		h = &Host{Module: p.External.Module, Name: p.External.Name}
+		for _, prm := range p.Sig.Params {
+			h.Params = append(h.Params, boundaryVT(prm.Type, prm.Mode))
+		}
+		if p.IsFunc {
+			h.Result = []ValType{boundaryVT(p.Sig.Result, types.ByValue)}
+		}
+		l.hosts[key] = h
+	}
+	l.externs[p] = h
+	return h
+}
+
+// tableFunc liefert den Eintrag der Funktionstabelle für p. Eine
+// external-Routine steht dort direkt als Import, wenn ihre Signatur der
+// eines Aufrufs über eine Prozedurvariable gleicht; mit Single oder Comp an
+// der Grenze unterscheiden sie sich (f32/i64 statt f64), dann ruft eine
+// Hüllfunktion den Import.
+func (l *lowerer) tableFunc(p *types.Proc) *Func {
+	h := l.externs[p]
+	if h == nil {
+		return l.funcs[p]
+	}
+	sig := l.funcSig(p.Sig)
+	stub := &Func{Name: p.External.Module + "." + p.External.Name, Display: p.Text(), Pos: l.pos(p.Pos()), RTL: true}
+	if SigKey(sig.Params, sig.Results) == SigKey(h.Params, h.Result) {
+		stub.Host = h
+		for i, vt := range h.Params {
+			stub.Params = append(stub.Params, &Var{Name: "p" + itoa(i), Scalar: true, VT: vt, Param: i})
+		}
+		if len(h.Result) == 1 {
+			stub.Result = &Var{Name: "Result", Scalar: true, VT: h.Result[0]}
+		}
+		return stub
+	}
+	// Hüllfunktion: Parameter wie bei einem Aufruf über eine Prozedurvariable
+	stub.Name += "$wrap"
+	mem := map[ValType]MemType{I32: MemI32, I64: MemI64, F64: MemF64}
+	var args []Expr
+	for i, vt := range sig.Params {
+		v := stub.NewVar(&Var{Name: "p" + itoa(i), Scalar: true, VT: vt, Mem: mem[vt], Param: i})
+		stub.Params = append(stub.Params, v)
+		var a Expr = Get{Var: v}
+		switch {
+		case h.Params[i] == F32:
+			a = Un{Op: ToF32, X: a}
+		case h.Params[i] == I64 && vt == F64:
+			a = Un{Op: FToL, X: a}
+		}
+		args = append(args, a)
+	}
+	var dst *Var
+	if len(sig.Results) == 1 {
+		dst = stub.NewVar(&Var{Name: "Result", Scalar: true, VT: sig.Results[0], Mem: mem[sig.Results[0]], Param: -1})
+		stub.Result = dst
+	}
+	stub.Entry = stub.NewBlock()
+	stub.Entry.Instrs = []Instr{HostCall{Fn: h, Args: args, Dst: dst}}
+	stub.Entry.Term = Return{}
+	l.m.Funcs = append(l.m.Funcs, stub)
+	return stub
+}
+
+// emitHostCall ruft eine external-Routine direkt als Import auf.
+func (s *fnState) emitHostCall(p *types.Proc, h *Host, args []ast.Expr, dst *Var) {
+	var in []Expr
+	for i, prm := range p.Sig.Params {
+		a := s.arg(args[i], prm.Mode, prm.Type)
+		switch {
+		case h.Params[i] == F32:
+			a = Un{Op: ToF32, X: a}
+		case h.Params[i] == I64 && a.VT() == F64: // Comp
+			a = Un{Op: FToL, X: a}
+		}
+		in = append(in, a)
+	}
+	s.emit(HostCall{Fn: h, Args: in, Dst: dst})
 }

@@ -9,6 +9,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -60,6 +61,7 @@ const (
 	KInteger
 	KWord
 	KLongInt
+	KInt64
 	KReal
 	KSingle
 	KDouble
@@ -80,7 +82,7 @@ func (b *Basic) Size() int64    { return b.size }
 func (b *Basic) Align() int64   { return b.size }
 
 // IsInteger meldet Ganzzahltypen.
-func (b *Basic) IsInteger() bool { return b.Kind >= KShortInt && b.Kind <= KLongInt }
+func (b *Basic) IsInteger() bool { return b.Kind >= KShortInt && b.Kind <= KInt64 }
 
 // IsReal meldet Gleitkommatypen.
 func (b *Basic) IsReal() bool { return b.Kind >= KReal }
@@ -97,6 +99,7 @@ var (
 	Integer  = &Basic{Kind: KInteger, name: "Integer", size: 4, Lo: MinLongInt, Hi: MaxLongInt}
 	Word     = &Basic{Kind: KWord, name: "Word", size: 2, Lo: 0, Hi: 65535}
 	LongInt  = &Basic{Kind: KLongInt, name: "LongInt", size: 4, Lo: MinLongInt, Hi: MaxLongInt}
+	Int64    = &Basic{Kind: KInt64, name: "Int64", size: 8, Lo: math.MinInt64, Hi: math.MaxInt64}
 	Real     = &Basic{Kind: KReal, name: "Real", size: 8}
 	Single   = &Basic{Kind: KSingle, name: "Single", size: 4}
 	Double   = &Basic{Kind: KDouble, name: "Double", size: 8}
@@ -512,6 +515,9 @@ func IsInteger(t Type) bool {
 	b, ok := Underlying(t).(*Basic)
 	return ok && b.IsInteger()
 }
+
+// IsInt64 meldet Int64 (und Teilbereiche davon, die es nicht gibt).
+func IsInt64(t Type) bool { return Underlying(t) == Int64 }
 
 // IsReal meldet Gleitkommatypen.
 func IsReal(t Type) bool {

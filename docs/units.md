@@ -34,8 +34,10 @@ begründet.
 | `SmallInt` | −32768..32767 (aus Delphi) | 2 Byte |
 | `Integer` | −2147483648..2147483647 (**Abweichung:** wie `LongInt`, TP: 16 Bit) | 4 Byte |
 | `LongInt` | −2147483648..2147483647 | 4 Byte |
+| `Int64` | −9223372036854775808..9223372036854775807 (aus Delphi 4) | 8 Byte |
 | `Word` | 0..65535 | 2 Byte |
-| `Real`, `Double`, `Extended`, `Comp` | Gleitkomma doppelter Genauigkeit (**Abweichung:** alle gleich) | 8 Byte |
+| `Real`, `Double`, `Extended` | Gleitkomma doppelter Genauigkeit (**Abweichung:** alle gleich) | 8 Byte |
+| `Comp` | Real-Typ, gespeichert als 64-Bit-Ganzzahl wie in TP (siehe unten) | 8 Byte |
 | `Single` | Gleitkomma einfacher Genauigkeit | 4 Byte |
 | `Pointer` | untypisierter Zeiger, `nil` | 4 Byte |
 | `Text` | Textdatei | 528 Byte |
@@ -49,6 +51,22 @@ Teilbereiche belegen wie in TP 1, 2 oder 4 Byte, je nach Wertebereich.
 Jede Zuweisung an eine Variable mit 1 oder 2 Byte kürzt den Wert auf diese
 Breite, wie in TP: `Byte` 255 + 1 ergibt 0, `Word` 65535 + 1 ergibt 0,
 `SmallInt` 32767 + 1 ergibt −32768. Gerechnet wird in 32 Bit.
+
+**`Int64`** rechnet in 64 Bit, sobald ein Operand `Int64` ist; sonst
+bleibt es bei 32 Bit (`MaxLongInt + 1` als `LongInt`-Ausdruck läuft also
+über, `Int64(MaxLongInt) + 1` nicht). Zuweisungen an kleinere Ganzzahltypen
+schneiden ab. `Int64` geht in `Write`, `Read`, `Str`, `Val`, `Inc`, `Dec`,
+`Abs`, `Sqr`, `Odd`, `Succ`, `Pred`, `Ord`, `Low`, `High` und als
+`for`-Laufvariable, aber nicht als Array-Index, Mengen- oder
+Teilbereichs-Basistyp und nicht als `case`-Selektor. Dezimalkonstanten über
+`MaxLongInt` und Hexkonstanten mit 9 bis 16 Ziffern sind `Int64`. `Trunc`
+und `Round` liefern weiter `LongInt`.
+
+**`Comp`** ist ein Real-Typ: Ausdrücke rechnen in Gleitkomma, `Write` gibt
+Exponentialschreibweise aus. Gespeichert wird aber wie in TP eine
+64-Bit-Ganzzahl: `C := 2.5` ergibt 2 (Gleichstand zur geraden Zahl), Werte
+außerhalb ergeben `$8000000000000000`. Zwischen `Int64` und
+`Comp`-Variablen wird exakt kopiert.
 
 Texte sind UTF-8: Ein Umlaut belegt zwei Bytes, `'ä'` ist deshalb ein
 String und kein `Char`, und `Length('Größe')` ist 7.
@@ -374,6 +392,41 @@ Laufzeitfehler darin beendet nur diese Prozedur; die Kette läuft weiter,
 gemeldet wird der letzte Fehler. **Abweichung:** Nach einem Laufzeitfehler
 laufen Exit-Prozeduren nur mit `pascal run`, dem Go-Paket `runner` und dem
 Loader für Browser und Node.js, nicht in anderen WASI-Laufzeiten.
+
+### Externe Routinen
+
+Eine Prozedur oder Funktion auf oberster Ebene kann eine Funktion des Hosts
+sein (wie in BP 7, nur für das Ziel WASI):
+
+```pascal
+function Quadrat(X: Int64): Int64; external 'host' name 'square';
+procedure Log(const S: string); external 'host';   { Importname = Pascal-Name: 'Log' }
+```
+
+An der Grenze sind nur einfache Typen erlaubt: Ordinaltypen, `Boolean`,
+Zeiger (32 Bit), `Int64` und `Comp` (64 Bit), `Single` (`f32`) und die
+übrigen Real-Typen (`f64`). Strings, Records, Arrays und Mengen gehen nur als
+`var`- oder `const`-Parameter; der Host bekommt dann ihre Adresse (ein
+String ist ein Längenbyte, gefolgt von den Bytes). Externe Routinen halten
+nie an und lassen sich wie andere Routinen Prozedurvariablen zuweisen.
+
+In Go stellt `runner.Options.Imports` die Funktionen bereit; über
+`runner.Memory` lesen und schreiben sie den Speicher des Programms:
+
+```go
+runner.Run(ctx, wasm, runner.Options{Imports: map[string]map[string]any{"host": {
+	"square": func(x int64) int64 { return x * x },
+	"Log": func(m runner.Memory, addr uint32) {
+		s, _ := m.ReadShortString(addr)
+		fmt.Println(s)
+	},
+}}})
+```
+
+Fehlt ein Import, beginnt das Programm gar nicht erst. `pascal run` stellt
+keine eigenen Importe bereit. Fehler: 909 bei einem nicht erlaubten Typ,
+910 bei zwei Deklarationen desselben Imports mit verschiedenen Typen,
+902 unter dem Ziel `gojs`.
 
 ### Nicht vorhanden
 

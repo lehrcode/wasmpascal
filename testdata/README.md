@@ -16,6 +16,9 @@ Pascal-Testprogramme für den Test-Harness (`harness_test.go` im Wurzelverzeichn
 - `name.env` (optional): Umgebung des Programms, je Zeile `NAME=WERT`
   (ohne Datei ist sie leer; unter `gojs` nach Namen sortiert, daher in der
   Datei am besten schon sortiert).
+- `name.wasi` (optional, leer): Das Programm läuft nur unter WASI;
+  `TestProgramsGoJS` lässt es aus (eigene `external`-Routinen). Die
+  Test-Importe (Modul `test`) liefert `internal/wasmtest.Imports`.
 - Jeder Testfall bekommt ein eigenes leeres Verzeichnis als Wurzel `/` für
   Dateizugriffe.
 

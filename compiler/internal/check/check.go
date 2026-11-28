@@ -117,6 +117,9 @@ type Config struct {
 	MaxStaticData int64
 	// Ctx bricht die Prüfung ab (geprüft je Routine); nil = nie.
 	Ctx context.Context
+	// GoJS: Ziel gojs; dort sind external-Routinen nur in der System-Unit
+	// erlaubt (Etappe 17).
+	GoJS bool
 }
 
 // DefaultMaxStaticData ist die Voreinstellung für Config.MaxStaticData.
@@ -138,6 +141,8 @@ func Check(file ast.File, conf Config) (info *Info, err error) {
 		},
 		maxStaticData: conf.MaxStaticData,
 		ctx:           conf.Ctx,
+		goJS:          conf.GoJS,
+		imports:       map[string]string{},
 	}
 	if c.maxStaticData == 0 {
 		c.maxStaticData = DefaultMaxStaticData
@@ -154,7 +159,9 @@ func Check(file ast.File, conf Config) (info *Info, err error) {
 	c.info.Universe = newUniverse()
 	outer := c.info.Universe
 	if conf.System != nil {
+		c.inSystem = true
 		c.info.SystemIntf, c.info.SystemImpl = c.unit(conf.System, outer)
+		c.inSystem = false
 		outer = c.info.SystemIntf
 	}
 	c.units = map[string]*unitState{}
@@ -208,6 +215,10 @@ type checker struct {
 
 	staticData, maxStaticData int64 // statische Daten bisher und Grenze (<0: keine)
 	ctx                       context.Context
+
+	goJS     bool              // Ziel gojs
+	inSystem bool              // die System-Unit wird geprüft
+	imports  map[string]string // Modul + "\x00" + Name → WASM-Signatur der external-Routinen
 }
 
 // canceled bricht die Prüfung ab, wenn ctx abgelaufen ist; Check liefert

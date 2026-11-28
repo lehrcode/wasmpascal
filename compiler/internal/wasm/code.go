@@ -73,6 +73,26 @@ const (
 	OpI32ShrS byte = 0x75
 	OpI32ShrU byte = 0x76
 
+	OpI64Load  byte = 0x29
+	OpI64Store byte = 0x37
+	OpI64Eqz   byte = 0x50
+	OpI64Eq    byte = 0x51
+	OpI64Ne    byte = 0x52
+	OpI64LtS   byte = 0x53
+	OpI64GtS   byte = 0x55
+	OpI64LeS   byte = 0x57
+	OpI64GeS   byte = 0x59
+	OpI64Add   byte = 0x7C
+	OpI64Sub   byte = 0x7D
+	OpI64Mul   byte = 0x7E
+	OpI64DivS  byte = 0x7F
+	OpI64RemS  byte = 0x81
+	OpI64And   byte = 0x83
+	OpI64Or    byte = 0x84
+	OpI64Xor   byte = 0x85
+	OpI64Shl   byte = 0x86
+	OpI64ShrU  byte = 0x88
+
 	OpF64Abs      byte = 0x99
 	OpF64Neg      byte = 0x9A
 	OpF64Ceil     byte = 0x9B
@@ -86,7 +106,10 @@ const (
 	OpF64Div      byte = 0xA3
 	OpF64Copysign byte = 0xA6
 
+	OpI32WrapI64     byte = 0xA7
 	OpI32TruncF64S   byte = 0xAA
+	OpI64TruncF64S   byte = 0xB0
+	OpF64ConvertI64S byte = 0xB9
 	OpI64ExtendI32S  byte = 0xAC
 	OpI64ExtendI32U  byte = 0xAD
 	OpF32DemoteF64   byte = 0xB6
@@ -110,6 +133,12 @@ func (c *Code) Op(ops ...byte) { c.B = append(c.B, ops...) }
 func (c *Code) I32Const(v int32) {
 	c.B = append(c.B, OpI32Const)
 	c.B = AppendS32(c.B, v)
+}
+
+// I64Const hängt i64.const v an.
+func (c *Code) I64Const(v int64) {
+	c.B = append(c.B, OpI64Const)
+	c.B = AppendS64(c.B, v)
 }
 
 // F64Const hängt f64.const v an.

@@ -389,12 +389,20 @@ type ParamGroup struct {
 // verkürzten Wiederholung des Kopfes nach forward oder im Implementation-Teil.
 type ProcDecl struct {
 	Base
-	IsFunc  bool
-	Name    *Ident
-	Params  []*ParamGroup
-	Result  TypeExpr
-	Forward bool
-	Block   *Block
+	IsFunc   bool
+	Name     *Ident
+	Params   []*ParamGroup
+	Result   TypeExpr
+	Forward  bool
+	External *External // external 'modul' [name 'x'] (Etappe 17), sonst nil
+	Block    *Block
+}
+
+// External ist die Angabe external 'modul' [name 'importname']. Name ist
+// leer ohne name-Teil.
+type External struct {
+	Base
+	Module, Name string
 }
 
 func (*LabelDecl) declNode() {}
