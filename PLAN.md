@@ -15,7 +15,7 @@ Wir bauen in Go **WasmPascal**, einen Compiler, der Turbo-Pascal-5.0-Quelltext i
 - Die Datentypen sind auf WASM abgebildet (siehe Abschnitt Typabbildung). Es gibt keine 16-Bit-Überlaufsemantik.
 - Der Compiler bricht beim ersten Fehler ab, wie das Original. Es gibt keine Fehlerkorrektur im Parser.
 - Das ganze Programm wird auf einmal kompiliert. Units werden immer aus dem Quelltext übersetzt, ohne `.TPU`-Dateien.
-- Es gibt keine Optimierungen. Konstante Ausdrücke werden nur dort ausgewertet, wo die Sprache es verlangt.
+- Es gibt keine Optimierungen. Konstante Ausdrücke werden nur dort ausgewertet, wo die Sprache es verlangt. *Ausnahme ab Etappe 17:* Routinen, die das Programm nicht erreichen kann, kommen nicht ins Modul.
 - Laufzeitfehler beenden das Programm mit `Runtime error NNN at datei.pas(zeile) in Prozedur`, also mit Quelltextposition statt Adresse (siehe Abschnitt Laufzeitfehler mit Zeilennummern).
 
 **Weggelassen:** `Graph` (BGI), `Printer`, `Overlay`, `Turbo3`, `Graph3`, `inline(...)`, `external` und `.OBJ`-Linking, `interrupt`-Prozeduren, `absolute`, `Mem[]`, `Port[]`, `Intr`/`MsDos` und aus `Dos` alles außer Datum, Uhrzeit, `ParamStr`/`ParamCount` und (seit Etappe 15) den Routinen für Attribute, Dateizeit, Suche, Pfade und Umgebung; die in TP 5.0 neuen `GetCBreak`, `SetCBreak`, `GetVerify`, `SetVerify` und `SwapVectors` fehlen ebenfalls. `Sound`/`NoSound` werden zu Nicht-Operationen. Aus Crt entfallen WhereX, WhereY, Window und KeyPressed (GotoXY nach Rückfrage nachgereicht, über ANSI); ReadKey arbeitet nur im Zeilenmodus. Es gibt keinen Schatten-Bildschirm, kein Cursor-Tracking und kein Raw-Mode-Terminal. Die alte Windows-Konsole ohne ANSI-Unterstützung wird nicht unterstützt.
@@ -271,7 +271,7 @@ Das Programm kann an festgelegten Punkten anhalten und die Kontrolle an den Host
 
 ## Etappen mit Akzeptanzkriterien
 
-Siebzehn Etappen (0 bis 16). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
+Achtzehn Etappen (0 bis 17). Jede endet mit grünen Tests und einem Commit; die nächste beginnt erst danach. Nach jeder Etappe kurz berichten und auf Freigabe warten.
 
 ### Etappe 0: Gerüst ✅
 
@@ -1425,6 +1425,85 @@ Laufzeitfehler in der Exit-Prozedur selbst; die Doku spricht von Turbo
 Pascal 5.0; alle bisherigen Tests sind grün.
 
 - *Erledigt (Nov 27, 2026).* Prozedurale Typen in AST (`ast.ProcType`), Parser, `types.ProcType`, Typprüfung (`autoCall`, `operand`, `procRef`, `check.CallIndirect`, `Info.ProcRefs`), IR (`CallIndirect`, `FuncSig`, `Module.Table`/`Sigs`), Analyse und Codegenerator (Table- und Element-Abschnitt, `call_indirect`, Index im Frame); `RunError`, `ExitProc`, `ErrorAddr`, `_Halt`/`_ErrorExit`/`Terminate` in `rtl/system.pas`, Export `_exit` mit Auswertung in `runner` und `web/loader.js`; `VER50`, Schalter `A`. Abweichungen von den Hinweisen oben: (1) Der Tabellenindex steht schon beim Lowering fest (Reihenfolge der ersten Verwendung), deshalb braucht `encode` keinen Platzhalter; (2) `_ErrorExit` kehrt nie zurück, sondern endet wie `Halt` über `SuspendHalt`; nach einem Laufzeitfehler kodiert der Exit-Code `ExitCode * 2 + 1` (Meldung) bzw. `ExitCode * 2` (`ErrorAddr = nil`), so wirken auch `Halt` in einer Exit-Prozedur und Anhaltepunkte ohne eigenes Protokoll; (3) das Programmende ist `_Halt(0)` (TP-ANNAHME: ein im Hauptprogramm gesetzter `ExitCode` zählt nicht); (4) `RunError` setzt Bit 16 der Fehlernummer, damit `RunError(0)` kein echter Trap ist; (5) Aufrufe als Anweisung auch über Index und Zeiger (`A[1];`, `P^;`), Error 91 sonst erst in der Typprüfung; (6) Error 142 für den Aufruf einer Variable, die keine Prozedurvariable ist (bisher 143), `@` und `Addr` auf verschachtelte Routinen ergeben 143 (bisher 83); (7) `Addr(Routine)` wie `@Routine`. Tests: `testdata/etappe16/` (14 Programme, 8 Fehlerfälle, WASI, `gojs`, Frame-Ablage), Golden-Tests `38_prozedurtypen` und `prozedurtypen.sym`, `TestMarkSuspendableIndirect`.
+
+### Etappe 17: Ungenutzten Code entfernen
+
+**Ziel:** Ein Modul enthält nur die Routinen, die das Programm erreichen
+kann. Heute landet die ganze Laufzeit in jedem Modul: „Hallo Welt“ hat
+32,6 KB (27,5 KB mit `-nolines`), mit `uses Dos, Crt` 41,8 KB; die
+System-Unit allein hat rund 200 Routinen. Das Verhalten der Programme
+ändert sich nicht.
+
+**Entscheidungen:**
+
+- Entfernt werden nur ganze Routinen (samt den WASI-Importen, die danach
+  niemand mehr ruft, und den Stringkonstanten ihrer Rümpfe). Globale
+  Variablen bleiben: Sie liegen im BSS und kosten im Modul nichts.
+  Typisierte Konstanten bleiben ebenfalls.
+- Die Typprüfung bleibt vollständig: Fehler in ungenutzten Routinen meldet
+  der Compiler weiterhin, wie TP.
+- Immer an, ohne Schalter. Die Reihenfolge der verbleibenden Funktionen
+  bleibt die heutige (Reihenfolge der Deklaration), damit die Module
+  deterministisch und zwischen nativem und Browser-Compiler byte-gleich
+  bleiben.
+- Andere Optimierungen (etwa Variablen anhaltefähiger Funktionen, die über
+  keinen Anhaltepunkt leben, in WASM-Locals) gehören nicht dazu.
+
+#### Erreichbarkeit
+
+Wurzeln sind:
+
+- das Hauptprogramm (es ruft die Initialisierungen der Units auf),
+- die Routinen, die der Codegenerator selbst aufruft: `SuspendAction`,
+  `ResumeAction` und `ErrorExit` (für `_start`, `run`, `resume` und
+  `_exit`),
+- jede Routine der Funktionstabelle, also jede, deren Adresse genommen
+  wird (`@P`, `Addr`, Zuweisung an eine Prozedurvariable, typisierte
+  Konstanten); indirekte Aufrufe brauchen dann keine eigene Behandlung.
+
+Erreichbar ist, was von einer Wurzel aus über `ir.Call` aufgerufen wird.
+Verschachtelte Routinen werden nur über ihre umschließende Routine oder
+Geschwister erreicht und fallen mit ihr weg.
+
+#### Umsetzung in zwei Schritten
+
+1. **Funktionen streichen:** Nach `ir.Lower` bestimmt `analysis` die
+   erreichbaren Funktionen; `Module.Funcs` behält nur diese, in der
+   bisherigen Reihenfolge. Name Section, `wasmpascal.lines`, Importe
+   (in Reihenfolge der ersten Verwendung) und Funktionsindizes richten sich
+   danach. Die Stringkonstanten gestrichener Rümpfe bleiben in diesem
+   Schritt noch im Datensegment.
+2. **Nur erreichbare Rümpfe übersetzen:** `ir.Lower` legt weiter für jede
+   Routine eine `Func` an (Signaturen braucht jeder Aufruf), übersetzt
+   Rümpfe aber über eine Arbeitsliste erst, wenn ein Aufruf oder ein
+   Tabelleneintrag sie erreicht. Dann entfallen auch die Konstanten toter
+   Rümpfe, und das Übersetzen wird schneller (Browser-Compiler,
+   `pascal serve`). Die Reihenfolge in `Module.Funcs` bleibt die der
+   Deklaration, nicht die der Arbeitsliste.
+
+#### Tests
+
+- Größe: „Hallo Welt“ und ein Programm mit `uses Dos, Crt` werden
+  deutlich kleiner; ein Test hält eine Obergrenze fest (Wert beim
+  Umsetzen messen und im Bericht nennen).
+- Eine ungenutzte Routine fehlt in der Name Section, eine über `@` oder
+  eine typisierte Konstante adressierte ist da; eine ungenutzte Routine mit
+  Typfehler ergibt weiterhin den Fehler.
+- Ein Programm ohne Dateizugriff importiert keine `path_*`-Aufrufe.
+- Alle bisherigen Tests (WASI, `gojs`, Frame-Ablage, `TestWebCompiler`)
+  bleiben grün.
+
+#### Doku
+
+- `PLAN.md`: Bewusste Vereinfachungen (Satz zu Optimierungen), Etappe
+  abhaken.
+- `CLAUDE.md`: Pipeline um den Schritt Erreichbarkeit ergänzen.
+- `README.md`: Größe kleiner Module erwähnen, falls sie dort vorkommt;
+  `CHANGELOG.md` (Unreleased).
+
+**Fertig, wenn:** kleine Programme deutlich kleinere Module ergeben, der
+Größentest und alle bisherigen Tests grün sind und die Module weiterhin
+deterministisch und byte-gleich zum Browser-Compiler sind.
 
 ## Arbeitsregeln für Claude Code
 
