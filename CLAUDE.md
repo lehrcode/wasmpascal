@@ -25,6 +25,10 @@ Standardroutinen oder `rtl/*.pas` mitpflegen.
 - **Keine eigenmächtigen Spracherweiterungen.** Im Zweifel TP 5.0 nachbilden, Abweichungen in `docs/abweichungen.md`.
 - **Unklares TP-Verhalten:** plausible Annahme treffen, im Code mit `// TP-ANNAHME:` markieren, im Bericht nennen.
 - **Laufzeit in Pascal bevorzugen** (`rtl/*.pas`); Intrinsics in Go/WASM nur, wenn es nicht anders geht.
+- **Sprache im Code:** Bezeichner englisch (Go-Code und `rtl/*.pas`), Kommentare und Doku deutsch. Ausgenommen sind
+  die Pascal-Testprogramme in `testdata/` und die Beispiele unter `web/beispiele/`.
+- **RTL ohne Dopplungen:** Hilfsroutinen, die mehrere Units brauchen, stehen einmal in `rtl/system.pas` (Interface,
+  Name mit `_`), nicht per `{$I}` in jeder Unit: eingebundener Code würde je Unit erneut übersetzt.
 - **PLAN.md und `docs/abweichungen.md` pflegen:** erledigte Etappen abhaken, Entscheidungen festhalten.
 
 ## Typabbildung und Speichermodell (Kurzfassung)

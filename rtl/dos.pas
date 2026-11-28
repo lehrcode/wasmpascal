@@ -79,30 +79,30 @@ end;
   Real nur eine Genauigkeit von etwa 256 ns (53 Bit bei rund 1,8e18); der
   Bruchteil der Sekunde bekommt deshalb 1 µs Toleranz nach oben, damit z. B.
   0,25 s nicht als 0,2499999 s zu 24 Hundertsteln wird. }
-procedure Zerlege(Ns: Real; var Tage, Hundertstel: LongInt);
+procedure SplitTime(Ns: Real; var Days, Hundredths: LongInt);
 var
-  Sek: Real;
+  Secs: Real;
   H: LongInt;
 begin
-  Sek := Int(Ns / 1E9);
-  Tage := Trunc(Int(Sek / 86400));
-  if Sek < Tage * 86400.0 then   { vor 1970: abrunden }
-    Dec(Tage);
-  H := Trunc((Ns - Sek * 1E9 + 1000) / 1E7);
+  Secs := Int(Ns / 1E9);
+  Days := Trunc(Int(Secs / 86400));
+  if Secs < Days * 86400.0 then   { vor 1970: abrunden }
+    Dec(Days);
+  H := Trunc((Ns - Secs * 1E9 + 1000) / 1E7);
   if H < 0 then
     H := 0
   else if H > 99 then
     H := 99;
-  Hundertstel := Trunc((Sek - Tage * 86400.0) * 100) + H
+  Hundredths := Trunc((Secs - Days * 86400.0) * 100) + H
 end;
 
 { Datum zu einem Tag seit dem 1. 1. 1970, nach H. Hinnant, "civil_from_days" }
-procedure Kalender(Tage: LongInt; var Year, Month, Day, DayOfWeek: Word);
+procedure CivilFromDays(Days: LongInt; var Year, Month, Day, DayOfWeek: Word);
 var
   Z, Era, Doe, Yoe, Doy, Mp, Y, M: LongInt;
 begin
-  DayOfWeek := ((Tage mod 7) + 11) mod 7;   { 1. 1. 1970 war ein Donnerstag; 0 = Sonntag }
-  Z := Tage + 719468;
+  DayOfWeek := ((Days mod 7) + 11) mod 7;   { 1. 1. 1970 war ein Donnerstag; 0 = Sonntag }
+  Z := Days + 719468;
   if Z >= 0 then
     Era := Z div 146097
   else
@@ -125,21 +125,27 @@ end;
 
 procedure GetDate(var Year, Month, Day, DayOfWeek: Word);
 var
-  Tage, H: LongInt;
+  Days, H: LongInt;
 begin
-  Zerlege(Local(_Clock(0)), Tage, H);
-  Kalender(Tage, Year, Month, Day, DayOfWeek)
+  SplitTime(Local(_Clock(0)), Days, H);
+  CivilFromDays(Days, Year, Month, Day, DayOfWeek)
 end;
 
-procedure GetTime(var Hour, Minute, Second, Sec100: Word);
-var
-  Tage, H: LongInt;
+{ Uhrzeit aus den Hundertstelsekunden des Tages }
+procedure ClockTime(H: LongInt; var Hour, Minute, Second, Sec100: Word);
 begin
-  Zerlege(Local(_Clock(0)), Tage, H);
   Hour := H div 360000;
   Minute := H div 6000 mod 60;
   Second := H div 100 mod 60;
   Sec100 := H mod 100
+end;
+
+procedure GetTime(var Hour, Minute, Second, Sec100: Word);
+var
+  Days, H: LongInt;
+begin
+  SplitTime(Local(_Clock(0)), Days, H);
+  ClockTime(H, Hour, Minute, Second, Sec100)
 end;
 
 procedure PackTime(var T: DateTime; var P: LongInt);
@@ -163,16 +169,14 @@ end;
   DOS-Formats gesetzt. }
 function PackNs(Ns: Real): LongInt;
 var
-  Tage, H: LongInt;
+  Days, H: LongInt;
   T: DateTime;
   W: Word;
   P: LongInt;
 begin
-  Zerlege(Local(Ns), Tage, H);
-  Kalender(Tage, T.Year, T.Month, T.Day, W);
-  T.Hour := H div 360000;
-  T.Min := H div 6000 mod 60;
-  T.Sec := H div 100 mod 60;
+  SplitTime(Local(Ns), Days, H);
+  CivilFromDays(Days, T.Year, T.Month, T.Day, W);
+  ClockTime(H, T.Hour, T.Min, T.Sec, W);
   if T.Year < 1980 then
   begin
     T.Year := 1980; T.Month := 1; T.Day := 1;
@@ -199,7 +203,7 @@ begin
   EnvStr := _EnvStr(Index)
 end;
 
-function Gross(const S: string): string;
+function UpperStr(const S: string): string;
 var
   I: Integer;
 begin
@@ -213,11 +217,11 @@ end;
 function GetEnv(EnvVar: string): string;
 var
   I, P: Integer;
-  S, Ersatz: string;
-  Gefunden: Boolean;
+  S, Fallback: string;
+  Found: Boolean;
 begin
-  Ersatz := '';
-  Gefunden := False;
+  Fallback := '';
+  Found := False;
   for I := 1 to _EnvCount do
   begin
     S := _EnvStr(I);
@@ -229,13 +233,13 @@ begin
       GetEnv := Copy(S, P + 1, 255);
       Exit
     end;
-    if not Gefunden and (Gross(Copy(S, 1, P - 1)) = Gross(EnvVar)) then
+    if not Found and (UpperStr(Copy(S, 1, P - 1)) = UpperStr(EnvVar)) then
     begin
-      Ersatz := Copy(S, P + 1, 255);
-      Gefunden := True
+      Fallback := Copy(S, P + 1, 255);
+      Found := True
     end
   end;
-  GetEnv := Ersatz
+  GetEnv := Fallback
 end;
 
 function DosVersion: Word;
@@ -254,9 +258,7 @@ procedure FSplit(Path: PathStr; var Dir: DirStr; var Name: NameStr; var Ext: Ext
 var
   I, P: Integer;
 begin
-  I := Length(Path);
-  while (I > 0) and (Path[I] <> '/') and (Path[I] <> '\') do
-    Dec(I);
+  I := _LastSep(Path);
   Dir := Copy(Path, 1, I);
   Name := Copy(Path, I + 1, 255);
   P := Length(Name);
@@ -271,12 +273,12 @@ begin
     Ext := ''
 end;
 
-function IstDatei(const P: string): Boolean;
+function IsFile(const P: string): Boolean;
 var
   Kind, Size: LongInt;
   M: Real;
 begin
-  IstDatei := (_FileStat(P, Kind, Size, M) = 0) and (Kind = 1)
+  IsFile := (_FileStat(P, Kind, Size, M) = 0) and (Kind = _KindFile)
 end;
 
 function FSearch(Path: PathStr; DirList: string): PathStr;
@@ -285,7 +287,7 @@ var
   D, P: string;
 begin
   FSearch := '';
-  if IstDatei(Path) then
+  if IsFile(Path) then
   begin
     FSearch := Path;
     Exit
@@ -304,7 +306,7 @@ begin
       P := D + Path
     else
       P := D + '/' + Path;
-    if IstDatei(P) then
+    if IsFile(P) then
     begin
       FSearch := P;
       Exit
@@ -315,26 +317,21 @@ end;
 { ------------------------------------------------- Attribute, Zeit }
 
 { Letzter Teil eines Pfads (nach dem letzten "/" oder "\") }
-function LetzterTeil(const P: string): string;
-var
-  I: Integer;
+function BaseName(const P: string): string;
 begin
-  I := Length(P);
-  while (I > 0) and (P[I] <> '/') and (P[I] <> '\') do
-    Dec(I);
-  LetzterTeil := Copy(P, I + 1, 255)
+  BaseName := Copy(P, _LastSep(P) + 1, 255)
 end;
 
-function Attribute(const Name: string; Kind: LongInt): Byte;
+function AttrOf(const Name: string; Kind: LongInt): Byte;
 var
   A: Byte;
 begin
   A := 0;
-  if Kind = 2 then
+  if Kind = _KindDir then
     A := Directory;
   if (Length(Name) > 0) and (Name[1] = '.') then
     A := A or Hidden;
-  Attribute := A
+  AttrOf := A
 end;
 
 procedure GetFAttr(var F; var Attr: Word);
@@ -346,7 +343,7 @@ begin
   N := _FileName(F);
   DosError := _FileStat(N, Kind, Size, M);
   if DosError = 0 then
-    Attr := Attribute(LetzterTeil(_FullPath(N)), Kind)
+    Attr := AttrOf(BaseName(_FullPath(N)), Kind)
   else
     Attr := 0
 end;
@@ -364,18 +361,18 @@ end;
 { ------------------------------------------------------ Suchen }
 
 type
-  PSuche = ^TSuche;
-  TSuche = record
+  PSearch = ^TSearch;
+  TSearch = record
     Handle, Cookie: LongInt;
     Attr: Word;
-    Muster: string;
+    Pattern: string;
     Dir: string
   end;
-  PPSuche = ^PSuche;
+  PPSearch = ^PSearch;
 
-{ Passt Name auf Muster mit * und ?, ohne Ruecksicht auf Gross-/
+{ Meldet, ob Name auf Pattern passt (* und ?), ohne Ruecksicht auf Gross-/
   Kleinschreibung (wie DOS). ? steht fuer ein Byte. }
-function Passt(const Muster, Name: string): Boolean;
+function Matches(const Pattern, Name: string): Boolean;
 var
   M, N, StarM, StarN: Integer;
 begin
@@ -385,12 +382,12 @@ begin
   StarN := 0;
   while N <= Length(Name) do
   begin
-    if (M <= Length(Muster)) and ((Muster[M] = '?') or (UpCase(Muster[M]) = UpCase(Name[N]))) then
+    if (M <= Length(Pattern)) and ((Pattern[M] = '?') or (UpCase(Pattern[M]) = UpCase(Name[N]))) then
     begin
       Inc(M);
       Inc(N)
     end
-    else if (M <= Length(Muster)) and (Muster[M] = '*') then
+    else if (M <= Length(Pattern)) and (Pattern[M] = '*') then
     begin
       StarM := M;
       StarN := N;
@@ -404,61 +401,61 @@ begin
     end
     else
     begin
-      Passt := False;
+      Matches := False;
       Exit
     end
   end;
-  while (M <= Length(Muster)) and (Muster[M] = '*') do
+  while (M <= Length(Pattern)) and (Pattern[M] = '*') do
     Inc(M);
-  Passt := M > Length(Muster)
+  Matches := M > Length(Pattern)
 end;
 
 { TP-ANNAHME: Wie unter DOS passt "*.*" (allgemein ein Muster, das auf ".*"
   endet) auch auf Namen ohne Punkt. }
-function PasstDos(const Muster, Name: string): Boolean;
+function DosMatches(const Pattern, Name: string): Boolean;
 var
   L: Integer;
 begin
-  L := Length(Muster);
-  if Passt(Muster, Name) then
-    PasstDos := True
-  else if (L >= 2) and (Muster[L - 1] = '.') and (Muster[L] = '*') and (Pos('.', Name) = 0) then
-    PasstDos := Passt(Copy(Muster, 1, L - 2), Name)
+  L := Length(Pattern);
+  if Matches(Pattern, Name) then
+    DosMatches := True
+  else if (L >= 2) and (Pattern[L - 1] = '.') and (Pattern[L] = '*') and (Pos('.', Name) = 0) then
+    DosMatches := Matches(Copy(Pattern, 1, L - 2), Name)
   else
-    PasstDos := False
+    DosMatches := False
 end;
 
-function Zustand(var S: SearchRec): PPSuche;
+function SearchState(var S: SearchRec): PPSearch;
 begin
-  Zustand := PPSuche(@S.Fill)
+  SearchState := PPSearch(@S.Fill)
 end;
 
 procedure FindNext(var S: SearchRec);
 var
-  Z: PSuche;
+  Z: PSearch;
   Name: string;
   Kind, Size: LongInt;
   M: Real;
   A: Byte;
 begin
-  Z := Zustand(S)^;
+  Z := SearchState(S)^;
   DosError := 18;
   if Z = nil then
     Exit;
   while _DirNext(Z^.Handle, Z^.Cookie, Name, Kind) do
   begin
-    if (Name = '.') or (Name = '..') or not PasstDos(Z^.Muster, Name) then
+    if (Name = '.') or (Name = '..') or not DosMatches(Z^.Pattern, Name) then
       Continue;
     if _FileStat(Z^.Dir + '/' + Name, Kind, Size, M) <> 0 then
       Continue;
-    A := Attribute(Name, Kind);
+    A := AttrOf(Name, Kind);
     if (A and Directory <> 0) and (Z^.Attr and Directory = 0) then
       Continue;
     if (A and Hidden <> 0) and (Z^.Attr and Hidden = 0) then
       Continue;
     S.Attr := A;
     S.Time := PackNs(M);
-    if Kind = 2 then
+    if Kind = _KindDir then
       S.Size := 0
     else
       S.Size := Size;
@@ -469,20 +466,18 @@ begin
   { Ende: Zustand freigeben }
   _DirClose(Z^.Handle);
   Dispose(Z);
-  Zustand(S)^ := nil
+  SearchState(S)^ := nil
 end;
 
 procedure FindFirst(Path: PathStr; Attr: Word; var S: SearchRec);
 var
   I: Integer;
-  Z: PSuche;
+  Z: PSearch;
   H: LongInt;
   Dir: string;
 begin
-  Zustand(S)^ := nil;
-  I := Length(Path);
-  while (I > 0) and (Path[I] <> '/') and (Path[I] <> '\') do
-    Dec(I);
+  SearchState(S)^ := nil;
+  I := _LastSep(Path);
   Dir := Copy(Path, 1, I - 1);
   if (I = 1) then
     Dir := '/'
@@ -495,9 +490,9 @@ begin
   Z^.Handle := H;
   Z^.Cookie := 0;
   Z^.Attr := Attr;
-  Z^.Muster := Copy(Path, I + 1, 255);
+  Z^.Pattern := Copy(Path, I + 1, 255);
   Z^.Dir := Dir;
-  Zustand(S)^ := Z;
+  SearchState(S)^ := Z;
   FindNext(S)
 end;
 

@@ -12,9 +12,9 @@ import (
 	"github.com/lehrcode/wasmpascal/compiler"
 )
 
-// zeitProgramm gibt Datum, Wochentag und Uhrzeit aus der Unit Dos aus und die
+// clockProgram gibt Datum, Wochentag und Uhrzeit aus der Unit Dos aus und die
 // Dateizeit von datei.txt, falls vorhanden.
-const zeitProgramm = `program Zeit;
+const clockProgram = `program Zeit;
 uses Dos;
 var
   J, M, T, W, H, Mi, S, S100: Word;
@@ -37,11 +37,11 @@ begin
 end.
 `
 
-// runZeit führt zeitProgramm mit fester Uhr (now, UTC) und Umgebung env aus.
-func runZeit(t *testing.T, now time.Time, env []string, dir string) string {
+// runClock führt clockProgram mit fester Uhr (now, UTC) und Umgebung env aus.
+func runClock(t *testing.T, now time.Time, env []string, dir string) string {
 	t.Helper()
 	res, err := compiler.Compile(context.Background(), "zeit.pas", compiler.Options{
-		FS: fstest.MapFS{"zeit.pas": {Data: []byte(zeitProgramm)}},
+		FS: fstest.MapFS{"zeit.pas": {Data: []byte(clockProgram)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func utc(y int, m time.Month, d, h, mi, s, cs int) time.Time {
 	return time.Date(y, m, d, h, mi, s, cs*10_000_000, time.UTC)
 }
 
-func TestOrtszeit(t *testing.T) {
+func TestLocalTime(t *testing.T) {
 	tests := []struct {
 		name string
 		now  time.Time
@@ -87,7 +87,7 @@ func TestOrtszeit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := runZeit(t, tt.now, tt.env, ""); got != tt.want {
+			if got := runClock(t, tt.now, tt.env, ""); got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
@@ -96,7 +96,7 @@ func TestOrtszeit(t *testing.T) {
 
 // GetFTime rechnet die Änderungszeit der Datei mit demselben Versatz in
 // Ortszeit um; DOS speichert Sekunden nur gerade.
-func TestDateizeitOrtszeit(t *testing.T) {
+func TestFileTimeLocal(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "datei.txt")
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
@@ -106,7 +106,7 @@ func TestDateizeitOrtszeit(t *testing.T) {
 	if err := os.Chtimes(file, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
-	got := runZeit(t, utc(2026, 11, 27, 12, 0, 0, 0), []string{"WASMPASCAL_UTC_OFFSET=120"}, dir)
+	got := runClock(t, utc(2026, 11, 27, 12, 0, 0, 0), []string{"WASMPASCAL_UTC_OFFSET=120"}, dir)
 	want := "2026-11-27 5 14:0:0.0\n2026-6-16 0:30:2\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)

@@ -11,6 +11,14 @@ ausdrücklich genannt. Einzelheiten zu jeder Änderung stehen in
 
 ## [Unreleased]
 
+### Geändert
+
+- Interne Bezeichner der Laufzeit (`rtl/*.pas`) und der Go-Tests sind
+  englisch; neue Arbeitsregel: Bezeichner englisch, Kommentare und Doku
+  deutsch. Gemeinsame Hilfsroutinen stehen einmal in der System-Unit
+  (`_LastSep`, `_KindFile` usw.), doppelter Code in `system.pas` und
+  `dos.pas` ist zusammengefasst. Das Verhalten ändert sich nicht.
+
 ### Behoben
 
 - `pascal run` (und `runner.Run` allgemein) brach unter `cmd.exe` mit

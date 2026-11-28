@@ -48,8 +48,16 @@ function UTF8Next(const S: string; var Index: Integer): WideChar;
 function UTF8Index(const S: string; CharIndex: Integer): Integer;
 function UTF8Copy(const S: string; Index, Count: Integer): string;
 
-{ Fuer die Unit Dos (Etappe 15). Arten: 0 sonstiges, 1 Datei, 2 Verzeichnis;
-  Ergebnisse sind DOS-Fehlernummern (0, 2, 3, 6). MTime in Nanosekunden UTC. }
+{ Fuer die Unit Dos (Etappe 15). Kind ist eine der Arten _KindOther,
+  _KindFile, _KindDir; Ergebnisse sind DOS-Fehlernummern (0, 2, 3, 6). MTime
+  in Nanosekunden UTC. }
+const
+  _KindOther = 0;
+  _KindFile = 1;
+  _KindDir = 2;
+
+{ Position des letzten Pfadtrenners ("/" oder "") in P, 0 ohne Trenner }
+function _LastSep(const P: string): Integer;
 function _EnvCount: Integer;
 function _EnvStr(I: LongInt): string;
 function _FullPath(const Name: string): string;
@@ -382,7 +390,7 @@ end;
 function _StrPos(const Sub, S: string): Integer;
 var
   I, J, LSub: Integer;
-  Gleich: Boolean;
+  Equal: Boolean;
 begin
   _StrPos := 0;
   LSub := Length(Sub);
@@ -390,14 +398,14 @@ begin
     Exit;
   for I := 1 to Length(S) - LSub + 1 do
   begin
-    Gleich := True;
+    Equal := True;
     J := 1;
-    while Gleich and (J <= LSub) do
+    while Equal and (J <= LSub) do
       if S[I + J - 1] <> Sub[J] then
-        Gleich := False
+        Equal := False
       else
         Inc(J);
-    if Gleich then
+    if Equal then
     begin
       _StrPos := I;
       Exit
@@ -678,6 +686,24 @@ end;
 
 { Val fuer Ganzzahlen: dezimal oder $hex, Code = Position des ersten
   ungueltigen Zeichens oder 0. }
+{ Ueberspringt fuehrende Leerzeichen und ein Vorzeichen; liefert den Index
+  dahinter und in Neg, ob es "-" war (Val). }
+function SkipSign(const S: string; var Neg: Boolean): Integer;
+var
+  I: Integer;
+begin
+  I := 1;
+  while (I <= Length(S)) and (S[I] = ' ') do
+    Inc(I);
+  Neg := False;
+  if (I <= Length(S)) and ((S[I] = '-') or (S[I] = '+')) then
+  begin
+    Neg := S[I] = '-';
+    Inc(I)
+  end;
+  SkipSign := I
+end;
+
 function _ValInt(const S: string; var Code: Integer): LongInt;
 var
   I, N, D, Base: LongInt;
@@ -687,15 +713,7 @@ begin
   _ValInt := 0;
   Code := 0;
   N := Length(S);
-  I := 1;
-  while (I <= N) and (S[I] = ' ') do
-    Inc(I);
-  Neg := False;
-  if (I <= N) and ((S[I] = '-') or (S[I] = '+')) then
-  begin
-    Neg := S[I] = '-';
-    Inc(I)
-  end;
+  I := SkipSign(S, Neg);
   Base := 10;
   if (I <= N) and (S[I] = '$') then
   begin
@@ -767,15 +785,7 @@ begin
   _ValReal := 0;
   Code := 0;
   N := Length(S);
-  I := 1;
-  while (I <= N) and (S[I] = ' ') do
-    Inc(I);
-  Neg := False;
-  if (I <= N) and ((S[I] = '-') or (S[I] = '+')) then
-  begin
-    Neg := S[I] = '-';
-    Inc(I)
-  end;
+  I := SkipSign(S, Neg);
   if (I > N) or (Digit(S[I]) < 0) or (Digit(S[I]) > 9) then
   begin
     Code := I;
@@ -916,16 +926,22 @@ end;
 type
   TStat = array[0..15] of LongInt;   { filestat, 64 Byte }
 
+{ Art aus einem WASI-filetype (3 Verzeichnis, 4 regulaere Datei) }
+function KindOf(FileType: LongInt): LongInt;
+begin
+  case FileType and 255 of
+    3: KindOf := _KindDir;
+    4: KindOf := _KindFile;
+  else
+    KindOf := _KindOther
+  end
+end;
+
 { filestat (64 Byte) auswerten: Art aus filetype (Offset 16), Groesse
   (Offset 32, ueber 2 GB als MaxLongInt), Aenderungszeit mtim (Offset 48) }
 procedure StatInfo(var St: TStat; var Kind, Size: LongInt; var MTime: Real);
 begin
-  case St[4] and 255 of
-    3: Kind := 2;
-    4: Kind := 1;
-  else
-    Kind := 0
-  end;
+  Kind := KindOf(St[4]);
   if (St[9] <> 0) or (St[8] < 0) then
     Size := MaxLongInt
   else
@@ -975,12 +991,7 @@ begin
   for I := 1 to N do
     Name[I] := PChar(Ptr(0, LongInt(@Buf) + 23 + I))^;
   Name[0] := Chr(N);
-  case Buf[5] and 255 of
-    3: Kind := 2;
-    4: Kind := 1;
-  else
-    Kind := 0
-  end
+  Kind := KindOf(Buf[5])
 end;
 
 function SysSetSize(Fd, Size: LongInt): LongInt;
@@ -1433,6 +1444,21 @@ begin
   IsAssigned := (Mode >= fmClosed) and (Mode <= fmInOut)
 end;
 
+{ Bereit fuer eine Dateioperation: kein offener E/A-Fehler, und die Datei
+  ist mit Assign zugewiesen (sonst E/A-Fehler 102). }
+function IoReady(Mode: LongInt): Boolean;
+begin
+  IoReady := False;
+  if InOutRes <> 0 then
+    Exit;
+  if not IsAssigned(Mode) then
+  begin
+    InOutRes := 102;
+    Exit
+  end;
+  IoReady := True
+end;
+
 { Prueft den Modus fuer eine Operation; setzt sonst InOutRes. }
 function CheckMode(Mode, Want: LongInt): Boolean;
 begin
@@ -1463,7 +1489,7 @@ end;
   DOS), statt zu scheitern }
 function NormPathEx(const Name: string; Clamp: Boolean; var P: string): Boolean;
 var
-  S, Teil: string;
+  S, Part: string;
   I, J, K: Integer;
 begin
   NormPathEx := True;
@@ -1481,27 +1507,25 @@ begin
     J := I;
     while (J <= Length(S)) and (S[J] <> '/') do
       Inc(J);
-    Teil := Copy(S, I, J - I);
-    if Teil = '..' then
+    Part := Copy(S, I, J - I);
+    if Part = '..' then
     begin
       if (P = '') and not Clamp then
       begin
         NormPathEx := False;
         Exit
       end;
-      K := Length(P);
-      while (K > 0) and (P[K] <> '/') do
-        Dec(K);
+      K := _LastSep(P);
       if K = 0 then
         P := ''
       else
         P := Copy(P, 1, K - 1)
     end
-    else if (Teil <> '') and (Teil <> '.') then
+    else if (Part <> '') and (Part <> '.') then
     begin
       if P <> '' then
         P := P + '/';
-      P := P + Teil
+      P := P + Part
     end;
     I := J + 1
   end
@@ -1639,13 +1663,8 @@ procedure OpenText(var F: TTextRec; Mode, OFlags, Rights, FdFlags, StdHandle: Lo
 var
   Err: Integer;
 begin
-  if InOutRes <> 0 then
+  if not IoReady(F.Mode) then
     Exit;
-  if not IsAssigned(F.Mode) then
-  begin
-    InOutRes := 102;
-    Exit
-  end;
   if F.Mode <> fmClosed then
     CloseText(F);
   if F.Name = '' then
@@ -1929,13 +1948,8 @@ var
   Err: Integer;
   Rights: LongInt;
 begin
-  if InOutRes <> 0 then
+  if not IoReady(F.Mode) then
     Exit;
-  if not IsAssigned(F.Mode) then
-  begin
-    InOutRes := 102;
-    Exit
-  end;
   if (F.Mode <> fmClosed) and (F.Handle > 2) then
     if SysClose(F.Handle) <> 0 then;
   case Access of
@@ -2103,50 +2117,38 @@ begin
       InOutRes := 101
 end;
 
+{ Hostpfad zu Name; ausserhalb der Wurzel E/A-Fehler 5 }
+function IoPath(const Name: string; var P: string): Boolean;
+begin
+  IoPath := HostPath(Name, P);
+  if not Result then
+    InOutRes := 5
+end;
+
+{ Ergebnis Err eines WASI-Aufrufs als E/A-Fehler (sonst 5); liefert, ob
+  der Aufruf gelang. }
+function IoCheck(Err: LongInt): Boolean;
+begin
+  IoCheck := Err = 0;
+  if Err <> 0 then
+    InOutRes := IoError(Err, 5)
+end;
+
 procedure _Erase(var F: TFileRec);
 var
   P: string;
-  Err: LongInt;
 begin
-  if InOutRes <> 0 then
-    Exit;
-  if not IsAssigned(F.Mode) then
-  begin
-    InOutRes := 102;
-    Exit
-  end;
-  if not HostPath(F.Name, P) then
-  begin
-    InOutRes := 5;
-    Exit
-  end;
-  Err := SysUnlink(P);
-  if Err <> 0 then
-    InOutRes := IoError(Err, 5)
+  if IoReady(F.Mode) and IoPath(F.Name, P) then
+    IoCheck(SysUnlink(P))
 end;
 
 procedure _Rename(var F: TFileRec; const NewName: string);
 var
   P, Q: string;
-  Err: LongInt;
 begin
-  if InOutRes <> 0 then
-    Exit;
-  if not IsAssigned(F.Mode) then
-  begin
-    InOutRes := 102;
-    Exit
-  end;
-  if not HostPath(F.Name, P) or not HostPath(NewName, Q) then
-  begin
-    InOutRes := 5;
-    Exit
-  end;
-  Err := SysRename(P, Q);
-  if Err <> 0 then
-    InOutRes := IoError(Err, 5)
-  else
-    F.Name := NewName
+  if IoReady(F.Mode) and IoPath(F.Name, P) and IoPath(NewName, Q) then
+    if IoCheck(SysRename(P, Q)) then
+      F.Name := NewName
 end;
 
 { ---------------------------------------------------------- Verzeichnisse }
@@ -2178,35 +2180,17 @@ end;
 procedure _MkDir(const Dir: string);
 var
   P: string;
-  Err: LongInt;
 begin
-  if InOutRes <> 0 then
-    Exit;
-  if not HostPath(Dir, P) then
-  begin
-    InOutRes := 5;
-    Exit
-  end;
-  Err := SysMkDir(P);
-  if Err <> 0 then
-    InOutRes := IoError(Err, 5)
+  if (InOutRes = 0) and IoPath(Dir, P) then
+    IoCheck(SysMkDir(P))
 end;
 
 procedure _RmDir(const Dir: string);
 var
   P: string;
-  Err: LongInt;
 begin
-  if InOutRes <> 0 then
-    Exit;
-  if not HostPath(Dir, P) then
-  begin
-    InOutRes := 5;
-    Exit
-  end;
-  Err := SysRmDir(P);
-  if Err <> 0 then
-    InOutRes := IoError(Err, 5)
+  if (InOutRes = 0) and IoPath(Dir, P) then
+    IoCheck(SysRmDir(P))
 end;
 
 function _GetDir(Drive: LongInt): string;
@@ -2478,6 +2462,17 @@ begin
     SeqLen := 0
 end;
 
+{ Nutzbits des ersten Bytes B einer Folge mit N Bytes (2 bis 4) }
+function LeadBits(B, N: Integer): LongInt;
+begin
+  case N of
+    2: LeadBits := B and $1F;
+    3: LeadBits := B and $0F;
+  else
+    LeadBits := B and $07
+  end
+end;
+
 { Ist B als K-tes Folgebyte nach Lead gueltig? Das erste Folgebyte schliesst
   Ueberlangkodierungen (E0, F0), Surrogate (ED) und Werte ueber U+10FFFF (F4)
   aus. }
@@ -2515,12 +2510,7 @@ begin
   DecodeAt := Replacement;
   if N = 0 then
     Exit;
-  case N of
-    2: R := B and $1F;
-    3: R := B and $0F;
-  else
-    R := B and $07
-  end;
+  R := LeadBits(B, N);
   for K := 1 to N - 1 do
   begin
     if I + K > Length(S) then
@@ -2596,12 +2586,7 @@ begin
   _ReadWideChar := Replacement;
   if N = 0 then
     Exit;
-  case N of
-    2: R := B and $1F;
-    3: R := B and $0F;
-  else
-    R := B and $07
-  end;
+  R := LeadBits(B, N);
   for K := 1 to N - 1 do
   begin
     if not PeekChar(F, C) or not ContOk(B, K, Ord(C)) then
@@ -2735,6 +2720,16 @@ end;
 
 { ------------------------------------------------- Dateiinfos fuer Dos }
 
+function _LastSep(const P: string): Integer;
+var
+  I: Integer;
+begin
+  I := Length(P);
+  while (I > 0) and (P[I] <> '/') and (P[I] <> '\') do
+    Dec(I);
+  _LastSep := I
+end;
+
 function _FullPath(const Name: string): string;
 var
   P: string;
@@ -2757,13 +2752,11 @@ var
   D: string;
 begin
   MissingCode := 2;
-  K := Length(P);
-  while (K > 0) and (P[K] <> '/') do
-    Dec(K);
+  K := _LastSep(P);
   if K = 0 then
     Exit;
   D := Copy(P, 1, K - 1);
-  if (SysStat(D, Kind, Size, M) <> 0) or (Kind <> 2) then
+  if (SysStat(D, Kind, Size, M) <> 0) or (Kind <> _KindDir) then
     MissingCode := 3
 end;
 
@@ -2771,7 +2764,7 @@ function _FileStat(const Name: string; var Kind, Size: LongInt; var MTime: Real)
 var
   P: string;
 begin
-  Kind := 0;
+  Kind := _KindOther;
   Size := 0;
   MTime := 0;
   if not HostPath(Name, P) then
@@ -2788,7 +2781,7 @@ end;
 { Datei muss geoeffnet sein, sonst 6 (ungueltiges Handle) }
 function _FileStatF(var F; var Kind, Size: LongInt; var MTime: Real): Integer;
 begin
-  Kind := 0;
+  Kind := _KindOther;
   Size := 0;
   MTime := 0;
   if (TFileRec(F).Mode < fmInput) or (TFileRec(F).Mode > fmInOut) then

@@ -1437,4 +1437,6 @@ Pascal 5.0; alle bisherigen Tests sind grün.
 - **Keine eigenmächtigen Erweiterungen** des Sprachumfangs. Im Zweifel das Verhalten von TP 5.0 nachbilden und Abweichungen in `docs/abweichungen.md` festhalten.
 - **Keine Raterei bei TP-Verhalten:** Wenn das genaue Verhalten unklar ist (Ausgabeformat, Randfälle), eine plausible Annahme treffen, im Code mit `// TP-ANNAHME:` markieren und im Bericht nennen.
 - **Laufzeit in Pascal bevorzugen.** Neue Laufzeitfunktionen zuerst in `rtl/*.pas` schreiben; nur wenn das nicht geht, als Intrinsic in Go/WASM.
+- **Sprache im Code** (seit Nov 28, 2026): Bezeichner englisch, im Go-Code wie in `rtl/*.pas`; Kommentare und Doku bleiben deutsch. Ausgenommen sind die Pascal-Testprogramme in `testdata/` und die Beispiele unter `web/beispiele/`; öffentliche Namen der Units sind ohnehin die englischen TP-Namen.
+- **RTL ohne Dopplungen:** Was mehrere Units brauchen, steht einmal in `rtl/system.pas` im Interface (Name mit `_`, für Programme nicht gedacht). Kein `{$I}` für gemeinsamen Code: Es gibt keine Entfernung ungenutzten Codes, eingebundene Routinen stünden je Unit erneut im Modul.
 - **`PLAN.md` und `docs/abweichungen.md` pflegen:** erledigte Etappen abhaken, Entscheidungen kurz festhalten.

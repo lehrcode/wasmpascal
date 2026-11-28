@@ -57,20 +57,20 @@ const
   Esc = #27;
   NormAttr = LightGray;
   { CGA-Reihenfolge (Blau = 1, Rot = 4) auf ANSI-Reihenfolge (Rot = 1, Blau = 4) }
-  AnsiFarbe: array[0..7] of Byte = (0, 4, 2, 6, 1, 5, 3, 7);
+  AnsiColor: array[0..7] of Byte = (0, 4, 2, 6, 1, 5, 3, 7);
 
 { Schreibt TextAttr als ANSI-Attribute: 30..37 bzw. 90..97 fuer den
   Vordergrund (8..15 hell), 40..47 fuer den Hintergrund, 5 fuer Blinken. }
-procedure SetzeAttribute;
+procedure ApplyAttr;
 var
-  Vorne: Integer;
+  Fore: Integer;
 begin
-  Vorne := TextAttr and 15;
-  if Vorne >= 8 then
-    Write(Esc, '[0;', 90 + AnsiFarbe[Vorne - 8])
+  Fore := TextAttr and 15;
+  if Fore >= 8 then
+    Write(Esc, '[0;', 90 + AnsiColor[Fore - 8])
   else
-    Write(Esc, '[0;', 30 + AnsiFarbe[Vorne]);
-  Write(';', 40 + AnsiFarbe[(TextAttr shr 4) and 7]);
+    Write(Esc, '[0;', 30 + AnsiColor[Fore]);
+  Write(';', 40 + AnsiColor[(TextAttr shr 4) and 7]);
   if TextAttr and Blink <> 0 then
     Write(';5');
   Write('m')
@@ -113,25 +113,25 @@ begin
   TextAttr := (TextAttr and $70) or (Color and 15);
   if (Color and $F0) <> 0 then
     TextAttr := TextAttr or Blink;
-  SetzeAttribute
+  ApplyAttr
 end;
 
 procedure TextBackground(Color: Byte);
 begin
   TextAttr := (TextAttr and $8F) or ((Color and 7) shl 4);
-  SetzeAttribute
+  ApplyAttr
 end;
 
 procedure HighVideo;
 begin
   TextAttr := TextAttr or 8;
-  SetzeAttribute
+  ApplyAttr
 end;
 
 procedure LowVideo;
 begin
   TextAttr := TextAttr and $F7;
-  SetzeAttribute
+  ApplyAttr
 end;
 
 procedure NormVideo;

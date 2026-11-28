@@ -45,19 +45,19 @@ func TestMarkSuspendableIndirect(t *testing.T) {
 	}
 	i32 := func() *ir.Var { return &ir.Var{Name: "x", VT: ir.I32, Scalar: true, Param: 0} }
 	main, other := mk("main"), mk("other")
-	lies, rechne := mk("lies", i32()), mk("rechne")
-	lies.Entry.Instrs = append(lies.Entry.Instrs, ir.Suspend{Reason: ir.IntConst{}, Arg: ir.IntConst{}, Dst: &ir.Var{Name: "r"}})
+	reader, compute := mk("read", i32()), mk("compute")
+	reader.Entry.Instrs = append(reader.Entry.Instrs, ir.Suspend{Reason: ir.IntConst{}, Arg: ir.IntConst{}, Dst: &ir.Var{Name: "r"}})
 	sigI := &ir.FuncSig{Params: []ir.ValType{ir.I32}}
 	sigV := &ir.FuncSig{}
 	main.Entry.Instrs = append(main.Entry.Instrs, ir.CallIndirect{Sig: sigI, Index: ir.IntConst{V: 1}, Args: []ir.Expr{ir.IntConst{}}})
 	other.Entry.Instrs = append(other.Entry.Instrs, ir.CallIndirect{Sig: sigV, Index: ir.IntConst{V: 2}})
 	m := &ir.Module{
-		Funcs: []*ir.Func{main, other, lies, rechne},
-		Table: []*ir.Func{lies, rechne},
+		Funcs: []*ir.Func{main, other, reader, compute},
+		Table: []*ir.Func{reader, compute},
 		Sigs:  map[string]*ir.FuncSig{ir.SigKey(sigI.Params, nil): sigI, ir.SigKey(nil, nil): sigV},
 	}
 	MarkSuspendable(m)
-	want := map[*ir.Func]bool{main: true, other: false, lies: true, rechne: false}
+	want := map[*ir.Func]bool{main: true, other: false, reader: true, compute: false}
 	for f, w := range want {
 		if f.Suspendable != w {
 			t.Errorf("%s.Suspendable = %v, want %v", f.Name, f.Suspendable, w)
