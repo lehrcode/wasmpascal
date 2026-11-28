@@ -85,7 +85,7 @@ Symbol-Golden-Tests der Typprüfung: `compiler/internal/check/testdata/*.pas` �
 
 ## Pipeline (Stand Etappe 17)
 
-`source` → `lexer` → `parser` (AST) → `check` (Typprüfung, `check.Info`) → `ir.Lower` (CFG) → `analysis` (anhaltefähige Funktionen) →
+`source` → `lexer` → `parser` (AST) → `check` (Typprüfung, `check.Info`) → `ir.Lower` (CFG; Rümpfe lazy über Arbeitsliste, nur erreichbare) → `analysis.Prune` (erreichbare Funktionen, Etappe 18; `MarkSuspendable` für anhaltefähige) →
 `codegen.Generate` (Ablage, Frames, Static Links; strukturierter Kontrollfluss oder Dispatch-Schleife für
 anhaltefähige Funktionen und `goto`, siehe `codegen/dispatch.go`) → `wasm` (Encoder). Die System-Unit
 `rtl/system.pas` (eingebettet über `rtl.FS`) wird immer mitgeprüft und mitübersetzt; sie enthält die gesamte

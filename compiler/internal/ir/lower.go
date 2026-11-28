@@ -47,6 +47,9 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 		hosts:   map[string]*Host{},
 		externs: map[*types.Proc]*Host{},
 		table:   map[*types.Proc]int32{},
+		pending: map[*Func]bodyJob{},
+		done:    map[*Func]bool{},
+		queued:  map[*Func]bool{},
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -79,13 +82,18 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 		if u.AST.Init != nil {
 			f := &Func{Name: u.Name + ".init", Display: u.Name, Pos: l.pos(u.AST.Init.Pos()), RTL: u.RTL}
 			l.m.Funcs = append(l.m.Funcs, f)
-			l.body(f, nil, u.AST.Init.Stmts)
+			l.pending[f] = bodyJob{f: f, stmts: u.AST.Init.Stmts}
 			inits = append(inits, f)
 		}
 	}
 	l.rtlMode = false
 	l.declare(info.Root, nil, "")
 	bodies = append(bodies, procDecls(prog.Block.Decls)...)
+	l.pending[main] = bodyJob{f: main, stmts: prog.Block.Body.Stmts}
+	for _, d := range bodies {
+		p := info.Procs[d]
+		l.pending[l.funcs[p]] = bodyJob{f: l.funcs[p], p: p, stmts: d.Block.Body.Stmts}
+	}
 
 	if system != nil {
 		l.m.SuspendAction = l.rtl("_SuspendAction")
@@ -96,11 +104,18 @@ func Lower(prog *ast.Program, system *ast.Unit, info *check.Info, opts Options) 
 	}
 	// Hauptprogramm: erst die Initialisierungen, am Ende _Halt(0) (im exit-Block)
 	l.mainInits = inits
-	l.body(main, nil, prog.Block.Body.Stmts)
-	for _, d := range bodies {
-		p := info.Procs[d]
-		l.body(l.funcs[p], p, d.Block.Body.Stmts)
+	// Rümpfe erst übersetzen, wenn sie erreicht werden (PLAN.md, Etappe 18):
+	// Wurzeln sind das Hauptprogramm, die Laufzeitroutinen des Codegenerators
+	// und jede Routine der Funktionstabelle (auch aus typisierten Konstanten
+	// in der Deklarationsphase).
+	l.enqueue(main)
+	l.enqueue(l.m.SuspendAction)
+	l.enqueue(l.m.ResumeAction)
+	l.enqueue(l.m.ErrorExit)
+	for _, p := range l.tableProcs {
+		l.enqueue(l.funcs[p])
 	}
+	l.drain()
 	// Funktionstabelle in der Reihenfolge der ersten Verwendung
 	for _, p := range l.tableProcs {
 		l.m.Table = append(l.m.Table, l.tableFunc(p))
@@ -134,6 +149,46 @@ type lowerer struct {
 	// mainInits sind die Initialisierungen der Units, die das Hauptprogramm
 	// zu Beginn aufruft.
 	mainInits []*Func
+	// pending sind die noch nicht übersetzten Rümpfe; queue/done/queued
+	// steuern die Arbeitsliste von drain (Etappe 18: nur erreichbare Rümpfe
+	// werden übersetzt, damit tote Routinen nicht ins Modul gelangen).
+	pending map[*Func]bodyJob
+	queue   []*Func
+	done    map[*Func]bool
+	queued  map[*Func]bool
+}
+
+// bodyJob ist ein noch nicht übersetzter Rumpf.
+type bodyJob struct {
+	f     *Func
+	p     *types.Proc
+	stmts []ast.Stmt
+}
+
+// enqueue reiht den Rumpf von f in die Arbeitsliste ein, falls es einen gibt.
+func (l *lowerer) enqueue(f *Func) {
+	if f == nil || f.Host != nil || l.done[f] || l.queued[f] {
+		return
+	}
+	if _, ok := l.pending[f]; !ok {
+		return // kein Rumpf (z. B. Hüllfunktion mit festem Code)
+	}
+	l.queued[f] = true
+	l.queue = append(l.queue, f)
+}
+
+// drain übersetzt alle in die Arbeitsliste eingetragenen Rümpfe.
+func (l *lowerer) drain() {
+	for len(l.queue) > 0 {
+		f := l.queue[0]
+		l.queue = l.queue[1:]
+		if l.done[f] {
+			continue
+		}
+		l.done[f] = true
+		job := l.pending[f]
+		l.body(job.f, job.p, job.stmts)
+	}
 }
 
 // copyIn ist ein Wertparameter vom Aggregattyp: Der Aufgerufene kopiert ihn
@@ -299,6 +354,7 @@ func (l *lowerer) tableIndex(p *types.Proc) int32 {
 	l.tableProcs = append(l.tableProcs, p)
 	i := int32(len(l.tableProcs))
 	l.table[p] = i
+	l.enqueue(l.funcs[p]) // Tabelleneintrag: der Rumpf ist eine Wurzel (Etappe 18)
 	return i
 }
 
@@ -552,7 +608,12 @@ func (l *lowerer) body(f *Func, p *types.Proc, stmts []ast.Stmt) {
 	s.jump(s.exit)
 }
 
-func (s *fnState) emit(in Instr) { s.cur.Instrs = append(s.cur.Instrs, in) }
+func (s *fnState) emit(in Instr) {
+	if c, ok := in.(Call); ok {
+		s.l.enqueue(c.Fn) // der Rumpf des Ziels wird gebraucht (Etappe 18)
+	}
+	s.cur.Instrs = append(s.cur.Instrs, in)
+}
 
 // terminate schließt den aktuellen Block ab und beginnt einen neuen, der nur
 // erreichbar ist, wenn jemand dorthin springt (sonst entfällt er).

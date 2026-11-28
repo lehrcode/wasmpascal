@@ -1588,7 +1588,7 @@ bisherigen Tests sind unter WASI, `gojs` und mit dem Browser-Compiler grün.
 
 - *Erledigt (Nov 28, 2026).* `types.Int64` (`KInt64`, `IsInteger` reicht bis dahin), `host`/`intResult`/`compatible`/`isAssignable` für `Int64`, Konstanten und 64-Bit-Faltung (`foldInt` mit `math/big`); IR mit `i64` als vollwertigem Werttyp (`Int64Const`, `MemI64`, L-Operationen, `widen`/`wrap`), `MemComp` mit Rundung im Codegenerator (`compBits`: `f64.nearest` plus Bereichsprüfung); RTL: ein `_IntStr`/`_WriteInt` für alle Ganzzahlen (Parameter `Int64`), `_ValInt64` als Kern von `_ValInt`, `_ReadInt64`, gemeinsames `ReadNumber`. `external` in Parser, Typprüfung (909, 910, 902) und IR (`ir.HostCall`, Import je Modul + Name einmal, `Func.Host` für Tabelleneinträge, Hüllfunktion bei Single/Comp); `runner.Options.Imports` mit eigener Schnittstelle `runner.Memory` (Adapter per Reflection über `WithGoModuleFunction`), Prüfung aller Importe vor dem Start. `rtl/system.pas` deklariert alle 20 WASI- und 14 `gojs`-Aufrufe selbst; `compiler/internal/abi` ist entfernt. Abweichungen von den Hinweisen: Der Modulvergleich vor/nach der Umstellung entfiel, weil die RTL in derselben Etappe auf `Int64` umgestellt wurde und die Module sich deshalb ohnehin ändern; abgesichert ist die Umstellung durch alle bisherigen Tests (WASI, `gojs`, Frame-Ablage, `TestWebCompiler`). `Low(Int64) div -1` ergibt wie bei `LongInt` 207, nicht 200 (offene Frage). Tests: `testdata/etappe17/` (`int64`, `comp`, `extern` mit `extern.wasi`, 8 Fehlerfälle), `TestExternal`, `TestRunImports`, `ExampleRun_imports`, neue Fälle in `TestExprTypes`.
 
-### Etappe 18: Ungenutzten Code entfernen
+### Etappe 18: Ungenutzten Code entfernen ✅
 
 **Ziel:** Ein Modul enthält nur die Routinen, die das Programm erreichen
 kann. Heute landet die ganze Laufzeit in jedem Modul: „Hallo Welt“ hatte
@@ -1672,6 +1672,21 @@ Geschwister erreicht und fallen mit ihr weg.
 **Fertig, wenn:** kleine Programme deutlich kleinere Module ergeben, der
 Größentest und alle bisherigen Tests grün sind und die Module weiterhin
 deterministisch und byte-gleich zum Browser-Compiler sind.
+
+- *Erledigt (Nov 28, 2026).* `analysis.Reachable`/`Prune` (Wurzeln: Hauptprogramm,
+  `SuspendAction`/`ResumeAction`/`ErrorExit`, Funktionstabelle; Kanten:
+  `ir.Call`), aufgerufen in `compiler.Compile` zwischen `ir.Lower` und
+  `codegen.Generate`. `ir.Lower` übersetzt Rümpfe lazy über eine Arbeitsliste
+  (`pending`/`enqueue`/`drain`; `emit` und `tableIndex` tragen Aufrufe und
+  Tabelleneinträge nach), sodass auch die Stringkonstanten toter Rümpfe
+  entfallen. Gemessen (windows/amd64): „Hallo Welt“ 33.363 → 4.545 Byte
+  (166 → 24 Funktionen, 20 → 4 WASI-Importe, keine `path_*` mehr), mit
+  `uses Crt, Dos` 42.539 → 10.100 Byte (210 → 50 Funktionen). Tests:
+  `TestReachablePrune` (analysis), `TestPruneModuleSize`/`TestPruneImports`/
+  `TestPruneNameSection`/`TestPruneDeadCodeStillChecked` (compiler),
+  `testdata/etappe18/` (toter Typfehler, adressierte Routine). Globale
+  Variablen und typisierte Konstanten bleiben wie geplant; die Typprüfung
+  läuft unverändert vor dem Lowering.
 
 ### Etappe 19: Bibliotheken mit `library` und `exports`
 

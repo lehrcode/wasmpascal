@@ -42,6 +42,7 @@ import (
 	"io/fs"
 	"path"
 
+	"github.com/lehrcode/wasmpascal/compiler/internal/analysis"
 	"github.com/lehrcode/wasmpascal/compiler/internal/ast"
 	"github.com/lehrcode/wasmpascal/compiler/internal/check"
 	"github.com/lehrcode/wasmpascal/compiler/internal/codegen"
@@ -239,6 +240,8 @@ func compile(ctx context.Context, mainFile string, opts Options, emit bool) (res
 	if err != nil {
 		return nil, diagnostic(err)
 	}
+	// Nur erreichbare Routinen ins Modul (PLAN.md, Etappe 18)
+	analysis.Prune(m)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

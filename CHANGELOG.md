@@ -11,6 +11,19 @@ ausdrücklich genannt. Einzelheiten zu jeder Änderung stehen in
 
 ## [Unreleased]
 
+Etappe 18: Ungenutzten Code entfernen.
+
+### Geändert
+
+- **Inkompatibel:** Module enthalten nur noch die Routinen, die das Programm
+  erreicht (Wurzeln: Hauptprogramm, die Laufzeitroutinen des Codegenerators
+  und jede Routine der Funktionstabelle). „Hallo Welt“ schrumpft dadurch von
+  33,4 KB auf 4,5 KB und importiert keine `path_*`-WASI-Aufrufe mehr; mit
+  `uses Crt, Dos` 42,5 KB auf 10,1 KB. Ungenutzte `external`-Deklarationen
+  erscheinen nicht als Importe. Die Typprüfung bleibt vollständig: Fehler in
+  ungenutzten Routinen werden weiterhin gemeldet. Globale Variablen und
+  typisierte Konstanten bleiben im Modul.
+
 Etappe 17: `Int64`, `external` und eine Laufzeit ohne fest eingebaute
 WASI-Aufrufe.
 

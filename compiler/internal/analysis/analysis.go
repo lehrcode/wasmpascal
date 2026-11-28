@@ -88,3 +88,55 @@ func hasSuspend(f *ir.Func) bool {
 	}
 	return false
 }
+
+// Reachable bestimmt die von den Wurzeln aus über ir.Call erreichbaren
+// Funktionen (PLAN.md, Etappe 18). Wurzeln sind das Hauptprogramm, die vom
+// Codegenerator selbst aufgerufenen Laufzeitroutinen (SuspendAction,
+// ResumeAction, ErrorExit) und jede Routine der Funktionstabelle (ihre
+// Adresse wird genommen; indirekte Aufrufe brauchen deshalb keine eigene
+// Behandlung). Verschachtelte Routinen sind nur über ihre umschließende
+// Routine erreichbar und fallen mit ihr weg.
+func Reachable(m *ir.Module) map[*ir.Func]bool {
+	seen := map[*ir.Func]bool{}
+	var work []*ir.Func
+	add := func(f *ir.Func) {
+		if f != nil && !seen[f] {
+			seen[f] = true
+			work = append(work, f)
+		}
+	}
+	add(m.Main)
+	add(m.SuspendAction)
+	add(m.ResumeAction)
+	add(m.ErrorExit)
+	for _, f := range m.Table {
+		add(f)
+	}
+	for len(work) > 0 {
+		f := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, b := range f.Blocks {
+			for _, in := range b.Instrs {
+				if c, ok := in.(ir.Call); ok {
+					add(c.Fn)
+				}
+			}
+		}
+	}
+	return seen
+}
+
+// Prune kürzt Module.Funcs auf die erreichbaren Funktionen; die Reihenfolge
+// der Deklaration bleibt. Nicht erreichbare Routinen landen nicht im Modul
+// (PLAN.md, Etappe 18). Die Typprüfung ist davon nicht betroffen: Sie lief
+// vor dem Lowering und meldet Fehler auch in ungenutzten Routinen.
+func Prune(m *ir.Module) {
+	reach := Reachable(m)
+	out := make([]*ir.Func, 0, len(m.Funcs))
+	for _, f := range m.Funcs {
+		if reach[f] {
+			out = append(out, f)
+		}
+	}
+	m.Funcs = out
+}
